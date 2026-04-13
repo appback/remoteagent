@@ -44,6 +44,7 @@ The important capability is attach/resume:
 ## Architecture
 
 The high-level architecture is documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The first implementation scope is documented in [docs/MVP.md](docs/MVP.md).
 
 In short:
 
