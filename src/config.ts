@@ -58,6 +58,8 @@ export const config = {
   defaultWorkspace: path.resolve(process.env.DEFAULT_WORKSPACE?.trim() || os.homedir()),
   commandTimeoutMs: readTimeout("COMMAND_TIMEOUT_MS", 120_000),
   codexBin: readOptional("CODEX_BIN") || "codex",
+  claudeBin: readOptional("CLAUDE_BIN") || "claude",
+  claudePermissionMode: readOptional("CLAUDE_PERMISSION_MODE") || "bypassPermissions",
   commands: {
     codex: readOptional("CODEX_COMMAND"),
     claude: readOptional("CLAUDE_COMMAND"),

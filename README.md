@@ -48,10 +48,12 @@ Useful:
 
 - `DEFAULT_WORKSPACE`
 - `CODEX_BIN`
+- `CLAUDE_BIN`
 - `CLAUDE_COMMAND`
+- `CLAUDE_PERMISSION_MODE`
 - `COMMAND_TIMEOUT_MS`
 
-`CODEX_BIN` defaults to `codex`. If you need a custom wrapper instead, set `CODEX_COMMAND` and it will override the built-in Codex adapter.
+`CODEX_BIN` defaults to `codex`, and `CLAUDE_BIN` defaults to `claude`. If you need custom wrappers instead, set `CODEX_COMMAND` or `CLAUDE_COMMAND` and they will override the built-in adapters.
 
 ## Quick start
 
@@ -81,15 +83,20 @@ After that, normal chat messages continue the same Codex thread for that Telegra
 
 ## Claude integration
 
-Claude remains adapter-based in this MVP. Point `CLAUDE_COMMAND` at a wrapper that reads:
+Claude now has a built-in adapter too:
+
+- first turn: `claude --print --session-id <uuid>`
+- follow-up turns: `claude --print --resume <session-id>`
+
+The working directory must stay the same for resume to succeed, so RemoteAgent stores `cwd` beside the Claude session ID just like Codex.
+
+If you prefer a custom wrapper, `CLAUDE_COMMAND` still wins over the built-in adapter. A wrapper receives:
 
 - `BRIDGE_MESSAGE`
 - `BRIDGE_SESSION_ID`
 - `BRIDGE_CHAT_ID`
 - `BRIDGE_PROVIDER`
 - `BRIDGE_CWD`
-
-The wrapper should print the final assistant response to `stdout`.
 
 ## Development
 

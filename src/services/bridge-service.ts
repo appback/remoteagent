@@ -29,7 +29,7 @@ export class BridgeService {
     return this.store.upsertProvider(chatId, provider, {
       cwd: workspace,
       pairedAt: new Date().toISOString(),
-      model: provider === "codex" ? "gpt-5.4" : undefined,
+      model: provider === "codex" ? "gpt-5.4" : "sonnet",
     });
   }
 

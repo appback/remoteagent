@@ -1,4 +1,5 @@
 import { CodexAdapter } from "./adapters/codex-adapter.js";
+import { ClaudeAdapter } from "./adapters/claude-adapter.js";
 import { createBot } from "./bot.js";
 import { ShellAdapter } from "./adapters/shell-adapter.js";
 import { config } from "./config.js";
@@ -19,6 +20,12 @@ async function main(): Promise<void> {
   }
   if (config.commands.claude) {
     adapters.claude = new ShellAdapter("claude", config.commands.claude, config.commandTimeoutMs);
+  } else {
+    adapters.claude = new ClaudeAdapter(
+      config.claudeBin,
+      config.commandTimeoutMs,
+      config.claudePermissionMode,
+    );
   }
 
   const bridge = new BridgeService(store, adapters, config.defaultWorkspace);
