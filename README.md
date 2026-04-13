@@ -1,28 +1,75 @@
 # RemoteAgent
 
-Installable Telegram bridge for local Codex and Claude sessions.
+Personal installable session server for continuing local AI work across PC and Telegram.
 
-## What changed
+## Goal
 
-This build now stores real local session metadata per Telegram chat:
+RemoteAgent is for a single owner running their own AI work from their own work PC.
 
-- `chatId`
-- `provider`
-- `cwd`
-- `sessionId`
+The target workflow is simple:
 
-For Codex, the first message creates a real local thread with `codex exec`, captures the returned `thread_id`, and saves it. The next message uses `codex exec resume <thread_id>` so the Telegram chat keeps talking to the same Codex conversation.
+1. Start or resume a session on the work PC.
+2. Continue that same session from Telegram while away from the desk.
+3. Come back to the PC and keep going from the same session context.
 
-## Commands
+This repository is not aiming at a hosted multi-user SaaS. It is a personal, installable runtime for one person's own accounts, own machine, and own workspaces.
+
+## Product direction
+
+RemoteAgent is moving from a Telegram bridge toward a personal session runtime:
+
+- the work PC is the source of truth
+- sessions are stored locally
+- Telegram is a remote client for those sessions
+- a future local PC chat UI will use the same session server
+- providers such as Codex, Claude, and OpenClaw will sit behind a shared session model
+
+Today the repository already supports:
 
 - `/startpair codex [path]`
 - `/startpair claude [path]`
 - `/startpair both [path]`
+- `/attach codex <thread_id> [path]`
+- `/attach claude <session_id> [path]`
 - `/status`
 - `/mode codex|claude|compare`
 - `/reset`
 
-If `path` is omitted, RemoteAgent reuses the previously paired workspace for that chat. If the chat has no workspace yet, it falls back to `DEFAULT_WORKSPACE`, then to the current user's home directory.
+The important capability is attach/resume:
+
+- Codex chats can bind to an existing `thread_id`
+- Claude chats can bind to an existing `session_id`
+- each Telegram chat keeps its own provider, workspace, and session metadata
+
+## Architecture
+
+The high-level architecture is documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+In short:
+
+```text
+Telegram <-> RemoteAgent session server on work PC <-> provider adapters
+                                              |-> Codex
+                                              |-> Claude
+                                              |-> OpenClaw (planned)
+                                              |-> future local PC chat UI
+```
+
+## Scope
+
+In scope:
+
+- personal installation on a work PC
+- single-owner usage
+- local session persistence
+- Telegram-based resume and control
+- provider adapters with a shared session model
+
+Out of scope for this repo direction:
+
+- multi-tenant hosted service
+- account resale or shared access
+- pretending to mirror the internal state of official desktop apps exactly
 
 ## Installable layout
 
@@ -53,7 +100,7 @@ Useful:
 - `CLAUDE_PERMISSION_MODE`
 - `COMMAND_TIMEOUT_MS`
 
-`CODEX_BIN` defaults to `codex`, and `CLAUDE_BIN` defaults to `claude`. If you need custom wrappers instead, set `CODEX_COMMAND` or `CLAUDE_COMMAND` and they will override the built-in adapters.
+`CODEX_BIN` defaults to `codex`, and `CLAUDE_BIN` defaults to `claude`. If you need custom wrappers instead, set `CODEX_COMMAND` or `CLAUDE_COMMAND`.
 
 ## Quick start
 
@@ -71,32 +118,12 @@ Useful:
 .\scripts\start.ps1
 ```
 
-On Windows, keep the repository on a normal Windows path such as `C:\projects\remoteagent`. Do not run the PowerShell installer from a `\\wsl.localhost\...` path.
-
-Then open Telegram and run:
+Then open Telegram and run one of these:
 
 ```text
-/startpair codex /absolute/path/to/your/project
+/startpair codex C:\path\to\project
+/attach codex <thread_id> C:\path\to\project
 ```
-
-After that, normal chat messages continue the same Codex thread for that Telegram chat.
-
-## Claude integration
-
-Claude now has a built-in adapter too:
-
-- first turn: `claude --print --session-id <uuid>`
-- follow-up turns: `claude --print --resume <session-id>`
-
-The working directory must stay the same for resume to succeed, so RemoteAgent stores `cwd` beside the Claude session ID just like Codex.
-
-If you prefer a custom wrapper, `CLAUDE_COMMAND` still wins over the built-in adapter. A wrapper receives:
-
-- `BRIDGE_MESSAGE`
-- `BRIDGE_SESSION_ID`
-- `BRIDGE_CHAT_ID`
-- `BRIDGE_PROVIDER`
-- `BRIDGE_CWD`
 
 ## Development
 
@@ -106,9 +133,6 @@ npm run check
 npm run build
 ```
 
-For a smoke test without real providers:
+## License
 
-```bash
-chmod +x scripts/mock-adapter.sh
-CODEX_COMMAND="bash scripts/mock-adapter.sh" CLAUDE_COMMAND="bash scripts/mock-adapter.sh" npm run dev
-```
+This project is licensed under the MIT License. See [LICENSE](LICENSE).

@@ -2,7 +2,8 @@
   "name": "remoteagent",
   "version": "0.1.0",
   "private": true,
-  "description": "Telegram bridge for 1:1 Codex and Claude Code session pairing",
+  "description": "Personal installable session server for continuing local AI work across PC and Telegram",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
