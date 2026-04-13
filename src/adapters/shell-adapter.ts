@@ -18,7 +18,8 @@ export class ShellAdapter implements ProviderAdapter {
       ...process.env,
       BRIDGE_PROVIDER: this.provider,
       BRIDGE_CHAT_ID: request.chatId,
-      BRIDGE_SESSION_ID: request.sessionId,
+      BRIDGE_SESSION_ID: request.sessionId ?? "",
+      BRIDGE_CWD: request.cwd,
       BRIDGE_MESSAGE: request.message,
     };
 
@@ -35,7 +36,8 @@ export class ShellAdapter implements ProviderAdapter {
 
     return {
       provider: this.provider,
-      sessionId: request.sessionId,
+      sessionId: request.sessionId ?? "",
+      cwd: request.cwd,
       output,
     };
   }

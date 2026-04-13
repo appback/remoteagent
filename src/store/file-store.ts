@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { BridgeMode, BridgeState, ChatMapping, Provider } from "../types.js";
+import type { BridgeMode, BridgeState, ChatMapping, Provider, ProviderSession } from "../types.js";
 
 const EMPTY_STATE: BridgeState = { chats: {} };
 
@@ -27,7 +27,11 @@ export class FileStore {
     return state.chats[chatId];
   }
 
-  async upsertProvider(chatId: string, provider: Provider, sessionId: string): Promise<ChatMapping> {
+  async upsertProvider(
+    chatId: string,
+    provider: Provider,
+    session: Omit<ProviderSession, "provider">,
+  ): Promise<ChatMapping> {
     const state = await this.readState();
     const now = new Date().toISOString();
     const current = state.chats[chatId] ?? {
@@ -38,8 +42,7 @@ export class FileStore {
 
     current[provider] = {
       provider,
-      sessionId,
-      pairedAt: now,
+      ...session,
     };
     current.updatedAt = now;
     state.chats[chatId] = current;
@@ -79,7 +82,7 @@ export class FileStore {
   private async readState(): Promise<BridgeState> {
     try {
       const raw = await fs.readFile(this.stateFile, "utf8");
-      return JSON.parse(raw) as BridgeState;
+      return this.normalizeState(JSON.parse(raw) as BridgeState);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return EMPTY_STATE;
@@ -90,5 +93,21 @@ export class FileStore {
 
   private async writeState(state: BridgeState): Promise<void> {
     await fs.writeFile(this.stateFile, JSON.stringify(state, null, 2), "utf8");
+  }
+
+  private normalizeState(state: BridgeState): BridgeState {
+    for (const mapping of Object.values(state.chats)) {
+      for (const provider of ["codex", "claude"] as Provider[]) {
+        const session = mapping[provider];
+        if (!session) {
+          continue;
+        }
+
+        if (!session.cwd) {
+          session.cwd = this.dataDir;
+        }
+      }
+    }
+    return state;
   }
 }

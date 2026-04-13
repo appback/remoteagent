@@ -4,8 +4,11 @@ export type BridgeMode = Provider | "compare";
 
 export type ProviderSession = {
   provider: Provider;
-  sessionId: string;
+  cwd: string;
   pairedAt: string;
+  sessionId?: string;
+  model?: string;
+  lastUsedAt?: string;
 };
 
 export type ChatMapping = {
@@ -22,13 +25,16 @@ export type BridgeState = {
 
 export type ProviderRequest = {
   chatId: string;
-  sessionId: string;
   message: string;
+  cwd: string;
+  sessionId?: string;
+  model?: string;
 };
 
 export type ProviderResponse = {
   provider: Provider;
   sessionId: string;
+  cwd: string;
   output: string;
 };
 

@@ -1,11 +1,11 @@
-import crypto from "node:crypto";
+import fs from "node:fs/promises";
 import type { ProviderAdapter } from "../adapters/provider-adapter.js";
-import { hasProviderCommand } from "../config.js";
 import type {
   BridgeMode,
   ChatMapping,
   LogEntry,
   Provider,
+  ProviderSession,
   ProviderResponse,
 } from "../types.js";
 import { FileStore } from "../store/file-store.js";
@@ -14,16 +14,23 @@ export class BridgeService {
   constructor(
     private readonly store: FileStore,
     private readonly adapters: Partial<Record<Provider, ProviderAdapter>>,
+    private readonly defaultWorkspace: string,
   ) {}
 
-  async startPair(chatId: string, provider: Provider): Promise<ChatMapping> {
+  async startPair(chatId: string, provider: Provider, cwd?: string): Promise<ChatMapping> {
     const existing = await this.store.getChat(chatId);
-    if (existing?.[provider]) {
+    const workspace = cwd?.trim() || existing?.[provider]?.cwd || this.defaultWorkspace;
+    await this.ensureWorkspaceExists(workspace);
+
+    if (existing?.[provider] && existing[provider]!.cwd === workspace) {
       return existing;
     }
 
-    const sessionId = this.createSessionId(provider);
-    return this.store.upsertProvider(chatId, provider, sessionId);
+    return this.store.upsertProvider(chatId, provider, {
+      cwd: workspace,
+      pairedAt: new Date().toISOString(),
+      model: provider === "codex" ? "gpt-5.4" : undefined,
+    });
   }
 
   async setMode(chatId: string, mode: BridgeMode): Promise<ChatMapping> {
@@ -76,8 +83,16 @@ export class BridgeService {
         const session = mapping[provider];
         const response = await this.adapters[provider]!.send({
           chatId,
+          cwd: session!.cwd,
           sessionId: session!.sessionId,
           message,
+          model: session!.model,
+        });
+        await this.store.upsertProvider(chatId, provider, {
+          ...session!,
+          cwd: response.cwd,
+          sessionId: response.sessionId,
+          lastUsedAt: new Date().toISOString(),
         });
         await this.log({
           timestamp: new Date().toISOString(),
@@ -100,10 +115,10 @@ export class BridgeService {
     }
 
     const codex = mapping.codex
-      ? `- codex: ${mapping.codex.sessionId}`
+      ? this.describeSession(mapping.codex)
       : "- codex: not paired";
     const claude = mapping.claude
-      ? `- claude: ${mapping.claude.sessionId}`
+      ? this.describeSession(mapping.claude)
       : "- claude: not paired";
 
     return [
@@ -129,10 +144,6 @@ export class BridgeService {
     return [mode];
   }
 
-  private createSessionId(provider: Provider): string {
-    return `${provider}-${crypto.randomUUID()}`;
-  }
-
   private async requireChat(chatId: string): Promise<ChatMapping> {
     const mapping = await this.store.getChat(chatId);
     if (!mapping) {
@@ -142,18 +153,30 @@ export class BridgeService {
   }
 
   private ensurePaired(mapping: ChatMapping, provider: Provider): void {
-    if (!mapping[provider]) {
+    if (!mapping[provider]?.cwd) {
       throw new Error(`이 채팅방에는 ${provider} 세션이 없습니다. \`/startpair ${provider}\`로 먼저 연결하세요.`);
     }
   }
 
   private ensureConfigured(provider: Provider): void {
-    if (!hasProviderCommand(provider) || !this.adapters[provider]) {
-      throw new Error(`${provider} 어댑터가 설정되지 않았습니다. .env의 ${provider.toUpperCase()}_COMMAND 값을 확인하세요.`);
+    if (!this.adapters[provider]) {
+      throw new Error(`${provider} 어댑터가 설정되지 않았습니다. 설치 환경이나 .env 설정을 확인하세요.`);
     }
   }
 
   private async log(entry: LogEntry): Promise<void> {
     await this.store.appendLog(entry.chatId, JSON.stringify(entry));
+  }
+
+  private describeSession(session: ProviderSession): string {
+    const state = session.sessionId ? session.sessionId : "pending-first-run";
+    return `- ${session.provider}: ${state} @ ${session.cwd}`;
+  }
+
+  private async ensureWorkspaceExists(cwd: string): Promise<void> {
+    const stat = await fs.stat(cwd).catch(() => undefined);
+    if (!stat?.isDirectory()) {
+      throw new Error(`작업 경로를 찾을 수 없습니다: ${cwd}`);
+    }
   }
 }

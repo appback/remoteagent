@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import dotenv from "dotenv";
@@ -5,8 +7,13 @@ import type { BridgeMode, Provider } from "./types.js";
 
 dotenv.config();
 
+const defaultDataDir = path.resolve(process.env.DATA_DIR?.trim() || path.join(os.homedir(), ".remoteagent"));
+const installedEnvPath = path.join(defaultDataDir, ".env");
+if (fs.existsSync(installedEnvPath)) {
+  dotenv.config({ path: installedEnvPath, override: true });
+}
+
 const VALID_MODES = new Set<BridgeMode>(["codex", "claude", "compare"]);
-const VALID_PROVIDERS = new Set<Provider>(["codex", "claude"]);
 
 function readRequired(name: string): string {
   const value = process.env[name]?.trim();
@@ -46,15 +53,13 @@ function readTimeout(name: string, fallback: number): number {
 
 export const config = {
   telegramBotToken: readRequired("TELEGRAM_BOT_TOKEN"),
-  dataDir: path.resolve(process.cwd(), process.env.DATA_DIR?.trim() || ".data"),
+  dataDir: defaultDataDir,
   defaultMode: readMode("DEFAULT_MODE", "codex"),
+  defaultWorkspace: path.resolve(process.env.DEFAULT_WORKSPACE?.trim() || os.homedir()),
   commandTimeoutMs: readTimeout("COMMAND_TIMEOUT_MS", 120_000),
+  codexBin: readOptional("CODEX_BIN") || "codex",
   commands: {
     codex: readOptional("CODEX_COMMAND"),
     claude: readOptional("CLAUDE_COMMAND"),
   } satisfies Record<Provider, string | undefined>,
 };
-
-export function hasProviderCommand(provider: Provider): boolean {
-  return VALID_PROVIDERS.has(provider) && Boolean(config.commands[provider]);
-}

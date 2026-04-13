@@ -4,9 +4,9 @@ import type { BridgeMode, Provider } from "./types.js";
 
 const HELP_TEXT = [
   "명령어",
-  "/startpair codex",
-  "/startpair claude",
-  "/startpair both",
+  "/startpair codex [path]",
+  "/startpair claude [path]",
+  "/startpair both [path]",
   "/status",
   "/mode codex",
   "/mode claude",
@@ -32,24 +32,23 @@ export function createBot(token: string, bridge: BridgeService): Bot {
 
   bot.command("startpair", async (ctx) => {
     const chatId = String(ctx.chat.id);
-    const args = getArgs(ctx.message?.text);
-    const target = args[0]?.toLowerCase();
+    const { firstArg: target, rest } = parseCommandArgs(ctx.message?.text);
 
     if (!target || !["codex", "claude", "both"].includes(target)) {
-      await ctx.reply("사용법: `/startpair codex`, `/startpair claude`, `/startpair both`", {
+      await ctx.reply("사용법: `/startpair codex [path]`, `/startpair claude [path]`, `/startpair both [path]`", {
         parse_mode: "Markdown",
       });
       return;
     }
 
     if (target === "both") {
-      await bridge.startPair(chatId, "codex");
-      const mapping = await bridge.startPair(chatId, "claude");
+      await bridge.startPair(chatId, "codex", rest);
+      const mapping = await bridge.startPair(chatId, "claude", rest);
       await ctx.reply(`세션 2개를 연결했습니다.\n\n${bridge.formatStatus(mapping)}`);
       return;
     }
 
-    const mapping = await bridge.startPair(chatId, target as Provider);
+    const mapping = await bridge.startPair(chatId, target as Provider, rest);
     await ctx.reply(`${target} 세션을 연결했습니다.\n\n${bridge.formatStatus(mapping)}`);
   });
 
@@ -61,8 +60,7 @@ export function createBot(token: string, bridge: BridgeService): Bot {
 
   bot.command("mode", async (ctx) => {
     const chatId = String(ctx.chat.id);
-    const args = getArgs(ctx.message?.text);
-    const mode = args[0]?.toLowerCase();
+    const { firstArg: mode } = parseCommandArgs(ctx.message?.text);
 
     if (!mode || !["codex", "claude", "compare"].includes(mode)) {
       await ctx.reply("사용법: `/mode codex`, `/mode claude`, `/mode compare`", {
@@ -119,8 +117,31 @@ export function createBot(token: string, bridge: BridgeService): Bot {
   return bot;
 }
 
-function getArgs(text: string | undefined): string[] {
-  return text?.trim().split(/\s+/).slice(1) ?? [];
+function parseCommandArgs(text: string | undefined): { firstArg?: string; rest?: string } {
+  const trimmed = text?.trim();
+  if (!trimmed) {
+    return {};
+  }
+
+  const firstSpace = trimmed.indexOf(" ");
+  if (firstSpace === -1) {
+    return {};
+  }
+
+  const tail = trimmed.slice(firstSpace + 1).trim();
+  if (!tail) {
+    return {};
+  }
+
+  const nextSpace = tail.indexOf(" ");
+  if (nextSpace === -1) {
+    return { firstArg: tail.toLowerCase() };
+  }
+
+  return {
+    firstArg: tail.slice(0, nextSpace).toLowerCase(),
+    rest: tail.slice(nextSpace + 1).trim() || undefined,
+  };
 }
 
 function chunkMessage(text: string, size: number): string[] {
