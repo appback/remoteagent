@@ -1,8 +1,8 @@
 import process from "node:process";
 import { randomUUID } from "node:crypto";
-import { spawn } from "node:child_process";
 import type { ProviderRequest, ProviderResponse } from "../types.js";
 import type { ProviderAdapter } from "./provider-adapter.js";
+import { spawnWithPlatformShell } from "./windows-shell.js";
 
 export class ClaudeAdapter implements ProviderAdapter {
   constructor(
@@ -56,37 +56,7 @@ export class ClaudeAdapter implements ProviderAdapter {
   }
 
   private runClaude(args: string[], cwd: string): Promise<{ stdout: string; stderr: string; code: number | null }> {
-    return new Promise((resolve, reject) => {
-      const child = spawn(this.claudeBin, args, {
-        cwd,
-        env: process.env,
-        shell: process.platform === "win32",
-      });
-
-      let stdout = "";
-      let stderr = "";
-      const timer = setTimeout(() => {
-        child.kill("SIGTERM");
-      }, this.timeoutMs);
-
-      child.stdout.on("data", (chunk) => {
-        stdout += chunk.toString();
-      });
-
-      child.stderr.on("data", (chunk) => {
-        stderr += chunk.toString();
-      });
-
-      child.on("error", (error) => {
-        clearTimeout(timer);
-        reject(error);
-      });
-
-      child.on("close", (code) => {
-        clearTimeout(timer);
-        resolve({ stdout, stderr, code });
-      });
-    });
+    return spawnWithPlatformShell(this.claudeBin, args, cwd, this.timeoutMs);
   }
 
   private formatProcessError(stdout: string, stderr: string): string {

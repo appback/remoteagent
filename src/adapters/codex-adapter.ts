@@ -1,11 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import process from "node:process";
 import { randomUUID } from "node:crypto";
-import { spawn } from "node:child_process";
 import type { ProviderRequest, ProviderResponse } from "../types.js";
 import type { ProviderAdapter } from "./provider-adapter.js";
+import { spawnWithPlatformShell } from "./windows-shell.js";
 
 export class CodexAdapter implements ProviderAdapter {
   constructor(
@@ -31,18 +30,28 @@ export class CodexAdapter implements ProviderAdapter {
     const { stdout, stderr, code } = await this.runCodex(args, request.cwd);
 
     try {
+      const sessionId = this.extractThreadId(stdout) ?? request.sessionId;
+      const output = await this.readOutput(outputPath);
+
+      if (sessionId && output) {
+        return {
+          provider: "codex",
+          sessionId,
+          cwd: request.cwd,
+          output,
+        };
+      }
+
       if (code !== 0) {
         throw new Error(this.formatProcessError(stdout, stderr));
       }
 
-      const sessionId = this.extractThreadId(stdout) ?? request.sessionId;
       if (!sessionId) {
-        throw new Error("Codex 응답에서 session id를 찾지 못했습니다.");
+        throw new Error("Codex response did not include a session id.");
       }
 
-      const output = (await fs.readFile(outputPath, "utf8")).trim();
       if (!output) {
-        throw new Error("Codex가 비어 있는 응답을 반환했습니다.");
+        throw new Error("Codex returned an empty response.");
       }
 
       return {
@@ -85,37 +94,7 @@ export class CodexAdapter implements ProviderAdapter {
   }
 
   private runCodex(args: string[], cwd: string): Promise<{ stdout: string; stderr: string; code: number | null }> {
-    return new Promise((resolve, reject) => {
-      const child = spawn(this.codexBin, args, {
-        cwd,
-        env: process.env,
-        shell: process.platform === "win32",
-      });
-
-      let stdout = "";
-      let stderr = "";
-      const timer = setTimeout(() => {
-        child.kill("SIGTERM");
-      }, this.timeoutMs);
-
-      child.stdout.on("data", (chunk) => {
-        stdout += chunk.toString();
-      });
-
-      child.stderr.on("data", (chunk) => {
-        stderr += chunk.toString();
-      });
-
-      child.on("error", (error) => {
-        clearTimeout(timer);
-        reject(error);
-      });
-
-      child.on("close", (code) => {
-        clearTimeout(timer);
-        resolve({ stdout, stderr, code });
-      });
-    });
+    return spawnWithPlatformShell(this.codexBin, args, cwd, this.timeoutMs);
   }
 
   private extractThreadId(stdout: string): string | undefined {
@@ -125,8 +104,8 @@ export class CodexAdapter implements ProviderAdapter {
       }
 
       try {
-        const event = JSON.parse(line) as { type?: string; thread_id?: string };
-        if (event.type === "thread.started" && event.thread_id) {
+        const event = JSON.parse(line) as { thread_id?: string };
+        if (event.thread_id) {
           return event.thread_id;
         }
       } catch {
@@ -137,6 +116,10 @@ export class CodexAdapter implements ProviderAdapter {
     return undefined;
   }
 
+  private async readOutput(outputPath: string): Promise<string> {
+    return (await fs.readFile(outputPath, "utf8").catch(() => "")).trim();
+  }
+
   private formatProcessError(stdout: string, stderr: string): string {
     const text = [stderr, stdout]
       .map((value) => value.trim())
@@ -144,6 +127,6 @@ export class CodexAdapter implements ProviderAdapter {
       .join("\n")
       .trim();
 
-    return text || "Codex 실행이 실패했지만 출력이 비어 있습니다.";
+    return text || "Codex execution failed without any output.";
   }
 }

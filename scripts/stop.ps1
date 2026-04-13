@@ -8,11 +8,11 @@ if (-not (Test-Path $pidFile)) {
   exit 0
 }
 
-$pid = Get-Content $pidFile
-$proc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+$remoteAgentPid = Get-Content $pidFile
+$proc = Get-Process -Id $remoteAgentPid -ErrorAction SilentlyContinue
 if ($proc) {
-  Stop-Process -Id $pid
-  Write-Host "Stopped RemoteAgent PID $pid"
+  Stop-Process -Id $remoteAgentPid
+  Write-Host "Stopped RemoteAgent PID $remoteAgentPid"
 } else {
   Write-Host "RemoteAgent PID file existed, but process was not running."
 }
