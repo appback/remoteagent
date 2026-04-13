@@ -5,8 +5,8 @@ import type {
   ChatMapping,
   LogEntry,
   Provider,
-  ProviderSession,
   ProviderResponse,
+  ProviderSession,
 } from "../types.js";
 import { FileStore } from "../store/file-store.js";
 
@@ -19,17 +19,39 @@ export class BridgeService {
 
   async startPair(chatId: string, provider: Provider, cwd?: string): Promise<ChatMapping> {
     const existing = await this.store.getChat(chatId);
-    const workspace = cwd?.trim() || existing?.[provider]?.cwd || this.defaultWorkspace;
+    const workspace = this.resolveWorkspace(existing?.[provider]?.cwd, cwd);
     await this.ensureWorkspaceExists(workspace);
 
-    if (existing?.[provider] && existing[provider]!.cwd === workspace) {
-      return existing;
+    return this.store.upsertProvider(chatId, provider, {
+      cwd: workspace,
+      pairedAt: new Date().toISOString(),
+      sessionId: undefined,
+      model: provider === "codex" ? "gpt-5.4" : "sonnet",
+      lastUsedAt: undefined,
+    });
+  }
+
+  async attachPair(
+    chatId: string,
+    provider: Provider,
+    sessionId: string,
+    cwd?: string,
+  ): Promise<ChatMapping> {
+    const existing = await this.store.getChat(chatId);
+    const workspace = this.resolveWorkspace(existing?.[provider]?.cwd, cwd);
+    await this.ensureWorkspaceExists(workspace);
+
+    const normalizedSessionId = sessionId.trim();
+    if (!normalizedSessionId) {
+      throw new Error("Session id is required.");
     }
 
     return this.store.upsertProvider(chatId, provider, {
       cwd: workspace,
       pairedAt: new Date().toISOString(),
-      model: provider === "codex" ? "gpt-5.4" : "sonnet",
+      sessionId: normalizedSessionId,
+      model: existing?.[provider]?.model ?? (provider === "codex" ? "gpt-5.4" : "sonnet"),
+      lastUsedAt: undefined,
     });
   }
 
@@ -88,12 +110,14 @@ export class BridgeService {
           message,
           model: session!.model,
         });
+
         await this.store.upsertProvider(chatId, provider, {
           ...session!,
           cwd: response.cwd,
           sessionId: response.sessionId,
           lastUsedAt: new Date().toISOString(),
         });
+
         await this.log({
           timestamp: new Date().toISOString(),
           chatId,
@@ -102,6 +126,7 @@ export class BridgeService {
           sessionId: response.sessionId,
           text: response.output,
         });
+
         return response;
       }),
     );
@@ -111,7 +136,7 @@ export class BridgeService {
 
   formatStatus(mapping: ChatMapping | undefined): string {
     if (!mapping) {
-      return "아직 연결된 세션이 없습니다. `/startpair codex`, `/startpair claude`, `/startpair both` 중 하나로 시작하세요.";
+      return "No paired session yet. Use `/startpair codex`, `/startpair claude`, or `/attach ...`.";
     }
 
     const codex = mapping.codex
@@ -141,26 +166,28 @@ export class BridgeService {
     if (mode === "compare") {
       return ["codex", "claude"];
     }
+
     return [mode];
   }
 
   private async requireChat(chatId: string): Promise<ChatMapping> {
     const mapping = await this.store.getChat(chatId);
     if (!mapping) {
-      throw new Error("이 채팅방에는 아직 연결된 세션이 없습니다. `/startpair codex`, `/startpair claude`, `/startpair both` 중 하나를 먼저 실행하세요.");
+      throw new Error("No paired session for this chat yet. Run `/startpair codex`, `/startpair claude`, or `/attach ...` first.");
     }
+
     return mapping;
   }
 
   private ensurePaired(mapping: ChatMapping, provider: Provider): void {
     if (!mapping[provider]?.cwd) {
-      throw new Error(`이 채팅방에는 ${provider} 세션이 없습니다. \`/startpair ${provider}\`로 먼저 연결하세요.`);
+      throw new Error(`This chat is not paired with ${provider}. Run \`/startpair ${provider}\` or \`/attach ${provider} <session_id>\`.`);
     }
   }
 
   private ensureConfigured(provider: Provider): void {
     if (!this.adapters[provider]) {
-      throw new Error(`${provider} 어댑터가 설정되지 않았습니다. 설치 환경이나 .env 설정을 확인하세요.`);
+      throw new Error(`${provider} adapter is not configured. Check the install and environment settings.`);
     }
   }
 
@@ -169,14 +196,26 @@ export class BridgeService {
   }
 
   private describeSession(session: ProviderSession): string {
-    const state = session.sessionId ? session.sessionId : "pending-first-run";
-    return `- ${session.provider}: ${state} @ ${session.cwd}`;
+    const state = session.sessionId
+      ? `attached ${session.sessionId}`
+      : "pending-first-run";
+    const details = [`- ${session.provider}: ${state} @ ${session.cwd}`];
+
+    if (session.lastUsedAt) {
+      details.push(`  lastUsedAt: ${session.lastUsedAt}`);
+    }
+
+    return details.join("\n");
+  }
+
+  private resolveWorkspace(current: string | undefined, next: string | undefined): string {
+    return next?.trim() || current || this.defaultWorkspace;
   }
 
   private async ensureWorkspaceExists(cwd: string): Promise<void> {
     const stat = await fs.stat(cwd).catch(() => undefined);
     if (!stat?.isDirectory()) {
-      throw new Error(`작업 경로를 찾을 수 없습니다: ${cwd}`);
+      throw new Error(`Workspace path does not exist: ${cwd}`);
     }
   }
 }

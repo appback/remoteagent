@@ -3,10 +3,12 @@ import { BridgeService } from "./services/bridge-service.js";
 import type { BridgeMode, Provider } from "./types.js";
 
 const HELP_TEXT = [
-  "명령어",
+  "Commands:",
   "/startpair codex [path]",
   "/startpair claude [path]",
   "/startpair both [path]",
+  "/attach codex <thread_id> [path]",
+  "/attach claude <session_id> [path]",
   "/status",
   "/mode codex",
   "/mode claude",
@@ -20,7 +22,7 @@ export function createBot(token: string, bridge: BridgeService): Bot {
   bot.command("start", async (ctx) => {
     await ctx.reply(
       [
-        "텔레그램 채팅방을 Codex 또는 Claude 세션과 1:1로 연결하는 브리지입니다.",
+        "Pair this Telegram chat 1:1 with a Codex or Claude session.",
         HELP_TEXT,
       ].join("\n\n"),
     );
@@ -32,10 +34,11 @@ export function createBot(token: string, bridge: BridgeService): Bot {
 
   bot.command("startpair", async (ctx) => {
     const chatId = String(ctx.chat.id);
-    const { firstArg: target, rest } = parseCommandArgs(ctx.message?.text);
+    const { args, rest } = parseCommand(ctx.message?.text, 1);
+    const target = args[0]?.toLowerCase();
 
     if (!target || !["codex", "claude", "both"].includes(target)) {
-      await ctx.reply("사용법: `/startpair codex [path]`, `/startpair claude [path]`, `/startpair both [path]`", {
+      await ctx.reply("Usage: `/startpair codex [path]`, `/startpair claude [path]`, `/startpair both [path]`", {
         parse_mode: "Markdown",
       });
       return;
@@ -44,12 +47,31 @@ export function createBot(token: string, bridge: BridgeService): Bot {
     if (target === "both") {
       await bridge.startPair(chatId, "codex", rest);
       const mapping = await bridge.startPair(chatId, "claude", rest);
-      await ctx.reply(`세션 2개를 연결했습니다.\n\n${bridge.formatStatus(mapping)}`);
+      await ctx.reply(`Started fresh Codex and Claude pairings.\n\n${bridge.formatStatus(mapping)}`);
       return;
     }
 
     const mapping = await bridge.startPair(chatId, target as Provider, rest);
-    await ctx.reply(`${target} 세션을 연결했습니다.\n\n${bridge.formatStatus(mapping)}`);
+    await ctx.reply(`Started a fresh ${target} pairing.\n\n${bridge.formatStatus(mapping)}`);
+  });
+
+  bot.command("attach", async (ctx) => {
+    const chatId = String(ctx.chat.id);
+    const { args, rest } = parseCommand(ctx.message?.text, 2);
+    const provider = args[0]?.toLowerCase();
+    const sessionId = args[1];
+
+    if (!provider || !["codex", "claude"].includes(provider) || !sessionId) {
+      await ctx.reply("Usage: `/attach codex <thread_id> [path]`, `/attach claude <session_id> [path]`", {
+        parse_mode: "Markdown",
+      });
+      return;
+    }
+
+    const mapping = await bridge.attachPair(chatId, provider as Provider, sessionId, rest);
+    await ctx.reply(`Attached this chat to existing ${provider} session \`${sessionId}\`.\n\n${bridge.formatStatus(mapping)}`, {
+      parse_mode: "Markdown",
+    });
   });
 
   bot.command("status", async (ctx) => {
@@ -60,23 +82,24 @@ export function createBot(token: string, bridge: BridgeService): Bot {
 
   bot.command("mode", async (ctx) => {
     const chatId = String(ctx.chat.id);
-    const { firstArg: mode } = parseCommandArgs(ctx.message?.text);
+    const { args } = parseCommand(ctx.message?.text, 1);
+    const mode = args[0]?.toLowerCase();
 
     if (!mode || !["codex", "claude", "compare"].includes(mode)) {
-      await ctx.reply("사용법: `/mode codex`, `/mode claude`, `/mode compare`", {
+      await ctx.reply("Usage: `/mode codex`, `/mode claude`, `/mode compare`", {
         parse_mode: "Markdown",
       });
       return;
     }
 
     const mapping = await bridge.setMode(chatId, mode as BridgeMode);
-    await ctx.reply(`모드를 ${mapping.mode}로 바꿨습니다.\n\n${bridge.formatStatus(mapping)}`);
+    await ctx.reply(`Switched mode to ${mapping.mode}.\n\n${bridge.formatStatus(mapping)}`);
   });
 
   bot.command("reset", async (ctx) => {
     const chatId = String(ctx.chat.id);
     await bridge.reset(chatId);
-    await ctx.reply("이 채팅방의 세션 매핑을 초기화했습니다.");
+    await ctx.reply("Cleared all pairings for this chat.");
   });
 
   bot.on("message:text", async (ctx) => {
@@ -111,36 +134,44 @@ export function createBot(token: string, bridge: BridgeService): Bot {
     }
 
     console.error("Unhandled error:", error.error);
-    void ctx.reply(error.error instanceof Error ? error.error.message : "알 수 없는 오류가 발생했습니다.");
+    void ctx.reply(error.error instanceof Error ? error.error.message : "An unexpected error occurred.");
   });
 
   return bot;
 }
 
-function parseCommandArgs(text: string | undefined): { firstArg?: string; rest?: string } {
+function parseCommand(text: string | undefined, headCount: number): { args: string[]; rest?: string } {
   const trimmed = text?.trim();
   if (!trimmed) {
-    return {};
+    return { args: [] };
   }
 
   const firstSpace = trimmed.indexOf(" ");
   if (firstSpace === -1) {
-    return {};
+    return { args: [] };
   }
 
-  const tail = trimmed.slice(firstSpace + 1).trim();
-  if (!tail) {
-    return {};
+  let remaining = trimmed.slice(firstSpace + 1).trim();
+  if (!remaining) {
+    return { args: [] };
   }
 
-  const nextSpace = tail.indexOf(" ");
-  if (nextSpace === -1) {
-    return { firstArg: tail.toLowerCase() };
+  const args: string[] = [];
+  for (let index = 0; index < headCount && remaining; index += 1) {
+    const nextSpace = remaining.indexOf(" ");
+    if (nextSpace === -1) {
+      args.push(remaining);
+      remaining = "";
+      break;
+    }
+
+    args.push(remaining.slice(0, nextSpace));
+    remaining = remaining.slice(nextSpace + 1).trim();
   }
 
   return {
-    firstArg: tail.slice(0, nextSpace).toLowerCase(),
-    rest: tail.slice(nextSpace + 1).trim() || undefined,
+    args,
+    rest: remaining || undefined,
   };
 }
 
