@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import type { ProviderAdapter } from "../adapters/provider-adapter.js";
 import type {
   BridgeMode,
-  ChatMapping,
+  ChatSession,
   LogEntry,
   Provider,
   ProviderResponse,
@@ -17,18 +17,18 @@ export class BridgeService {
     private readonly defaultWorkspace: string,
   ) {}
 
-  async startPair(chatId: string, provider: Provider, cwd?: string): Promise<ChatMapping> {
-    const existing = await this.store.getChat(chatId);
-    const workspace = this.resolveWorkspace(existing?.[provider]?.cwd, cwd);
+  async startPair(chatId: string, provider: Provider, cwd?: string): Promise<ChatSession> {
+    const existing = await this.store.getChatSession(chatId);
+    const workspace = this.resolveWorkspace(existing?.session[provider]?.cwd ?? existing?.session.workspace, cwd);
     await this.ensureWorkspaceExists(workspace);
 
-    return this.store.upsertProvider(chatId, provider, {
+    return this.store.upsertProviderForChat(chatId, provider, {
       cwd: workspace,
       pairedAt: new Date().toISOString(),
       sessionId: undefined,
       model: provider === "codex" ? "gpt-5.4" : "sonnet",
       lastUsedAt: undefined,
-    });
+    }, workspace);
   }
 
   async attachPair(
@@ -36,9 +36,9 @@ export class BridgeService {
     provider: Provider,
     sessionId: string,
     cwd?: string,
-  ): Promise<ChatMapping> {
-    const existing = await this.store.getChat(chatId);
-    const workspace = this.resolveWorkspace(existing?.[provider]?.cwd, cwd);
+  ): Promise<ChatSession> {
+    const existing = await this.store.getChatSession(chatId);
+    const workspace = this.resolveWorkspace(existing?.session[provider]?.cwd ?? existing?.session.workspace, cwd);
     await this.ensureWorkspaceExists(workspace);
 
     const normalizedSessionId = sessionId.trim();
@@ -46,80 +46,97 @@ export class BridgeService {
       throw new Error("Session id is required.");
     }
 
-    return this.store.upsertProvider(chatId, provider, {
+    return this.store.upsertProviderForChat(chatId, provider, {
       cwd: workspace,
       pairedAt: new Date().toISOString(),
       sessionId: normalizedSessionId,
-      model: existing?.[provider]?.model ?? (provider === "codex" ? "gpt-5.4" : "sonnet"),
+      model: existing?.session[provider]?.model ?? (provider === "codex" ? "gpt-5.4" : "sonnet"),
       lastUsedAt: undefined,
-    });
+    }, workspace);
   }
 
-  async setMode(chatId: string, mode: BridgeMode): Promise<ChatMapping> {
+  async setMode(chatId: string, mode: BridgeMode): Promise<ChatSession> {
     if (mode === "compare") {
-      const mapping = await this.requireChat(chatId);
-      this.ensurePaired(mapping, "codex");
-      this.ensurePaired(mapping, "claude");
+      const chatSession = await this.requireChat(chatId);
+      this.ensurePaired(chatSession, "codex");
+      this.ensurePaired(chatSession, "claude");
       this.ensureConfigured("codex");
       this.ensureConfigured("claude");
     }
 
     if (mode === "codex") {
-      const mapping = await this.requireChat(chatId);
-      this.ensurePaired(mapping, "codex");
+      const chatSession = await this.requireChat(chatId);
+      this.ensurePaired(chatSession, "codex");
       this.ensureConfigured("codex");
     }
 
     if (mode === "claude") {
-      const mapping = await this.requireChat(chatId);
-      this.ensurePaired(mapping, "claude");
+      const chatSession = await this.requireChat(chatId);
+      this.ensurePaired(chatSession, "claude");
       this.ensureConfigured("claude");
     }
 
-    return this.store.setMode(chatId, mode);
+    return this.store.setModeForChat(chatId, mode);
   }
 
-  async status(chatId: string): Promise<ChatMapping | undefined> {
-    return this.store.getChat(chatId);
+  async status(chatId: string): Promise<ChatSession | undefined> {
+    return this.store.getChatSession(chatId);
   }
 
   async reset(chatId: string): Promise<void> {
+    const chatSession = await this.store.getChatSession(chatId);
+    if (chatSession) {
+      await this.log({
+        timestamp: new Date().toISOString(),
+        remoteSessionId: chatSession.session.sessionId,
+        chatId,
+        provider: "system",
+        direction: "system",
+        text: "Chat binding reset.",
+      });
+    }
+
     await this.store.resetChat(chatId);
   }
 
   async routeMessage(chatId: string, message: string): Promise<ProviderResponse[]> {
-    const mapping = await this.requireChat(chatId);
+    const chatSession = await this.requireChat(chatId);
+    const remoteSessionId = chatSession.session.sessionId;
+
     await this.log({
       timestamp: new Date().toISOString(),
+      remoteSessionId,
       chatId,
       provider: "telegram",
       direction: "in",
       text: message,
     });
 
-    const providers = this.resolveProviders(mapping.mode);
+    const providers = this.resolveProviders(chatSession.session.mode);
     const responses = await Promise.all(
       providers.map(async (provider) => {
-        this.ensurePaired(mapping, provider);
+        this.ensurePaired(chatSession, provider);
         this.ensureConfigured(provider);
-        const session = mapping[provider];
+        const providerSession = chatSession.session[provider];
         const response = await this.adapters[provider]!.send({
           chatId,
-          cwd: session!.cwd,
-          sessionId: session!.sessionId,
+          remoteSessionId,
+          cwd: providerSession!.cwd,
+          sessionId: providerSession!.sessionId,
           message,
-          model: session!.model,
+          model: providerSession!.model,
         });
 
-        await this.store.upsertProvider(chatId, provider, {
-          ...session!,
+        await this.store.upsertProviderForChat(chatId, provider, {
+          ...providerSession!,
           cwd: response.cwd,
           sessionId: response.sessionId,
           lastUsedAt: new Date().toISOString(),
-        });
+        }, chatSession.session.workspace);
 
         await this.log({
           timestamp: new Date().toISOString(),
+          remoteSessionId,
           chatId,
           provider,
           direction: "out",
@@ -134,24 +151,28 @@ export class BridgeService {
     return responses;
   }
 
-  formatStatus(mapping: ChatMapping | undefined): string {
-    if (!mapping) {
+  formatStatus(chatSession: ChatSession | undefined): string {
+    if (!chatSession) {
       return "No paired session yet. Use `/startpair codex`, `/startpair claude`, or `/attach ...`.";
     }
 
-    const codex = mapping.codex
-      ? this.describeSession(mapping.codex)
+    const { session } = chatSession;
+    const codex = session.codex
+      ? this.describeProviderSession(session.codex)
       : "- codex: not paired";
-    const claude = mapping.claude
-      ? this.describeSession(mapping.claude)
+    const claude = session.claude
+      ? this.describeProviderSession(session.claude)
       : "- claude: not paired";
 
     return [
-      `chat: ${mapping.chatId}`,
-      `mode: ${mapping.mode}`,
+      `remoteSession: ${session.sessionId}`,
+      `chat: ${chatSession.chatId}`,
+      `mode: ${session.mode}`,
+      `workspace: ${session.workspace}`,
       codex,
       claude,
-      `updatedAt: ${mapping.updatedAt}`,
+      `createdAt: ${session.createdAt}`,
+      `updatedAt: ${session.updatedAt}`,
     ].join("\n");
   }
 
@@ -170,17 +191,17 @@ export class BridgeService {
     return [mode];
   }
 
-  private async requireChat(chatId: string): Promise<ChatMapping> {
-    const mapping = await this.store.getChat(chatId);
-    if (!mapping) {
+  private async requireChat(chatId: string): Promise<ChatSession> {
+    const chatSession = await this.store.getChatSession(chatId);
+    if (!chatSession) {
       throw new Error("No paired session for this chat yet. Run `/startpair codex`, `/startpair claude`, or `/attach ...` first.");
     }
 
-    return mapping;
+    return chatSession;
   }
 
-  private ensurePaired(mapping: ChatMapping, provider: Provider): void {
-    if (!mapping[provider]?.cwd) {
+  private ensurePaired(chatSession: ChatSession, provider: Provider): void {
+    if (!chatSession.session[provider]?.cwd) {
       throw new Error(`This chat is not paired with ${provider}. Run \`/startpair ${provider}\` or \`/attach ${provider} <session_id>\`.`);
     }
   }
@@ -192,10 +213,10 @@ export class BridgeService {
   }
 
   private async log(entry: LogEntry): Promise<void> {
-    await this.store.appendLog(entry.chatId, JSON.stringify(entry));
+    await this.store.appendLog(entry.remoteSessionId, JSON.stringify(entry));
   }
 
-  private describeSession(session: ProviderSession): string {
+  private describeProviderSession(session: ProviderSession): string {
     const state = session.sessionId
       ? `attached ${session.sessionId}`
       : "pending-first-run";

@@ -11,20 +11,37 @@ export type ProviderSession = {
   lastUsedAt?: string;
 };
 
-export type ChatMapping = {
-  chatId: string;
+export type SessionRecord = {
+  sessionId: string;
   mode: BridgeMode;
+  workspace: string;
   codex?: ProviderSession;
   claude?: ProviderSession;
+  createdAt: string;
   updatedAt: string;
 };
 
+export type ChatBinding = {
+  chatId: string;
+  sessionId: string;
+  boundAt: string;
+  updatedAt: string;
+};
+
+export type ChatSession = {
+  chatId: string;
+  binding: ChatBinding;
+  session: SessionRecord;
+};
+
 export type BridgeState = {
-  chats: Record<string, ChatMapping>;
+  chats: Record<string, ChatBinding>;
+  sessions: Record<string, SessionRecord>;
 };
 
 export type ProviderRequest = {
   chatId: string;
+  remoteSessionId: string;
   message: string;
   cwd: string;
   sessionId?: string;
@@ -40,9 +57,10 @@ export type ProviderResponse = {
 
 export type LogEntry = {
   timestamp: string;
-  chatId: string;
-  provider: Provider | "telegram";
-  direction: "in" | "out";
+  remoteSessionId: string;
+  chatId?: string;
+  provider: Provider | "telegram" | "system";
+  direction: "in" | "out" | "system";
   sessionId?: string;
   text: string;
 };

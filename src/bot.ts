@@ -93,7 +93,7 @@ export function createBot(token: string, bridge: BridgeService): Bot {
     }
 
     const mapping = await bridge.setMode(chatId, mode as BridgeMode);
-    await ctx.reply(`Switched mode to ${mapping.mode}.\n\n${bridge.formatStatus(mapping)}`);
+    await ctx.reply(`Switched mode to ${mapping.session.mode}.\n\n${bridge.formatStatus(mapping)}`);
   });
 
   bot.command("reset", async (ctx) => {
