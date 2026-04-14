@@ -16,7 +16,11 @@ async function main(): Promise<void> {
   if (config.commands.codex) {
     adapters.codex = new ShellAdapter("codex", config.commands.codex, config.commandTimeoutMs);
   } else {
-    adapters.codex = new CodexAdapter(config.codexBin, config.commandTimeoutMs);
+    adapters.codex = new CodexAdapter(
+      config.codexBin,
+      config.commandTimeoutMs,
+      config.codexSandboxMode,
+    );
   }
   if (config.commands.claude) {
     adapters.claude = new ShellAdapter("claude", config.commands.claude, config.commandTimeoutMs);

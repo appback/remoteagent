@@ -10,21 +10,13 @@ export class CodexAdapter implements ProviderAdapter {
   constructor(
     private readonly codexBin: string,
     private readonly timeoutMs: number,
+    private readonly sandboxMode?: "read-only" | "workspace-write" | "danger-full-access",
   ) {}
 
   async send(request: ProviderRequest): Promise<ProviderResponse> {
     const outputPath = await this.createOutputPath();
     const args = request.sessionId
-      ? [
-          "exec",
-          "resume",
-          "--json",
-          "--skip-git-repo-check",
-          "-o",
-          outputPath,
-          request.sessionId,
-          request.message,
-        ]
+      ? this.buildResumeArgs(request, outputPath)
       : this.buildExecArgs(request, outputPath);
 
     const { stdout, stderr, code } = await this.runCodex(args, request.cwd);
@@ -82,11 +74,37 @@ export class CodexAdapter implements ProviderAdapter {
       args.push("-m", request.model);
     }
 
+    if (this.sandboxMode) {
+      args.push("-s", this.sandboxMode);
+    }
+
     args.push(
       "-o",
       outputPath,
       "-C",
       request.cwd,
+      request.message,
+    );
+
+    return args;
+  }
+
+  private buildResumeArgs(request: ProviderRequest, outputPath: string): string[] {
+    const args = [
+      "exec",
+      "resume",
+      "--json",
+      "--skip-git-repo-check",
+    ];
+
+    if (this.sandboxMode) {
+      args.push("-s", this.sandboxMode);
+    }
+
+    args.push(
+      "-o",
+      outputPath,
+      request.sessionId!,
       request.message,
     );
 

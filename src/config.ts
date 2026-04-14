@@ -14,6 +14,7 @@ if (fs.existsSync(installedEnvPath)) {
 }
 
 const VALID_MODES = new Set<BridgeMode>(["codex", "claude", "compare"]);
+const VALID_CODEX_SANDBOX_MODES = new Set(["read-only", "workspace-write", "danger-full-access"]);
 
 function readRequired(name: string): string {
   const value = process.env[name]?.trim();
@@ -51,6 +52,17 @@ function readTimeout(name: string, fallback: number): number {
   return parsed;
 }
 
+function readCodexSandboxMode(name: string): "read-only" | "workspace-write" | "danger-full-access" | undefined {
+  const value = process.env[name]?.trim();
+  if (!value) {
+    return undefined;
+  }
+  if (!VALID_CODEX_SANDBOX_MODES.has(value)) {
+    throw new Error(`Invalid ${name}: ${value}`);
+  }
+  return value as "read-only" | "workspace-write" | "danger-full-access";
+}
+
 export const config = {
   telegramBotToken: readRequired("TELEGRAM_BOT_TOKEN"),
   dataDir: defaultDataDir,
@@ -58,6 +70,7 @@ export const config = {
   defaultWorkspace: path.resolve(process.env.DEFAULT_WORKSPACE?.trim() || os.homedir()),
   commandTimeoutMs: readTimeout("COMMAND_TIMEOUT_MS", 120_000),
   codexBin: readOptional("CODEX_BIN") || "codex",
+  codexSandboxMode: readCodexSandboxMode("CODEX_SANDBOX_MODE"),
   claudeBin: readOptional("CLAUDE_BIN") || "claude",
   claudePermissionMode: readOptional("CLAUDE_PERMISSION_MODE") || "bypassPermissions",
   commands: {
