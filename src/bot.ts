@@ -128,14 +128,34 @@ export function createBot(token: string, bridge: BridgeService): Bot {
       return;
     }
 
+    const chatId = String(ctx.chat.id);
     await ctx.replyWithChatAction("typing");
-    const responses = await bridge.routeMessage(String(ctx.chat.id), text);
-    const blocks = bridge.formatResponses(responses);
+    const pending = await ctx.reply("작업 중...");
+    const typingLoop = setInterval(() => {
+      void ctx.replyWithChatAction("typing").catch(() => undefined);
+    }, 4000);
 
-    for (const block of blocks) {
-      for (const chunk of chunkMessage(block, 3900)) {
+    try {
+      const responses = await bridge.routeMessage(chatId, text);
+      const blocks = bridge.formatResponses(responses);
+      const chunks = flattenChunks(blocks, 3900);
+
+      if (chunks.length === 0) {
+        await ctx.api.editMessageText(ctx.chat.id, pending.message_id, "응답이 비어 있습니다.");
+        return;
+      }
+
+      await ctx.api.editMessageText(ctx.chat.id, pending.message_id, chunks[0]);
+      for (const chunk of chunks.slice(1)) {
         await ctx.reply(chunk);
       }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "An unexpected error occurred.";
+      await ctx.api.editMessageText(ctx.chat.id, pending.message_id, message).catch(async () => {
+        await ctx.reply(message);
+      });
+    } finally {
+      clearInterval(typingLoop);
     }
   });
 
@@ -216,6 +236,10 @@ function chunkMessage(text: string, size: number): string[] {
   }
 
   return chunks;
+}
+
+function flattenChunks(blocks: string[], size: number): string[] {
+  return blocks.flatMap((block) => chunkMessage(block, size));
 }
 
 function isCodexSandboxMode(value: string): value is CodexSandboxMode {
