@@ -129,11 +129,13 @@ export function createBot(token: string, bridge: BridgeService): Bot {
     }
 
     const chatId = String(ctx.chat.id);
-    await ctx.replyWithChatAction("typing");
-    const pending = await ctx.reply("작업 중...");
-    const typingLoop = setInterval(() => {
-      void ctx.replyWithChatAction("typing").catch(() => undefined);
-    }, 4000);
+    const pending = await ctx.reply("작업중.");
+    const pendingFrames = ["작업중.", "작업중..", "작업중...", "작업중...."];
+    let pendingIndex = 0;
+    const pendingLoop = setInterval(() => {
+      pendingIndex = (pendingIndex + 1) % pendingFrames.length;
+      void ctx.api.editMessageText(ctx.chat.id, pending.message_id, pendingFrames[pendingIndex]).catch(() => undefined);
+    }, 1000);
 
     try {
       const responses = await bridge.routeMessage(chatId, text);
@@ -155,7 +157,7 @@ export function createBot(token: string, bridge: BridgeService): Bot {
         await ctx.reply(message);
       });
     } finally {
-      clearInterval(typingLoop);
+      clearInterval(pendingLoop);
     }
   });
 
