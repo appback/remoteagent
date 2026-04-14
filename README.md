@@ -31,6 +31,7 @@ Today the repository already supports:
 - `/startpair both [path]`
 - `/attach codex <thread_id> [path]`
 - `/attach claude <session_id> [path]`
+- `/sandbox codex <read-only|workspace-write|danger-full-access>`
 - `/status`
 - `/mode codex|claude|compare`
 - `/reset`
@@ -96,12 +97,13 @@ Useful:
 
 - `DEFAULT_WORKSPACE`
 - `CODEX_BIN`
+- `CODEX_SANDBOX_MODE`
 - `CLAUDE_BIN`
 - `CLAUDE_COMMAND`
 - `CLAUDE_PERMISSION_MODE`
 - `COMMAND_TIMEOUT_MS`
 
-`CODEX_BIN` defaults to `codex`, and `CLAUDE_BIN` defaults to `claude`. If you need custom wrappers instead, set `CODEX_COMMAND` or `CLAUDE_COMMAND`.
+`CODEX_BIN` defaults to `codex`, and `CLAUDE_BIN` defaults to `claude`. `CODEX_SANDBOX_MODE` may be set to `read-only`, `workspace-write`, or `danger-full-access`. If you need custom wrappers instead, set `CODEX_COMMAND` or `CLAUDE_COMMAND`.
 
 ## Quick start
 

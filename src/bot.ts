@@ -1,6 +1,6 @@
 import { Bot, GrammyError, HttpError } from "grammy";
 import { BridgeService } from "./services/bridge-service.js";
-import type { BridgeMode, Provider } from "./types.js";
+import type { BridgeMode, CodexSandboxMode, Provider } from "./types.js";
 
 const HELP_TEXT = [
   "Commands:",
@@ -9,6 +9,7 @@ const HELP_TEXT = [
   "/startpair both [path]",
   "/attach codex <thread_id> [path]",
   "/attach claude <session_id> [path]",
+  "/sandbox codex <read-only|workspace-write|danger-full-access>",
   "/status",
   "/mode codex",
   "/mode claude",
@@ -78,6 +79,25 @@ export function createBot(token: string, bridge: BridgeService): Bot {
     const chatId = String(ctx.chat.id);
     const mapping = await bridge.status(chatId);
     await ctx.reply(bridge.formatStatus(mapping), { parse_mode: "Markdown" });
+  });
+
+  bot.command("sandbox", async (ctx) => {
+    const chatId = String(ctx.chat.id);
+    const { args } = parseCommand(ctx.message?.text, 2);
+    const provider = args[0]?.toLowerCase();
+    const sandboxMode = args[1]?.toLowerCase();
+
+    if (provider !== "codex" || !sandboxMode || !isCodexSandboxMode(sandboxMode)) {
+      await ctx.reply("Usage: `/sandbox codex <read-only|workspace-write|danger-full-access>`", {
+        parse_mode: "Markdown",
+      });
+      return;
+    }
+
+    const mapping = await bridge.setCodexSandboxMode(chatId, sandboxMode);
+    await ctx.reply(`Set Codex sandbox to \`${sandboxMode}\`.\n\n${bridge.formatStatus(mapping)}`, {
+      parse_mode: "Markdown",
+    });
   });
 
   bot.command("mode", async (ctx) => {
@@ -196,4 +216,8 @@ function chunkMessage(text: string, size: number): string[] {
   }
 
   return chunks;
+}
+
+function isCodexSandboxMode(value: string): value is CodexSandboxMode {
+  return ["read-only", "workspace-write", "danger-full-access"].includes(value);
 }

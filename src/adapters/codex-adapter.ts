@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import type { ProviderRequest, ProviderResponse } from "../types.js";
+import type { CodexSandboxMode, ProviderRequest, ProviderResponse } from "../types.js";
 import type { ProviderAdapter } from "./provider-adapter.js";
 import { spawnWithPlatformShell } from "./windows-shell.js";
 
@@ -10,14 +10,15 @@ export class CodexAdapter implements ProviderAdapter {
   constructor(
     private readonly codexBin: string,
     private readonly timeoutMs: number,
-    private readonly sandboxMode?: "read-only" | "workspace-write" | "danger-full-access",
+    private readonly sandboxMode?: CodexSandboxMode,
   ) {}
 
   async send(request: ProviderRequest): Promise<ProviderResponse> {
     const outputPath = await this.createOutputPath();
+    const sandboxMode = request.sandboxMode ?? this.sandboxMode;
     const args = request.sessionId
-      ? this.buildResumeArgs(request, outputPath)
-      : this.buildExecArgs(request, outputPath);
+      ? this.buildResumeArgs(request, outputPath, sandboxMode)
+      : this.buildExecArgs(request, outputPath, sandboxMode);
 
     const { stdout, stderr, code } = await this.runCodex(args, request.cwd);
 
@@ -63,7 +64,7 @@ export class CodexAdapter implements ProviderAdapter {
     return path.join(dir, `${randomUUID()}.txt`);
   }
 
-  private buildExecArgs(request: ProviderRequest, outputPath: string): string[] {
+  private buildExecArgs(request: ProviderRequest, outputPath: string, sandboxMode?: CodexSandboxMode): string[] {
     const args = [
       "exec",
       "--json",
@@ -74,8 +75,8 @@ export class CodexAdapter implements ProviderAdapter {
       args.push("-m", request.model);
     }
 
-    if (this.sandboxMode) {
-      args.push("-s", this.sandboxMode);
+    if (sandboxMode) {
+      args.push("-s", sandboxMode);
     }
 
     args.push(
@@ -89,7 +90,7 @@ export class CodexAdapter implements ProviderAdapter {
     return args;
   }
 
-  private buildResumeArgs(request: ProviderRequest, outputPath: string): string[] {
+  private buildResumeArgs(request: ProviderRequest, outputPath: string, sandboxMode?: CodexSandboxMode): string[] {
     const args = [
       "exec",
       "resume",
@@ -97,8 +98,8 @@ export class CodexAdapter implements ProviderAdapter {
       "--skip-git-repo-check",
     ];
 
-    if (this.sandboxMode) {
-      args.push("-s", this.sandboxMode);
+    if (sandboxMode) {
+      args.push("-s", sandboxMode);
     }
 
     args.push(

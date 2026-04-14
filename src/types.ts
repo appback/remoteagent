@@ -1,4 +1,5 @@
 export type Provider = "codex" | "claude";
+export type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 
 export type BridgeMode = Provider | "compare";
 
@@ -9,6 +10,7 @@ export type ProviderSession = {
   sessionId?: string;
   model?: string;
   lastUsedAt?: string;
+  sandboxMode?: CodexSandboxMode;
 };
 
 export type SessionRecord = {
@@ -46,6 +48,7 @@ export type ProviderRequest = {
   cwd: string;
   sessionId?: string;
   model?: string;
+  sandboxMode?: CodexSandboxMode;
 };
 
 export type ProviderResponse = {

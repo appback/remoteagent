@@ -3,6 +3,7 @@ import type { ProviderAdapter } from "../adapters/provider-adapter.js";
 import type {
   BridgeMode,
   ChatSession,
+  CodexSandboxMode,
   LogEntry,
   Provider,
   ProviderResponse,
@@ -79,6 +80,17 @@ export class BridgeService {
     return this.store.setModeForChat(chatId, mode);
   }
 
+  async setCodexSandboxMode(chatId: string, sandboxMode: CodexSandboxMode): Promise<ChatSession> {
+    const chatSession = await this.requireChat(chatId);
+    this.ensurePaired(chatSession, "codex");
+
+    const codex = chatSession.session.codex!;
+    return this.store.upsertProviderForChat(chatId, "codex", {
+      ...codex,
+      sandboxMode,
+    }, chatSession.session.workspace);
+  }
+
   async status(chatId: string): Promise<ChatSession | undefined> {
     return this.store.getChatSession(chatId);
   }
@@ -125,6 +137,7 @@ export class BridgeService {
           sessionId: providerSession!.sessionId,
           message,
           model: providerSession!.model,
+          sandboxMode: providerSession!.sandboxMode,
         });
 
         await this.store.upsertProviderForChat(chatId, provider, {
@@ -221,6 +234,10 @@ export class BridgeService {
       ? `attached ${session.sessionId}`
       : "pending-first-run";
     const details = [`- ${session.provider}: ${state} @ ${session.cwd}`];
+
+    if (session.provider === "codex" && session.sandboxMode) {
+      details.push(`  sandbox: ${session.sandboxMode}`);
+    }
 
     if (session.lastUsedAt) {
       details.push(`  lastUsedAt: ${session.lastUsedAt}`);
