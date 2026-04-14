@@ -75,9 +75,7 @@ export class CodexAdapter implements ProviderAdapter {
       args.push("-m", request.model);
     }
 
-    if (sandboxMode) {
-      args.push("-s", sandboxMode);
-    }
+    this.appendSandboxArgs(args, sandboxMode);
 
     args.push(
       "-o",
@@ -98,9 +96,7 @@ export class CodexAdapter implements ProviderAdapter {
       "--skip-git-repo-check",
     ];
 
-    if (sandboxMode) {
-      args.push("-s", sandboxMode);
-    }
+    this.appendSandboxArgs(args, sandboxMode);
 
     args.push(
       "-o",
@@ -110,6 +106,21 @@ export class CodexAdapter implements ProviderAdapter {
     );
 
     return args;
+  }
+
+  private appendSandboxArgs(args: string[], sandboxMode?: CodexSandboxMode): void {
+    if (!sandboxMode || sandboxMode === "read-only") {
+      return;
+    }
+
+    if (sandboxMode === "workspace-write") {
+      args.push("--full-auto");
+      return;
+    }
+
+    if (sandboxMode === "danger-full-access") {
+      args.push("--dangerously-bypass-approvals-and-sandbox");
+    }
   }
 
   private runCodex(args: string[], cwd: string): Promise<{ stdout: string; stderr: string; code: number | null }> {
