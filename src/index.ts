@@ -5,6 +5,7 @@ import { ShellAdapter } from "./adapters/shell-adapter.js";
 import { config } from "./config.js";
 import { FileStore } from "./store/file-store.js";
 import { BridgeService } from "./services/bridge-service.js";
+import { LocalUiService } from "./services/local-ui-service.js";
 import type { ProviderAdapter } from "./adapters/provider-adapter.js";
 import type { Provider } from "./types.js";
 
@@ -33,12 +34,26 @@ async function main(): Promise<void> {
   }
 
   const bridge = new BridgeService(store, adapters, config.defaultWorkspace);
-  const bot = createBot(config.telegramBotToken, bridge);
+  if (config.localUiEnabled) {
+    const localUi = new LocalUiService(bridge, config.localUiHost, config.localUiPort);
+    await localUi.start()
+      .then(() => {
+        console.log(`Local UI is ready at http://${config.localUiHost}:${config.localUiPort}`);
+      })
+      .catch((error) => {
+        console.error("Local UI failed to start:", error);
+      });
+  }
 
-  await bot.init();
-  const username = bot.botInfo.username;
-  console.log(`Bot @${username} is ready`);
-  await bot.start();
+  const bots = config.telegramBotTokens.map((token) => createBot(token, bridge));
+
+  for (const bot of bots) {
+    await bot.init();
+    const username = bot.botInfo.username;
+    console.log(`Bot @${username} is ready`);
+  }
+
+  await Promise.all(bots.map((bot) => bot.start()));
 }
 
 main().catch((error) => {

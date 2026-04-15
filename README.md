@@ -26,6 +26,7 @@ RemoteAgent is moving from a Telegram bridge toward a personal session runtime:
 
 Today the repository already supports:
 
+- local PC chat UI at `http://127.0.0.1:3794` by default
 - `/startpair codex [path]`
 - `/startpair claude [path]`
 - `/startpair both [path]`
@@ -138,6 +139,10 @@ Required:
 
 - `TELEGRAM_BOT_TOKEN`
 
+Optional multi-bot:
+
+- `TELEGRAM_BOT_TOKENS`
+
 Useful:
 
 - `DEFAULT_WORKSPACE`
@@ -148,8 +153,15 @@ Useful:
 - `CLAUDE_COMMAND`
 - `CLAUDE_PERMISSION_MODE`
 - `COMMAND_TIMEOUT_MS`
+- `LOCAL_UI_ENABLED`
+- `LOCAL_UI_HOST`
+- `LOCAL_UI_PORT`
+
+`TELEGRAM_BOT_TOKENS` may contain multiple bot tokens separated by commas or new lines. If it is set, RemoteAgent starts one Telegram bot per token and keeps them all attached to the same local session runtime. If it is not set, `TELEGRAM_BOT_TOKEN` is used as the single-bot fallback.
 
 `CODEX_BIN` defaults to `codex`, and `CLAUDE_BIN` defaults to `claude`. `CODEX_SANDBOX_MODE` may be set to `read-only`, `workspace-write`, or `danger-full-access`. If you need custom wrappers instead, set `CODEX_COMMAND` or `CLAUDE_COMMAND`.
+
+The local PC chat UI is enabled by default on `127.0.0.1:3794`. Set `LOCAL_UI_ENABLED=false` to disable it, or set `LOCAL_UI_HOST` and `LOCAL_UI_PORT` to change the bind address.
 
 ## Quick start
 
@@ -172,6 +184,12 @@ Then open Telegram and run one of these:
 ```text
 /startpair codex C:\path\to\project
 /attach codex <thread_id> C:\path\to\project
+```
+
+Open the local PC chat UI at:
+
+```text
+http://127.0.0.1:3794
 ```
 
 ## Development
