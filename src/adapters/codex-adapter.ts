@@ -20,7 +20,7 @@ export class CodexAdapter implements ProviderAdapter {
       ? this.buildResumeArgs(request, outputPath, sandboxMode)
       : this.buildExecArgs(request, outputPath, sandboxMode);
 
-    const { stdout, stderr, code } = await this.runCodex(args, request.cwd);
+    const { stdout, stderr, code } = await this.runCodex(args, request.cwd, request.message);
 
     try {
       const sessionId = this.extractThreadId(stdout) ?? request.sessionId;
@@ -82,8 +82,9 @@ export class CodexAdapter implements ProviderAdapter {
       outputPath,
       "-C",
       request.cwd,
-      request.message,
     );
+
+    this.appendPromptStdinArg(args);
 
     return args;
   }
@@ -102,10 +103,15 @@ export class CodexAdapter implements ProviderAdapter {
       "-o",
       outputPath,
       request.sessionId!,
-      request.message,
     );
 
+    this.appendPromptStdinArg(args);
+
     return args;
+  }
+
+  private appendPromptStdinArg(args: string[]): void {
+    args.push("--", "-");
   }
 
   private appendSandboxArgs(args: string[], sandboxMode?: CodexSandboxMode): void {
@@ -123,8 +129,12 @@ export class CodexAdapter implements ProviderAdapter {
     }
   }
 
-  private runCodex(args: string[], cwd: string): Promise<{ stdout: string; stderr: string; code: number | null }> {
-    return spawnWithPlatformShell(this.codexBin, args, cwd, this.timeoutMs);
+  private runCodex(
+    args: string[],
+    cwd: string,
+    input?: string,
+  ): Promise<{ stdout: string; stderr: string; code: number | null }> {
+    return spawnWithPlatformShell(this.codexBin, args, cwd, this.timeoutMs, input);
   }
 
   private extractThreadId(stdout: string): string | undefined {

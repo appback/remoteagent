@@ -6,6 +6,7 @@ export function spawnWithPlatformShell(
   args: string[],
   cwd: string,
   timeoutMs: number,
+  input?: string,
 ): Promise<{ stdout: string; stderr: string; code: number | null }> {
   return new Promise((resolve, reject) => {
     const command = process.platform === "win32"
@@ -36,6 +37,11 @@ export function spawnWithPlatformShell(
       clearTimeout(timer);
       reject(error);
     });
+
+    if (input !== undefined) {
+      command.stdin.write(input);
+    }
+    command.stdin.end();
 
     command.on("close", (code) => {
       clearTimeout(timer);
