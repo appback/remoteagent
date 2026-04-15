@@ -197,13 +197,13 @@ async function runWithPendingAnimation(
     throw new Error("Telegram chat context is missing.");
   }
 
-  const pending = await ctx.reply("작업중.");
-  const pendingFrames = ["작업중.", "작업중..", "작업중...", "작업중...."];
+  const pending = await ctx.reply("Working.");
+  const pendingFrames = ["Working.", "Working..", "Working...", "Working...."];
   let pendingIndex = 0;
   const pendingLoop = setInterval(() => {
     pendingIndex = (pendingIndex + 1) % pendingFrames.length;
     void ctx.api.editMessageText(ctx.chat!.id, pending.message_id, pendingFrames[pendingIndex]).catch(() => undefined);
-  }, 1000);
+  }, 3000);
 
   try {
     const result = await task();
