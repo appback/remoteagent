@@ -215,8 +215,8 @@ async function runWithPendingAnimation(
       return;
     }
 
-    await ctx.api.editMessageText(ctx.chat.id, pending.message_id, chunks[0], extra);
-    for (const chunk of chunks.slice(1)) {
+    await ctx.api.deleteMessage(ctx.chat.id, pending.message_id).catch(() => undefined);
+    for (const chunk of chunks) {
       await ctx.reply(chunk, extra);
     }
   } catch (error) {
