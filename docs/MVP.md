@@ -68,6 +68,7 @@ Current commands already cover much of this:
 
 - `/startpair`
 - `/attach`
+- `/sandbox codex ...`
 - `/status`
 - `/mode`
 - `/reset`

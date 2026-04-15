@@ -74,6 +74,14 @@ The same model is intended to back the future PC chat UI.
 
 ## Current behavior
 
+### Supported providers today
+
+| Provider | Current state | Resume identifier | Notes |
+| --- | --- | --- | --- |
+| Codex | Implemented | `thread_id` | Supports per-chat sandbox selection in Telegram |
+| Claude Code | Implemented | `session_id` | Resume depends on matching workspace |
+| OpenClaw | Planned | TBD | Not implemented in the current runtime |
+
 ### Fresh pairing
 
 - `/startpair codex [path]`

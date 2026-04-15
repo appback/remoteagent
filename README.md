@@ -42,6 +42,43 @@ The important capability is attach/resume:
 - Claude chats can bind to an existing `session_id`
 - each Telegram chat keeps its own provider, workspace, and session metadata
 
+## Current commands
+
+| Command | Purpose | Status |
+| --- | --- | --- |
+| `/startpair codex [path]` | Start a fresh Codex pairing for this Telegram chat | Supported |
+| `/startpair claude [path]` | Start a fresh Claude pairing for this Telegram chat | Supported |
+| `/startpair both [path]` | Pair Codex and Claude together for compare mode | Supported |
+| `/attach codex <thread_id> [path]` | Attach this chat to an existing Codex session | Supported |
+| `/attach claude <session_id> [path]` | Attach this chat to an existing Claude session | Supported |
+| `/status` | Show current RemoteAgent session, workspace, provider session ids, and sandbox state | Supported |
+| `/mode codex` | Route new messages to Codex only | Supported |
+| `/mode claude` | Route new messages to Claude only | Supported |
+| `/mode compare` | Route the same message to both providers | Supported |
+| `/sandbox codex <read-only|workspace-write|danger-full-access>` | Change Codex sandbox mode for the current chat session | Supported |
+| `/reset` | Clear the current chat binding from the active RemoteAgent session | Supported |
+
+## Provider support matrix
+
+| Capability | Codex | Claude Code | OpenClaw |
+| --- | --- | --- | --- |
+| Fresh session from Telegram | Yes | Yes | Planned |
+| Attach to existing session | Yes (`thread_id`) | Yes (`session_id`) | Planned |
+| Resume same session across turns | Yes | Yes | Planned |
+| Compare mode participation | Yes | Yes | Planned |
+| Per-session sandbox control | Yes | No | Planned |
+| `read-only` mode | Yes | N/A | Planned |
+| `workspace-write` mode | Yes | N/A | Planned |
+| `danger-full-access` mode | Yes | N/A | Planned |
+| Current production adapter in this repo | Yes | Yes | No |
+| Local PC chat UI integration | Planned | Planned | Planned |
+
+Notes:
+
+- Codex sandbox control is exposed through `/sandbox codex ...`.
+- Claude currently follows its adapter/runtime settings and does not have an equivalent Telegram sandbox command in this repo.
+- OpenClaw is part of the planned architecture, but not implemented yet.
+
 ## Architecture
 
 The high-level architecture is documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
