@@ -148,7 +148,10 @@ export function createBot(token: string, bridge: BridgeService): Bot {
       await runWithPendingAnimation(ctx, async () => {
         const result = await shellService.execute(shellRequest.command, chatSession.session.workspace, shellRequest.kind);
         await bridge.logSystem(chatId, `Remote shell finished (${result.shell}, exit ${result.code ?? "unknown"}).`);
-        return flattenChunks([formatRemoteShellResult(result, shellRequest.command, chatSession.session.workspace)], 3900);
+        return {
+          chunks: flattenChunks([formatRemoteShellResult(result, shellRequest.command, chatSession.session.workspace)], 3900),
+          parseMode: "HTML",
+        };
       });
       return;
     }
@@ -159,7 +162,9 @@ export function createBot(token: string, bridge: BridgeService): Bot {
 
     await runWithPendingAnimation(ctx, async () => {
       const responses = await bridge.routeMessage(chatId, text);
-      return flattenChunks(bridge.formatResponses(responses), 3900);
+      return {
+        chunks: flattenChunks(bridge.formatResponses(responses), 3900),
+      };
     });
   });
 
@@ -184,7 +189,10 @@ export function createBot(token: string, bridge: BridgeService): Bot {
   return bot;
 }
 
-async function runWithPendingAnimation(ctx: Context, task: () => Promise<string[]>): Promise<void> {
+async function runWithPendingAnimation(
+  ctx: Context,
+  task: () => Promise<{ chunks: string[]; parseMode?: "HTML" | "MarkdownV2" }>,
+): Promise<void> {
   if (!ctx.chat) {
     throw new Error("Telegram chat context is missing.");
   }
@@ -198,16 +206,18 @@ async function runWithPendingAnimation(ctx: Context, task: () => Promise<string[
   }, 1000);
 
   try {
-    const chunks = await task();
+    const result = await task();
+    const chunks = result.chunks;
+    const extra = result.parseMode ? { parse_mode: result.parseMode } : undefined;
 
     if (chunks.length === 0) {
       await ctx.api.editMessageText(ctx.chat.id, pending.message_id, "응답이 비어 있습니다.");
       return;
     }
 
-    await ctx.api.editMessageText(ctx.chat.id, pending.message_id, chunks[0]);
+    await ctx.api.editMessageText(ctx.chat.id, pending.message_id, chunks[0], extra);
     for (const chunk of chunks.slice(1)) {
-      await ctx.reply(chunk);
+      await ctx.reply(chunk, extra);
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : "An unexpected error occurred.";
@@ -339,29 +349,34 @@ function formatRemoteShellResult(
   cwd: string,
 ): string {
   const parts = [
-    `[SHELL | ${result.shell} | exit ${result.code ?? "unknown"}]`,
-    `cwd: ${cwd}`,
-    `$ ${command}`,
+    `<b>[SHELL | ${escapeHtml(result.shell)} | exit ${escapeHtml(String(result.code ?? "unknown"))}]</b>`,
+    `cwd: ${escapeHtml(cwd)}`,
+    `$ ${escapeHtml(command)}`,
   ];
 
   if (result.stdout) {
-    parts.push("```text");
-    parts.push(result.stdout);
-    parts.push("```");
+    parts.push("<pre>");
+    parts.push(escapeHtml(result.stdout));
+    parts.push("</pre>");
   }
 
   if (result.stderr) {
-    parts.push("[stderr]");
-    parts.push("```text");
-    parts.push(result.stderr);
-    parts.push("```");
+    parts.push("<b>[stderr]</b>");
+    parts.push("<pre>");
+    parts.push(escapeHtml(result.stderr));
+    parts.push("</pre>");
   }
 
   if (!result.stdout && !result.stderr) {
-    parts.push("```text");
-    parts.push("(no output)");
-    parts.push("```");
+    parts.push("<pre>(no output)</pre>");
   }
 
   return parts.join("\n");
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }
