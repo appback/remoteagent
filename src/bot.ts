@@ -345,16 +345,22 @@ function formatRemoteShellResult(
   ];
 
   if (result.stdout) {
+    parts.push("```text");
     parts.push(result.stdout);
+    parts.push("```");
   }
 
   if (result.stderr) {
     parts.push("[stderr]");
+    parts.push("```text");
     parts.push(result.stderr);
+    parts.push("```");
   }
 
   if (!result.stdout && !result.stderr) {
+    parts.push("```text");
     parts.push("(no output)");
+    parts.push("```");
   }
 
   return parts.join("\n");

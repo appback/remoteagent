@@ -85,7 +85,7 @@ export class RemoteShellService {
       if (kind === "cmd") {
         return {
           file: "cmd.exe",
-          args: ["/d", "/c", command],
+          args: ["/d", "/c", `chcp 65001>nul & ${command}`],
           shell: "cmd",
         };
       }
@@ -100,7 +100,11 @@ export class RemoteShellService {
 
       return {
         file: "powershell.exe",
-        args: ["-NoProfile", "-Command", command],
+        args: [
+          "-NoProfile",
+          "-Command",
+          `[Console]::InputEncoding=[System.Text.Encoding]::UTF8; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $OutputEncoding=[System.Text.Encoding]::UTF8; ${command}`,
+        ],
         shell: "powershell",
       };
     }
