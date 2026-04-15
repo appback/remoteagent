@@ -1,6 +1,9 @@
 import { Bot, GrammyError, HttpError } from "grammy";
+import type { Context } from "grammy";
+import { config } from "./config.js";
 import { BridgeService } from "./services/bridge-service.js";
-import type { BridgeMode, CodexSandboxMode, Provider } from "./types.js";
+import { RemoteShellService } from "./services/remote-shell-service.js";
+import type { BridgeMode, ChatSession, CodexSandboxMode, Provider } from "./types.js";
 
 const HELP_TEXT = [
   "Commands:",
@@ -15,10 +18,14 @@ const HELP_TEXT = [
   "/mode claude",
   "/mode compare",
   "/reset",
+  "/! <command>",
+  "/!cmd <command>",
+  "/!bash <command>",
 ].join("\n");
 
 export function createBot(token: string, bridge: BridgeService): Bot {
   const bot = new Bot(token);
+  const shellService = new RemoteShellService(config.commandTimeoutMs);
 
   bot.command("start", async (ctx) => {
     await ctx.reply(
@@ -124,41 +131,36 @@ export function createBot(token: string, bridge: BridgeService): Bot {
 
   bot.on("message:text", async (ctx) => {
     const text = ctx.message.text.trim();
+    const chatId = String(ctx.chat.id);
+
+    if (isRemoteShellMessage(text)) {
+      const shellRequest = parseRemoteShellRequest(text);
+      if (!shellRequest) {
+        await ctx.reply("Usage: `/! <command>`, `/!cmd <command>`, or `/!bash <command>`", {
+          parse_mode: "Markdown",
+        });
+        return;
+      }
+
+      const chatSession = await ensureRemoteShellAccess(ctx, bridge, chatId);
+      await bridge.logSystem(chatId, `Remote shell request (${shellRequest.kind}): ${shellRequest.command}`);
+
+      await runWithPendingAnimation(ctx, async () => {
+        const result = await shellService.execute(shellRequest.command, chatSession.session.workspace, shellRequest.kind);
+        await bridge.logSystem(chatId, `Remote shell finished (${result.shell}, exit ${result.code ?? "unknown"}).`);
+        return flattenChunks([formatRemoteShellResult(result, shellRequest.command, chatSession.session.workspace)], 3900);
+      });
+      return;
+    }
+
     if (text.startsWith("/")) {
       return;
     }
 
-    const chatId = String(ctx.chat.id);
-    const pending = await ctx.reply("작업중.");
-    const pendingFrames = ["작업중.", "작업중..", "작업중...", "작업중...."];
-    let pendingIndex = 0;
-    const pendingLoop = setInterval(() => {
-      pendingIndex = (pendingIndex + 1) % pendingFrames.length;
-      void ctx.api.editMessageText(ctx.chat.id, pending.message_id, pendingFrames[pendingIndex]).catch(() => undefined);
-    }, 1000);
-
-    try {
+    await runWithPendingAnimation(ctx, async () => {
       const responses = await bridge.routeMessage(chatId, text);
-      const blocks = bridge.formatResponses(responses);
-      const chunks = flattenChunks(blocks, 3900);
-
-      if (chunks.length === 0) {
-        await ctx.api.editMessageText(ctx.chat.id, pending.message_id, "응답이 비어 있습니다.");
-        return;
-      }
-
-      await ctx.api.editMessageText(ctx.chat.id, pending.message_id, chunks[0]);
-      for (const chunk of chunks.slice(1)) {
-        await ctx.reply(chunk);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "An unexpected error occurred.";
-      await ctx.api.editMessageText(ctx.chat.id, pending.message_id, message).catch(async () => {
-        await ctx.reply(message);
-      });
-    } finally {
-      clearInterval(pendingLoop);
-    }
+      return flattenChunks(bridge.formatResponses(responses), 3900);
+    });
   });
 
   bot.catch((error) => {
@@ -180,6 +182,66 @@ export function createBot(token: string, bridge: BridgeService): Bot {
   });
 
   return bot;
+}
+
+async function runWithPendingAnimation(ctx: Context, task: () => Promise<string[]>): Promise<void> {
+  if (!ctx.chat) {
+    throw new Error("Telegram chat context is missing.");
+  }
+
+  const pending = await ctx.reply("작업중.");
+  const pendingFrames = ["작업중.", "작업중..", "작업중...", "작업중...."];
+  let pendingIndex = 0;
+  const pendingLoop = setInterval(() => {
+    pendingIndex = (pendingIndex + 1) % pendingFrames.length;
+    void ctx.api.editMessageText(ctx.chat!.id, pending.message_id, pendingFrames[pendingIndex]).catch(() => undefined);
+  }, 1000);
+
+  try {
+    const chunks = await task();
+
+    if (chunks.length === 0) {
+      await ctx.api.editMessageText(ctx.chat.id, pending.message_id, "응답이 비어 있습니다.");
+      return;
+    }
+
+    await ctx.api.editMessageText(ctx.chat.id, pending.message_id, chunks[0]);
+    for (const chunk of chunks.slice(1)) {
+      await ctx.reply(chunk);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "An unexpected error occurred.";
+    await ctx.api.editMessageText(ctx.chat.id, pending.message_id, message).catch(async () => {
+      await ctx.reply(message);
+    });
+  } finally {
+    clearInterval(pendingLoop);
+  }
+}
+
+async function ensureRemoteShellAccess(ctx: Context, bridge: BridgeService, chatId: string): Promise<ChatSession> {
+  if (ctx.chat?.type !== "private") {
+    throw new Error("Remote shell is available only in private 1:1 chats.");
+  }
+
+  if (!config.telegramOwnerId) {
+    throw new Error("Remote shell is disabled until TELEGRAM_OWNER_ID is configured.");
+  }
+
+  if (String(ctx.from?.id ?? "") !== config.telegramOwnerId) {
+    throw new Error("Remote shell is available only to the configured bot owner.");
+  }
+
+  const chatSession = await bridge.status(chatId);
+  if (!chatSession?.session.codex) {
+    throw new Error("Remote shell requires an attached Codex session.");
+  }
+
+  if (chatSession.session.codex.sandboxMode !== "danger-full-access") {
+    throw new Error("Remote shell is allowed only when Codex sandbox is set to danger-full-access.");
+  }
+
+  return chatSession;
 }
 
 function parseCommand(text: string | undefined, headCount: number): { args: string[]; rest?: string } {
@@ -246,4 +308,54 @@ function flattenChunks(blocks: string[], size: number): string[] {
 
 function isCodexSandboxMode(value: string): value is CodexSandboxMode {
   return ["read-only", "workspace-write", "danger-full-access"].includes(value);
+}
+
+function isRemoteShellMessage(text: string): boolean {
+  return text.startsWith("/!");
+}
+
+function parseRemoteShellRequest(text: string): { kind: "native" | "cmd" | "bash"; command: string } | undefined {
+  const body = text.slice(2).trim();
+  if (!body) {
+    return undefined;
+  }
+
+  if (body.startsWith("cmd ")) {
+    const command = body.slice(4).trim();
+    return command ? { kind: "cmd", command } : undefined;
+  }
+
+  if (body.startsWith("bash ")) {
+    const command = body.slice(5).trim();
+    return command ? { kind: "bash", command } : undefined;
+  }
+
+  return { kind: "native", command: body };
+}
+
+function formatRemoteShellResult(
+  result: { shell: string; code: number | null; stdout: string; stderr: string },
+  command: string,
+  cwd: string,
+): string {
+  const parts = [
+    `[SHELL | ${result.shell} | exit ${result.code ?? "unknown"}]`,
+    `cwd: ${cwd}`,
+    `$ ${command}`,
+  ];
+
+  if (result.stdout) {
+    parts.push(result.stdout);
+  }
+
+  if (result.stderr) {
+    parts.push("[stderr]");
+    parts.push(result.stderr);
+  }
+
+  if (!result.stdout && !result.stderr) {
+    parts.push("(no output)");
+  }
+
+  return parts.join("\n");
 }

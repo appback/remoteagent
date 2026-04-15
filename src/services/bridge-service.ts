@@ -95,6 +95,22 @@ export class BridgeService {
     return this.store.getChatSession(chatId);
   }
 
+  async logSystem(chatId: string, text: string): Promise<void> {
+    const chatSession = await this.store.getChatSession(chatId);
+    if (!chatSession) {
+      return;
+    }
+
+    await this.log({
+      timestamp: new Date().toISOString(),
+      remoteSessionId: chatSession.session.sessionId,
+      chatId,
+      provider: "system",
+      direction: "system",
+      text,
+    });
+  }
+
   async reset(chatId: string): Promise<void> {
     const chatSession = await this.store.getChatSession(chatId);
     if (chatSession) {

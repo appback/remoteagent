@@ -97,6 +97,18 @@ This creates or resets a provider binding for that Telegram chat. The first real
 
 This binds the Telegram chat to an already existing provider session and continues from that stored context.
 
+### Restricted remote shell
+
+- `/! <command>`
+- `/!cmd <command>`
+- `/!bash <command>`
+
+This feature is intentionally gated:
+
+- bot owner only
+- private 1:1 Telegram chats only
+- only when the current Codex session sandbox is `danger-full-access`
+
 ## Planned evolution
 
 ### Near term

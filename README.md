@@ -32,6 +32,9 @@ Today the repository already supports:
 - `/attach codex <thread_id> [path]`
 - `/attach claude <session_id> [path]`
 - `/sandbox codex <read-only|workspace-write|danger-full-access>`
+- `/! <command>`
+- `/!cmd <command>`
+- `/!bash <command>`
 - `/status`
 - `/mode codex|claude|compare`
 - `/reset`
@@ -56,6 +59,9 @@ The important capability is attach/resume:
 | `/mode claude` | Route new messages to Claude only | Supported |
 | `/mode compare` | Route the same message to both providers | Supported |
 | `/sandbox codex <read-only|workspace-write|danger-full-access>` | Change Codex sandbox mode for the current chat session | Supported |
+| `/! <command>` | Run a native shell command in the current workspace | Supported with restrictions |
+| `/!cmd <command>` | Run a `cmd.exe` command on Windows | Supported with restrictions |
+| `/!bash <command>` | Run a `bash -lc` command | Supported with restrictions |
 | `/reset` | Clear the current chat binding from the active RemoteAgent session | Supported |
 
 ## Provider support matrix
@@ -70,12 +76,14 @@ The important capability is attach/resume:
 | `read-only` mode | Yes | N/A | Planned |
 | `workspace-write` mode | Yes | N/A | Planned |
 | `danger-full-access` mode | Yes | N/A | Planned |
+| Restricted remote shell (`/!`) | Yes, when allowed | No | Planned |
 | Current production adapter in this repo | Yes | Yes | No |
 | Local PC chat UI integration | Planned | Planned | Planned |
 
 Notes:
 
 - Codex sandbox control is exposed through `/sandbox codex ...`.
+- Remote shell commands are allowed only for the configured bot owner, only in private 1:1 chats, and only when the current Codex session sandbox is `danger-full-access`.
 - Claude currently follows its adapter/runtime settings and does not have an equivalent Telegram sandbox command in this repo.
 - OpenClaw is part of the planned architecture, but not implemented yet.
 
@@ -133,6 +141,7 @@ Required:
 Useful:
 
 - `DEFAULT_WORKSPACE`
+- `TELEGRAM_OWNER_ID`
 - `CODEX_BIN`
 - `CODEX_SANDBOX_MODE`
 - `CLAUDE_BIN`

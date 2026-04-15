@@ -65,6 +65,7 @@ function readCodexSandboxMode(name: string): "read-only" | "workspace-write" | "
 
 export const config = {
   telegramBotToken: readRequired("TELEGRAM_BOT_TOKEN"),
+  telegramOwnerId: readOptional("TELEGRAM_OWNER_ID"),
   dataDir: defaultDataDir,
   defaultMode: readMode("DEFAULT_MODE", "codex"),
   defaultWorkspace: path.resolve(process.env.DEFAULT_WORKSPACE?.trim() || os.homedir()),

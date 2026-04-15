@@ -69,6 +69,7 @@ Current commands already cover much of this:
 - `/startpair`
 - `/attach`
 - `/sandbox codex ...`
+- `/! ...` with strict gating
 - `/status`
 - `/mode`
 - `/reset`
