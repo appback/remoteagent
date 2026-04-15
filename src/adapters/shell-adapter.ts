@@ -17,6 +17,7 @@ export class ShellAdapter implements ProviderAdapter {
     const env = {
       ...process.env,
       BRIDGE_PROVIDER: this.provider,
+      BRIDGE_BOT_ID: request.botId ?? "",
       BRIDGE_CHAT_ID: request.chatId,
       BRIDGE_SESSION_ID: request.sessionId ?? "",
       BRIDGE_CWD: request.cwd,

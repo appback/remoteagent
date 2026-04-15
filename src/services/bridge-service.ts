@@ -8,6 +8,7 @@ import type {
   Provider,
   ProviderResponse,
   ProviderSession,
+  SessionRecord,
 } from "../types.js";
 import { FileStore } from "../store/file-store.js";
 
@@ -18,12 +19,12 @@ export class BridgeService {
     private readonly defaultWorkspace: string,
   ) {}
 
-  async startPair(chatId: string, provider: Provider, cwd?: string): Promise<ChatSession> {
-    const existing = await this.store.getChatSession(chatId);
+  async startPair(botId: string, chatId: string, provider: Provider, cwd?: string): Promise<ChatSession> {
+    const existing = await this.store.getChatSession(botId, chatId);
     const workspace = this.resolveWorkspace(existing?.session[provider]?.cwd ?? existing?.session.workspace, cwd);
     await this.ensureWorkspaceExists(workspace);
 
-    return this.store.upsertProviderForChat(chatId, provider, {
+    return this.store.upsertProviderForChat(botId, chatId, provider, {
       cwd: workspace,
       pairedAt: new Date().toISOString(),
       sessionId: undefined,
@@ -33,12 +34,13 @@ export class BridgeService {
   }
 
   async attachPair(
+    botId: string,
     chatId: string,
     provider: Provider,
     sessionId: string,
     cwd?: string,
   ): Promise<ChatSession> {
-    const existing = await this.store.getChatSession(chatId);
+    const existing = await this.store.getChatSession(botId, chatId);
     const workspace = this.resolveWorkspace(existing?.session[provider]?.cwd ?? existing?.session.workspace, cwd);
     await this.ensureWorkspaceExists(workspace);
 
@@ -47,7 +49,7 @@ export class BridgeService {
       throw new Error("Session id is required.");
     }
 
-    return this.store.upsertProviderForChat(chatId, provider, {
+    return this.store.upsertProviderForChat(botId, chatId, provider, {
       cwd: workspace,
       pairedAt: new Date().toISOString(),
       sessionId: normalizedSessionId,
@@ -56,9 +58,9 @@ export class BridgeService {
     }, workspace);
   }
 
-  async setMode(chatId: string, mode: BridgeMode): Promise<ChatSession> {
+  async setMode(botId: string, chatId: string, mode: BridgeMode): Promise<ChatSession> {
     if (mode === "compare") {
-      const chatSession = await this.requireChat(chatId);
+      const chatSession = await this.requireChat(botId, chatId);
       this.ensurePaired(chatSession, "codex");
       this.ensurePaired(chatSession, "claude");
       this.ensureConfigured("codex");
@@ -66,37 +68,50 @@ export class BridgeService {
     }
 
     if (mode === "codex") {
-      const chatSession = await this.requireChat(chatId);
+      const chatSession = await this.requireChat(botId, chatId);
       this.ensurePaired(chatSession, "codex");
       this.ensureConfigured("codex");
     }
 
     if (mode === "claude") {
-      const chatSession = await this.requireChat(chatId);
+      const chatSession = await this.requireChat(botId, chatId);
       this.ensurePaired(chatSession, "claude");
       this.ensureConfigured("claude");
     }
 
-    return this.store.setModeForChat(chatId, mode);
+    return this.store.setModeForChat(botId, chatId, mode);
   }
 
-  async setCodexSandboxMode(chatId: string, sandboxMode: CodexSandboxMode): Promise<ChatSession> {
-    const chatSession = await this.requireChat(chatId);
+  async setCodexSandboxMode(botId: string, chatId: string, sandboxMode: CodexSandboxMode): Promise<ChatSession> {
+    const chatSession = await this.requireChat(botId, chatId);
     this.ensurePaired(chatSession, "codex");
 
     const codex = chatSession.session.codex!;
-    return this.store.upsertProviderForChat(chatId, "codex", {
+    return this.store.upsertProviderForChat(botId, chatId, "codex", {
       ...codex,
       sandboxMode,
     }, chatSession.session.workspace);
   }
 
-  async status(chatId: string): Promise<ChatSession | undefined> {
-    return this.store.getChatSession(chatId);
+  async status(botId: string, chatId: string): Promise<ChatSession | undefined> {
+    return this.store.getChatSession(botId, chatId);
   }
 
-  async logSystem(chatId: string, text: string): Promise<void> {
-    const chatSession = await this.store.getChatSession(chatId);
+  async listSessions(): Promise<SessionRecord[]> {
+    return this.store.listSessions();
+  }
+
+  async sessionEvents(sessionId: string, limit?: number): Promise<LogEntry[]> {
+    const session = await this.store.getSession(sessionId);
+    if (!session) {
+      throw new Error(`Session was not found: ${sessionId}`);
+    }
+
+    return this.store.readLogs(sessionId, limit);
+  }
+
+  async logSystem(botId: string, chatId: string, text: string): Promise<void> {
+    const chatSession = await this.store.getChatSession(botId, chatId);
     if (!chatSession) {
       return;
     }
@@ -104,6 +119,7 @@ export class BridgeService {
     await this.log({
       timestamp: new Date().toISOString(),
       remoteSessionId: chatSession.session.sessionId,
+      botId,
       chatId,
       provider: "system",
       direction: "system",
@@ -111,12 +127,13 @@ export class BridgeService {
     });
   }
 
-  async reset(chatId: string): Promise<void> {
-    const chatSession = await this.store.getChatSession(chatId);
+  async reset(botId: string, chatId: string): Promise<void> {
+    const chatSession = await this.store.getChatSession(botId, chatId);
     if (chatSession) {
       await this.log({
         timestamp: new Date().toISOString(),
         remoteSessionId: chatSession.session.sessionId,
+        botId,
         chatId,
         provider: "system",
         direction: "system",
@@ -124,60 +141,40 @@ export class BridgeService {
       });
     }
 
-    await this.store.resetChat(chatId);
+    await this.store.resetChat(botId, chatId);
   }
 
-  async routeMessage(chatId: string, message: string): Promise<ProviderResponse[]> {
-    const chatSession = await this.requireChat(chatId);
-    const remoteSessionId = chatSession.session.sessionId;
+  async routeMessage(botId: string, chatId: string, message: string): Promise<ProviderResponse[]> {
+    const chatSession = await this.requireChat(botId, chatId);
 
     await this.log({
       timestamp: new Date().toISOString(),
-      remoteSessionId,
+      remoteSessionId: chatSession.session.sessionId,
+      botId,
       chatId,
       provider: "telegram",
       direction: "in",
       text: message,
     });
 
-    const providers = this.resolveProviders(chatSession.session.mode);
-    const responses = await Promise.all(
-      providers.map(async (provider) => {
-        this.ensurePaired(chatSession, provider);
-        this.ensureConfigured(provider);
-        const providerSession = chatSession.session[provider];
-        const response = await this.adapters[provider]!.send({
-          chatId,
-          remoteSessionId,
-          cwd: providerSession!.cwd,
-          sessionId: providerSession!.sessionId,
-          message,
-          model: providerSession!.model,
-          sandboxMode: providerSession!.sandboxMode,
-        });
+    return this.routeSession(chatSession.session, message, "telegram", botId, chatId);
+  }
 
-        await this.store.upsertProviderForChat(chatId, provider, {
-          ...providerSession!,
-          cwd: response.cwd,
-          sessionId: response.sessionId,
-          lastUsedAt: new Date().toISOString(),
-        }, chatSession.session.workspace);
+  async routeSessionMessage(sessionId: string, message: string): Promise<ProviderResponse[]> {
+    const session = await this.store.getSession(sessionId);
+    if (!session) {
+      throw new Error(`Session was not found: ${sessionId}`);
+    }
 
-        await this.log({
-          timestamp: new Date().toISOString(),
-          remoteSessionId,
-          chatId,
-          provider,
-          direction: "out",
-          sessionId: response.sessionId,
-          text: response.output,
-        });
+    await this.log({
+      timestamp: new Date().toISOString(),
+      remoteSessionId: session.sessionId,
+      provider: "pc-ui",
+      direction: "in",
+      text: message,
+    });
 
-        return response;
-      }),
-    );
-
-    return responses;
+    return this.routeSession(session, message, "pc-ui");
   }
 
   formatStatus(chatSession: ChatSession | undefined): string {
@@ -195,6 +192,7 @@ export class BridgeService {
 
     return [
       `remoteSession: ${session.sessionId}`,
+      `bot: ${chatSession.botId ?? chatSession.binding.botId ?? "unknown"}`,
       `chat: ${chatSession.chatId}`,
       `mode: ${session.mode}`,
       `workspace: ${session.workspace}`,
@@ -220,8 +218,8 @@ export class BridgeService {
     return [mode];
   }
 
-  private async requireChat(chatId: string): Promise<ChatSession> {
-    const chatSession = await this.store.getChatSession(chatId);
+  private async requireChat(botId: string, chatId: string): Promise<ChatSession> {
+    const chatSession = await this.store.getChatSession(botId, chatId);
     if (!chatSession) {
       throw new Error("No paired session for this chat yet. Run `/startpair codex`, `/startpair claude`, or `/attach ...` first.");
     }
@@ -235,6 +233,15 @@ export class BridgeService {
     }
   }
 
+  private ensureProviderSession(session: SessionRecord, provider: Provider): ProviderSession {
+    const providerSession = session[provider];
+    if (!providerSession?.cwd) {
+      throw new Error(`Session ${session.sessionId} is not paired with ${provider}.`);
+    }
+
+    return providerSession;
+  }
+
   private ensureConfigured(provider: Provider): void {
     if (!this.adapters[provider]) {
       throw new Error(`${provider} adapter is not configured. Check the install and environment settings.`);
@@ -243,6 +250,67 @@ export class BridgeService {
 
   private async log(entry: LogEntry): Promise<void> {
     await this.store.appendLog(entry.remoteSessionId, JSON.stringify(entry));
+  }
+
+  private async routeSession(
+    session: SessionRecord,
+    message: string,
+    requestSource: string,
+    botId?: string,
+    chatId?: string,
+  ): Promise<ProviderResponse[]> {
+    const responses: ProviderResponse[] = [];
+    const providers = this.resolveProviders(session.mode);
+
+    for (const provider of providers) {
+      const providerSession = this.ensureProviderSession(session, provider);
+      this.ensureConfigured(provider);
+
+      const response = await this.adapters[provider]!.send({
+        botId,
+        chatId: chatId ?? requestSource,
+        remoteSessionId: session.sessionId,
+        cwd: providerSession.cwd,
+        sessionId: providerSession.sessionId,
+        message,
+        model: providerSession.model,
+        sandboxMode: providerSession.sandboxMode,
+      });
+
+      const updatedProviderSession = {
+        ...providerSession,
+        cwd: response.cwd,
+        sessionId: response.sessionId,
+        lastUsedAt: new Date().toISOString(),
+      };
+
+      if (chatId) {
+        await this.store.upsertProviderForChat(botId ?? "telegram", chatId, provider, updatedProviderSession, session.workspace);
+      } else {
+        await this.store.upsertProviderForSession(
+          session.sessionId,
+          provider,
+          updatedProviderSession,
+          session.workspace,
+        );
+      }
+      session[provider] = updatedProviderSession;
+
+      await this.log({
+        timestamp: new Date().toISOString(),
+        remoteSessionId: session.sessionId,
+        botId,
+        chatId,
+        provider,
+        direction: "out",
+        sessionId: response.sessionId,
+        text: response.output,
+      });
+
+      responses.push(response);
+    }
+
+    return responses;
   }
 
   private describeProviderSession(session: ProviderSession): string {

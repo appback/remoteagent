@@ -24,6 +24,7 @@ export type SessionRecord = {
 };
 
 export type ChatBinding = {
+  botId?: string;
   chatId: string;
   sessionId: string;
   boundAt: string;
@@ -31,6 +32,7 @@ export type ChatBinding = {
 };
 
 export type ChatSession = {
+  botId?: string;
   chatId: string;
   binding: ChatBinding;
   session: SessionRecord;
@@ -42,6 +44,7 @@ export type BridgeState = {
 };
 
 export type ProviderRequest = {
+  botId?: string;
   chatId: string;
   remoteSessionId: string;
   message: string;
@@ -58,11 +61,14 @@ export type ProviderResponse = {
   output: string;
 };
 
+export type LogSource = Provider | "telegram" | "pc-ui" | "system";
+
 export type LogEntry = {
   timestamp: string;
   remoteSessionId: string;
+  botId?: string;
   chatId?: string;
-  provider: Provider | "telegram" | "system";
+  provider: LogSource;
   direction: "in" | "out" | "system";
   sessionId?: string;
   text: string;

@@ -6,12 +6,14 @@ import type {
   BridgeState,
   ChatBinding,
   ChatSession,
+  LogEntry,
   Provider,
   ProviderSession,
   SessionRecord,
 } from "../types.js";
 
 type LegacyChatMapping = {
+  botId?: string;
   chatId: string;
   mode: BridgeMode;
   codex?: ProviderSession;
@@ -44,12 +46,23 @@ export class FileStore {
     }
   }
 
-  async getChatSession(chatId: string): Promise<ChatSession | undefined> {
+  async getChatSession(botId: string, chatId: string): Promise<ChatSession | undefined> {
     const state = await this.readState();
-    return this.resolveChatSession(state, chatId);
+    return this.resolveChatSession(state, botId, chatId);
+  }
+
+  async listSessions(): Promise<SessionRecord[]> {
+    const state = await this.readState();
+    return Object.values(state.sessions).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  }
+
+  async getSession(sessionId: string): Promise<SessionRecord | undefined> {
+    const state = await this.readState();
+    return state.sessions[sessionId];
   }
 
   async upsertProviderForChat(
+    botId: string,
     chatId: string,
     provider: Provider,
     session: Omit<ProviderSession, "provider">,
@@ -57,7 +70,7 @@ export class FileStore {
   ): Promise<ChatSession> {
     const state = await this.readState();
     const now = new Date().toISOString();
-    const { binding, record } = this.ensureBoundSession(state, chatId, workspace, now);
+    const { binding, record } = this.ensureBoundSession(state, botId, chatId, workspace, now);
 
     record.workspace = workspace;
     record[provider] = {
@@ -68,31 +81,79 @@ export class FileStore {
     binding.updatedAt = now;
 
     await this.writeState(state);
-    return this.mustResolveChatSession(state, chatId);
+    return this.mustResolveChatSession(state, botId, chatId);
   }
 
-  async setModeForChat(chatId: string, mode: BridgeMode): Promise<ChatSession> {
+  async upsertProviderForSession(
+    sessionId: string,
+    provider: Provider,
+    session: Omit<ProviderSession, "provider">,
+    workspace: string,
+  ): Promise<SessionRecord> {
+    const state = await this.readState();
+    const record = state.sessions[sessionId];
+    if (!record) {
+      throw new Error(`Session was not found: ${sessionId}`);
+    }
+
+    record.workspace = workspace;
+    record[provider] = {
+      provider,
+      ...session,
+    };
+    record.updatedAt = new Date().toISOString();
+
+    await this.writeState(state);
+    return record;
+  }
+
+  async setModeForChat(botId: string, chatId: string, mode: BridgeMode): Promise<ChatSession> {
     const state = await this.readState();
     const now = new Date().toISOString();
-    const { binding, record } = this.ensureBoundSession(state, chatId, this.dataDir, now);
+    const { binding, record } = this.ensureBoundSession(state, botId, chatId, this.dataDir, now);
 
     record.mode = mode;
     record.updatedAt = now;
     binding.updatedAt = now;
 
     await this.writeState(state);
-    return this.mustResolveChatSession(state, chatId);
+    return this.mustResolveChatSession(state, botId, chatId);
   }
 
-  async resetChat(chatId: string): Promise<void> {
+  async resetChat(botId: string, chatId: string): Promise<void> {
     const state = await this.readState();
-    delete state.chats[chatId];
+    delete state.chats[this.chatKey(botId, chatId)];
     await this.writeState(state);
   }
 
   async appendLog(remoteSessionId: string, line: string): Promise<void> {
     const logFile = path.join(this.logsDir, `${remoteSessionId}.jsonl`);
     await fs.appendFile(logFile, `${line}\n`, "utf8");
+  }
+
+  async readLogs(remoteSessionId: string, limit = 200): Promise<LogEntry[]> {
+    const logFile = path.join(this.logsDir, `${remoteSessionId}.jsonl`);
+    const raw = await fs.readFile(logFile, "utf8").catch((error) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return "";
+      }
+      throw error;
+    });
+
+    const entries: LogEntry[] = [];
+    for (const line of raw.split(/\r?\n/)) {
+      if (!line.trim()) {
+        continue;
+      }
+
+      try {
+        entries.push(JSON.parse(line) as LogEntry);
+      } catch {
+        continue;
+      }
+    }
+
+    return entries.slice(Math.max(0, entries.length - limit));
   }
 
   private async readState(): Promise<BridgeState> {
@@ -152,7 +213,8 @@ export class FileStore {
         createdAt: now,
         updatedAt: now,
       };
-      migrated.chats[chatId] = {
+      migrated.chats[this.chatKey(mapping.botId, chatId)] = {
+        botId: mapping.botId,
         chatId,
         sessionId,
         boundAt: now,
@@ -163,8 +225,8 @@ export class FileStore {
     return { state: migrated, migrated: true };
   }
 
-  private resolveChatSession(state: BridgeState, chatId: string): ChatSession | undefined {
-    const binding = state.chats[chatId];
+  private resolveChatSession(state: BridgeState, botId: string, chatId: string): ChatSession | undefined {
+    const binding = this.resolveBinding(state, botId, chatId);
     if (!binding) {
       return undefined;
     }
@@ -175,16 +237,17 @@ export class FileStore {
     }
 
     return {
+      botId: binding.botId ?? botId,
       chatId,
       binding,
       session,
     };
   }
 
-  private mustResolveChatSession(state: BridgeState, chatId: string): ChatSession {
-    const result = this.resolveChatSession(state, chatId);
+  private mustResolveChatSession(state: BridgeState, botId: string, chatId: string): ChatSession {
+    const result = this.resolveChatSession(state, botId, chatId);
     if (!result) {
-      throw new Error(`Chat binding was not found for chat ${chatId}.`);
+      throw new Error(`Chat binding was not found for bot ${botId} chat ${chatId}.`);
     }
 
     return result;
@@ -192,11 +255,14 @@ export class FileStore {
 
   private ensureBoundSession(
     state: BridgeState,
+    botId: string,
     chatId: string,
     workspace: string,
     now: string,
   ): { binding: ChatBinding; record: SessionRecord } {
-    let binding = state.chats[chatId];
+    const exactKey = this.chatKey(botId, chatId);
+    const legacyBinding = state.chats[chatId];
+    let binding = state.chats[exactKey] ?? legacyBinding;
     let record = binding ? state.sessions[binding.sessionId] : undefined;
 
     if (!binding || !record) {
@@ -209,15 +275,36 @@ export class FileStore {
         updatedAt: now,
       };
       binding = {
+        botId,
         chatId,
         sessionId,
         boundAt: now,
         updatedAt: now,
       };
       state.sessions[sessionId] = record;
-      state.chats[chatId] = binding;
+      state.chats[exactKey] = binding;
+      return { binding, record };
+    }
+
+    if (!state.chats[exactKey]) {
+      binding = {
+        ...binding,
+        botId,
+        chatId,
+      };
+      state.chats[exactKey] = binding;
+    } else if (!binding.botId) {
+      binding.botId = botId;
     }
 
     return { binding, record };
+  }
+
+  private resolveBinding(state: BridgeState, botId: string, chatId: string): ChatBinding | undefined {
+    return state.chats[this.chatKey(botId, chatId)] ?? state.chats[chatId];
+  }
+
+  private chatKey(botId: string | undefined, chatId: string): string {
+    return botId ? `${botId}:${chatId}` : chatId;
   }
 }

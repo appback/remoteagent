@@ -26,6 +26,7 @@ const HELP_TEXT = [
 export function createBot(token: string, bridge: BridgeService): Bot {
   const bot = new Bot(token);
   const shellService = new RemoteShellService(config.commandTimeoutMs);
+  const getBotId = (): string => bot.botInfo?.username ?? String(bot.botInfo?.id ?? token);
 
   bot.command("start", async (ctx) => {
     await ctx.reply(
@@ -41,6 +42,7 @@ export function createBot(token: string, bridge: BridgeService): Bot {
   });
 
   bot.command("startpair", async (ctx) => {
+    const botId = getBotId();
     const chatId = String(ctx.chat.id);
     const { args, rest } = parseCommand(ctx.message?.text, 1);
     const target = args[0]?.toLowerCase();
@@ -53,17 +55,18 @@ export function createBot(token: string, bridge: BridgeService): Bot {
     }
 
     if (target === "both") {
-      await bridge.startPair(chatId, "codex", rest);
-      const mapping = await bridge.startPair(chatId, "claude", rest);
+      await bridge.startPair(botId, chatId, "codex", rest);
+      const mapping = await bridge.startPair(botId, chatId, "claude", rest);
       await ctx.reply(`Started fresh Codex and Claude pairings.\n\n${bridge.formatStatus(mapping)}`);
       return;
     }
 
-    const mapping = await bridge.startPair(chatId, target as Provider, rest);
+    const mapping = await bridge.startPair(botId, chatId, target as Provider, rest);
     await ctx.reply(`Started a fresh ${target} pairing.\n\n${bridge.formatStatus(mapping)}`);
   });
 
   bot.command("attach", async (ctx) => {
+    const botId = getBotId();
     const chatId = String(ctx.chat.id);
     const { args, rest } = parseCommand(ctx.message?.text, 2);
     const provider = args[0]?.toLowerCase();
@@ -76,19 +79,21 @@ export function createBot(token: string, bridge: BridgeService): Bot {
       return;
     }
 
-    const mapping = await bridge.attachPair(chatId, provider as Provider, sessionId, rest);
+    const mapping = await bridge.attachPair(botId, chatId, provider as Provider, sessionId, rest);
     await ctx.reply(`Attached this chat to existing ${provider} session \`${sessionId}\`.\n\n${bridge.formatStatus(mapping)}`, {
       parse_mode: "Markdown",
     });
   });
 
   bot.command("status", async (ctx) => {
+    const botId = getBotId();
     const chatId = String(ctx.chat.id);
-    const mapping = await bridge.status(chatId);
+    const mapping = await bridge.status(botId, chatId);
     await ctx.reply(bridge.formatStatus(mapping), { parse_mode: "Markdown" });
   });
 
   bot.command("sandbox", async (ctx) => {
+    const botId = getBotId();
     const chatId = String(ctx.chat.id);
     const { args } = parseCommand(ctx.message?.text, 2);
     const provider = args[0]?.toLowerCase();
@@ -101,13 +106,14 @@ export function createBot(token: string, bridge: BridgeService): Bot {
       return;
     }
 
-    const mapping = await bridge.setCodexSandboxMode(chatId, sandboxMode);
+    const mapping = await bridge.setCodexSandboxMode(botId, chatId, sandboxMode);
     await ctx.reply(`Set Codex sandbox to \`${sandboxMode}\`.\n\n${bridge.formatStatus(mapping)}`, {
       parse_mode: "Markdown",
     });
   });
 
   bot.command("mode", async (ctx) => {
+    const botId = getBotId();
     const chatId = String(ctx.chat.id);
     const { args } = parseCommand(ctx.message?.text, 1);
     const mode = args[0]?.toLowerCase();
@@ -119,18 +125,20 @@ export function createBot(token: string, bridge: BridgeService): Bot {
       return;
     }
 
-    const mapping = await bridge.setMode(chatId, mode as BridgeMode);
+    const mapping = await bridge.setMode(botId, chatId, mode as BridgeMode);
     await ctx.reply(`Switched mode to ${mapping.session.mode}.\n\n${bridge.formatStatus(mapping)}`);
   });
 
   bot.command("reset", async (ctx) => {
+    const botId = getBotId();
     const chatId = String(ctx.chat.id);
-    await bridge.reset(chatId);
+    await bridge.reset(botId, chatId);
     await ctx.reply("Cleared all pairings for this chat.");
   });
 
   bot.on("message:text", async (ctx) => {
     const text = ctx.message.text.trim();
+    const botId = getBotId();
     const chatId = String(ctx.chat.id);
 
     if (isRemoteShellMessage(text)) {
@@ -142,12 +150,12 @@ export function createBot(token: string, bridge: BridgeService): Bot {
         return;
       }
 
-      const chatSession = await ensureRemoteShellAccess(ctx, bridge, chatId);
-      await bridge.logSystem(chatId, `Remote shell request (${shellRequest.kind}): ${shellRequest.command}`);
+      const chatSession = await ensureRemoteShellAccess(ctx, bridge, botId, chatId);
+      await bridge.logSystem(botId, chatId, `Remote shell request (${shellRequest.kind}): ${shellRequest.command}`);
 
       await runWithPendingAnimation(ctx, async () => {
         const result = await shellService.execute(shellRequest.command, chatSession.session.workspace, shellRequest.kind);
-        await bridge.logSystem(chatId, `Remote shell finished (${result.shell}, exit ${result.code ?? "unknown"}).`);
+        await bridge.logSystem(botId, chatId, `Remote shell finished (${result.shell}, exit ${result.code ?? "unknown"}).`);
         return {
           chunks: flattenChunks([formatRemoteShellResult(result, shellRequest.command, chatSession.session.workspace)], 3900),
           parseMode: "HTML",
@@ -161,7 +169,7 @@ export function createBot(token: string, bridge: BridgeService): Bot {
     }
 
     await runWithPendingAnimation(ctx, async () => {
-      const responses = await bridge.routeMessage(chatId, text);
+      const responses = await bridge.routeMessage(botId, chatId, text);
       return {
         chunks: flattenChunks(bridge.formatResponses(responses), 3900),
       };
@@ -229,7 +237,7 @@ async function runWithPendingAnimation(
   }
 }
 
-async function ensureRemoteShellAccess(ctx: Context, bridge: BridgeService, chatId: string): Promise<ChatSession> {
+async function ensureRemoteShellAccess(ctx: Context, bridge: BridgeService, botId: string, chatId: string): Promise<ChatSession> {
   if (ctx.chat?.type !== "private") {
     throw new Error("Remote shell is available only in private 1:1 chats.");
   }
@@ -242,7 +250,7 @@ async function ensureRemoteShellAccess(ctx: Context, bridge: BridgeService, chat
     throw new Error("Remote shell is available only to the configured bot owner.");
   }
 
-  const chatSession = await bridge.status(chatId);
+  const chatSession = await bridge.status(botId, chatId);
   if (!chatSession?.session.codex) {
     throw new Error("Remote shell requires an attached Codex session.");
   }

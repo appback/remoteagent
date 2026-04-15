@@ -61,6 +61,8 @@ The work PC is the source of truth.
 
 Each Telegram chat maps to one logical session binding.
 
+The next-step directory-backed session plan is documented in [SESSION_DIRECTORY_PLAN.md](./SESSION_DIRECTORY_PLAN.md).
+
 Current stored data per provider includes:
 
 - provider
