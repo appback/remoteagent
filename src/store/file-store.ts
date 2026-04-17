@@ -45,12 +45,22 @@ export class FileStore {
     await fs.mkdir(this.sessionsDir, { recursive: true });
     await fs.mkdir(this.telegramChannelsDir, { recursive: true });
 
-    const state = await this.readState();
+    let state = await this.readState();
+    if (Object.keys(state.chats).length === 0) {
+      const recovered = await this.recoverBindingsFromLogs(state);
+      if (Object.keys(recovered.chats).length > 0) {
+        state = recovered;
+      }
+    }
     await this.writeState(state);
   }
 
   async getChatSession(botId: string, chatId: string): Promise<ChatSession | undefined> {
     const state = await this.readState();
+    const migrated = this.materializeBindingForBot(state, botId, chatId);
+    if (migrated) {
+      await this.writeState(state);
+    }
     return this.resolveChatSession(state, botId, chatId);
   }
 
@@ -126,6 +136,7 @@ export class FileStore {
   async resetChat(botId: string, chatId: string): Promise<void> {
     const state = await this.readState();
     delete state.chats[this.chatKey(botId, chatId)];
+    delete state.chats[chatId];
     await this.writeState(state);
     await fs.rm(this.channelFilePath(botId, chatId), { force: true }).catch(() => undefined);
   }
@@ -154,8 +165,7 @@ export class FileStore {
   private async readState(): Promise<BridgeState> {
     const directoryState = await this.readStateFromDirectories();
     const legacyState = await this.readLegacyState();
-    const mergedState = this.mergeStates(directoryState, legacyState);
-    return this.recoverBindingsFromLogs(mergedState);
+    return this.mergeStates(directoryState, legacyState);
   }
 
   private async writeState(state: BridgeState): Promise<void> {
@@ -470,8 +480,8 @@ export class FileStore {
     now: string,
   ): { binding: ChatBinding; record: SessionRecord } {
     const exactKey = this.chatKey(botId, chatId);
-    const legacyBinding = state.chats[chatId];
-    let binding = state.chats[exactKey] ?? legacyBinding;
+    const migrated = this.materializeBindingForBot(state, botId, chatId);
+    let binding = state.chats[exactKey] ?? (migrated ? state.chats[exactKey] : undefined);
     let record = binding ? state.sessions[binding.sessionId] : undefined;
 
     if (!binding || !record) {
@@ -510,7 +520,27 @@ export class FileStore {
   }
 
   private resolveBinding(state: BridgeState, botId: string, chatId: string): ChatBinding | undefined {
-    return state.chats[this.chatKey(botId, chatId)] ?? state.chats[chatId];
+    return state.chats[this.chatKey(botId, chatId)];
+  }
+
+  private materializeBindingForBot(state: BridgeState, botId: string, chatId: string): boolean {
+    const exactKey = this.chatKey(botId, chatId);
+    if (state.chats[exactKey]) {
+      return false;
+    }
+
+    const legacyBinding = state.chats[chatId];
+    if (!legacyBinding) {
+      return false;
+    }
+
+    state.chats[exactKey] = {
+      ...legacyBinding,
+      botId,
+      chatId,
+    };
+    delete state.chats[chatId];
+    return true;
   }
 
   private sessionDirPath(sessionId: string): string {
