@@ -70,6 +70,16 @@ export class BridgeService {
       throw new Error("Session id is required.");
     }
 
+    if (provider === "codex") {
+      await this.verifyCodexAttachWorkspace(
+        botId,
+        chatId,
+        normalizedSessionId,
+        workspace,
+        existing?.session.codex,
+      );
+    }
+
     return this.store.upsertProviderForChat(botId, chatId, provider, {
       cwd: workspace,
       pairedAt: new Date().toISOString(),
@@ -366,6 +376,95 @@ export class BridgeService {
     }
 
     return responses;
+  }
+
+  private async verifyCodexAttachWorkspace(
+    botId: string,
+    chatId: string,
+    providerSessionId: string,
+    requestedWorkspace: string,
+    existingSession?: ProviderSession,
+  ): Promise<void> {
+    this.ensureConfigured("codex");
+
+    const probe = await this.adapters.codex!.send({
+      botId,
+      chatId,
+      remoteSessionId: existingSession?.sessionId ?? providerSessionId,
+      cwd: requestedWorkspace,
+      sessionId: providerSessionId,
+      model: existingSession?.model,
+      sandboxMode: existingSession?.sandboxMode,
+      message: [
+        "Safety check for workspace attach.",
+        "Reply with JSON only.",
+        "{\"cwd\":\"<current working directory>\"}",
+      ].join("\n"),
+    });
+
+    const actualWorkspace = this.extractCodexCwd(probe.output);
+    if (!actualWorkspace) {
+      throw new Error("Attach blocked: could not verify the resumed Codex session working directory.");
+    }
+
+    if (!this.pathsMatch(actualWorkspace, requestedWorkspace)) {
+      throw new Error(
+        `Attach blocked: resumed Codex session workspace is '${actualWorkspace}', not requested '${requestedWorkspace}'.`,
+      );
+    }
+  }
+
+  private extractCodexCwd(output: string): string | undefined {
+    const jsonMatch = output.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      try {
+        const parsed = JSON.parse(jsonMatch[0]) as { cwd?: unknown };
+        if (typeof parsed.cwd === "string" && parsed.cwd.trim()) {
+          return parsed.cwd.trim();
+        }
+      } catch {
+        // Fall back to line-based parsing below.
+      }
+    }
+
+    for (const line of output.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith("cwd:")) {
+        return trimmed.slice(4).trim().replace(/^["'`]+|["'`]+$/g, "");
+      }
+    }
+
+    return undefined;
+  }
+
+  private pathsMatch(left: string, right: string): boolean {
+    return this.normalizeComparablePath(left) === this.normalizeComparablePath(right);
+  }
+
+  private normalizeComparablePath(value: string): string {
+    const trimmed = value.trim().replace(/^["'`]+|["'`]+$/g, "");
+    const slashed = trimmed.replace(/\//g, "\\");
+    const lower = slashed.toLowerCase();
+
+    const wslMatch = lower.match(/^\\\\wsl\.localhost\\([^\\]+)\\(.+)$/);
+    if (wslMatch) {
+      return `/${wslMatch[2].replace(/\\/g, "/")}`;
+    }
+
+    const mntMatch = trimmed.match(/^\/mnt\/([a-zA-Z])\/(.+)$/);
+    if (mntMatch) {
+      return `${mntMatch[1].toLowerCase()}:\\${mntMatch[2].replace(/\//g, "\\").toLowerCase()}`;
+    }
+
+    if (/^[a-zA-Z]:\\/.test(trimmed)) {
+      return `${trimmed[0].toLowerCase()}:${trimmed.slice(2).replace(/\//g, "\\").toLowerCase()}`;
+    }
+
+    if (trimmed.startsWith("/")) {
+      return trimmed.replace(/\\/g, "/").toLowerCase();
+    }
+
+    return lower;
   }
 
   private describeProviderSession(session: ProviderSession): string {
