@@ -19,6 +19,27 @@ export class BridgeService {
     private readonly defaultWorkspace: string,
   ) {}
 
+  async createSession(botId: string, chatId: string, cwd?: string): Promise<ChatSession> {
+    const existing = await this.store.getChatSession(botId, chatId);
+    const workspace = this.resolveWorkspace(existing?.session.workspace, cwd);
+    await this.ensureWorkspaceExists(workspace);
+    return this.store.createSessionForChat(botId, chatId, workspace, existing?.session.mode);
+  }
+
+  async switchSession(botId: string, chatId: string, sessionId: string): Promise<ChatSession> {
+    const normalizedSessionId = sessionId.trim();
+    if (!normalizedSessionId) {
+      throw new Error("Session id is required.");
+    }
+
+    const session = await this.store.getSession(normalizedSessionId);
+    if (!session) {
+      throw new Error(`Session was not found: ${normalizedSessionId}`);
+    }
+
+    return this.store.bindChatToSession(botId, chatId, normalizedSessionId);
+  }
+
   async startPair(botId: string, chatId: string, provider: Provider, cwd?: string): Promise<ChatSession> {
     const existing = await this.store.getChatSession(botId, chatId);
     const workspace = this.resolveWorkspace(existing?.session[provider]?.cwd ?? existing?.session.workspace, cwd);
@@ -208,6 +229,40 @@ export class BridgeService {
       const header = `[${response.provider.toUpperCase()} | ${response.sessionId}]`;
       return `${header}\n${response.output}`;
     });
+  }
+
+  formatCurrentSession(chatSession: ChatSession | undefined): string {
+    if (!chatSession) {
+      return "No active session is bound to this chat.";
+    }
+
+    const { session } = chatSession;
+    return [
+      `session: ${session.sessionId}`,
+      `bot: ${chatSession.botId ?? chatSession.binding.botId ?? "unknown"}`,
+      `chat: ${chatSession.chatId}`,
+      `mode: ${session.mode}`,
+      `workspace: ${session.workspace}`,
+      `updatedAt: ${session.updatedAt}`,
+    ].join("\n");
+  }
+
+  formatSessionList(sessions: SessionRecord[], currentSessionId?: string, limit = 10): string {
+    if (sessions.length === 0) {
+      return "No sessions found.";
+    }
+
+    const rows = sessions
+      .slice(0, limit)
+      .map((session, index) => {
+        const marker = session.sessionId === currentSessionId ? "*" : " ";
+        return `${marker} ${index + 1}. ${session.sessionId}\n   mode: ${session.mode}\n   workspace: ${session.workspace}\n   updatedAt: ${session.updatedAt}`;
+      });
+
+    return [
+      `Sessions (${Math.min(limit, sessions.length)}/${sessions.length})`,
+      ...rows,
+    ].join("\n");
   }
 
   private resolveProviders(mode: BridgeMode): Provider[] {

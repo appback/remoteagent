@@ -74,6 +74,56 @@ export class FileStore {
     return state.sessions[sessionId];
   }
 
+  async createSessionForChat(botId: string, chatId: string, workspace: string, mode?: BridgeMode): Promise<ChatSession> {
+    const state = await this.readState();
+    const now = new Date().toISOString();
+    const sessionId = randomUUID();
+
+    state.sessions[sessionId] = {
+      sessionId,
+      mode: mode ?? this.defaultMode,
+      workspace,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    state.chats[this.chatKey(botId, chatId)] = {
+      botId,
+      chatId,
+      sessionId,
+      boundAt: now,
+      updatedAt: now,
+    };
+
+    delete state.chats[chatId];
+
+    await this.writeState(state);
+    return this.mustResolveChatSession(state, botId, chatId);
+  }
+
+  async bindChatToSession(botId: string, chatId: string, sessionId: string): Promise<ChatSession> {
+    const state = await this.readState();
+    const record = state.sessions[sessionId];
+    if (!record) {
+      throw new Error(`Session was not found: ${sessionId}`);
+    }
+
+    const now = new Date().toISOString();
+    const existing = this.resolveBinding(state, botId, chatId);
+    state.chats[this.chatKey(botId, chatId)] = {
+      botId,
+      chatId,
+      sessionId,
+      boundAt: existing?.boundAt ?? now,
+      updatedAt: now,
+    };
+
+    delete state.chats[chatId];
+
+    await this.writeState(state);
+    return this.mustResolveChatSession(state, botId, chatId);
+  }
+
   async upsertProviderForChat(
     botId: string,
     chatId: string,

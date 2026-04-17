@@ -26,6 +26,10 @@ RemoteAgent is moving from a Telegram bridge toward a personal session runtime:
 
 Today the repository already supports:
 
+- `/session`
+- `/sessions`
+- `/new [path]`
+- `/switch <session_id>`
 - local PC chat UI at `http://127.0.0.1:3794` by default
 - `/startpair codex [path]`
 - `/startpair claude [path]`
@@ -55,6 +59,10 @@ The important capability is attach/resume:
 | `/startpair both [path]` | Pair Codex and Claude together for compare mode | Supported |
 | `/attach codex <thread_id> [path]` | Attach this chat to an existing Codex session | Supported |
 | `/attach claude <session_id> [path]` | Attach this chat to an existing Claude session | Supported |
+| `/session` | Show the current RemoteAgent session bound to this chat | Supported |
+| `/sessions` | List recent RemoteAgent sessions | Supported |
+| `/new [path]` | Create a new RemoteAgent session and bind this chat to it | Supported |
+| `/switch <session_id>` | Rebind this chat to an existing RemoteAgent session | Supported |
 | `/status` | Show current RemoteAgent session, workspace, provider session ids, and sandbox state | Supported |
 | `/mode codex` | Route new messages to Codex only | Supported |
 | `/mode claude` | Route new messages to Claude only | Supported |

@@ -7,6 +7,10 @@ import type { BridgeMode, ChatSession, CodexSandboxMode, Provider } from "./type
 
 const HELP_TEXT = [
   "Commands:",
+  "/session",
+  "/sessions",
+  "/new [path]",
+  "/switch <session_id>",
   "/startpair codex [path]",
   "/startpair claude [path]",
   "/startpair both [path]",
@@ -39,6 +43,50 @@ export function createBot(token: string, bridge: BridgeService): Bot {
 
   bot.command("help", async (ctx) => {
     await ctx.reply(HELP_TEXT);
+  });
+
+  bot.command("session", async (ctx) => {
+    const botId = getBotId();
+    const chatId = String(ctx.chat.id);
+    const mapping = await bridge.status(botId, chatId);
+    await ctx.reply(bridge.formatCurrentSession(mapping), { parse_mode: "Markdown" });
+  });
+
+  bot.command("sessions", async (ctx) => {
+    const botId = getBotId();
+    const chatId = String(ctx.chat.id);
+    const [mapping, sessions] = await Promise.all([
+      bridge.status(botId, chatId),
+      bridge.listSessions(),
+    ]);
+    await ctx.reply(bridge.formatSessionList(sessions, mapping?.session.sessionId), { parse_mode: "Markdown" });
+  });
+
+  bot.command("new", async (ctx) => {
+    const botId = getBotId();
+    const chatId = String(ctx.chat.id);
+    const { rest } = parseCommand(ctx.message?.text, 0);
+    const mapping = await bridge.createSession(botId, chatId, rest);
+    await ctx.reply(`Created and bound a new session.\n\n${bridge.formatCurrentSession(mapping)}`);
+  });
+
+  bot.command("switch", async (ctx) => {
+    const botId = getBotId();
+    const chatId = String(ctx.chat.id);
+    const { args } = parseCommand(ctx.message?.text, 1);
+    const sessionId = args[0];
+
+    if (!sessionId) {
+      await ctx.reply("Usage: `/switch <session_id>`", {
+        parse_mode: "Markdown",
+      });
+      return;
+    }
+
+    const mapping = await bridge.switchSession(botId, chatId, sessionId);
+    await ctx.reply(`Switched this chat to session \`${sessionId}\`.\n\n${bridge.formatCurrentSession(mapping)}`, {
+      parse_mode: "Markdown",
+    });
   });
 
   bot.command("startpair", async (ctx) => {
@@ -276,6 +324,13 @@ function parseCommand(text: string | undefined, headCount: number): { args: stri
   let remaining = trimmed.slice(firstSpace + 1).trim();
   if (!remaining) {
     return { args: [] };
+  }
+
+  if (headCount === 0) {
+    return {
+      args: [],
+      rest: remaining || undefined,
+    };
   }
 
   const args: string[] = [];
