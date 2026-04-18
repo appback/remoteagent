@@ -9,8 +9,10 @@ const HELP_TEXT = [
   "Commands:",
   "/session",
   "/sessions",
+  "/list",
   "/new [path]",
-  "/switch <session_id>",
+  "/switch <session>",
+  "/batch start|send|cancel|status",
   "/startpair codex [path]",
   "/startpair claude [path]",
   "/startpair both [path]",
@@ -30,6 +32,17 @@ const HELP_TEXT = [
 export function createBot(token: string, bridge: BridgeService): Bot {
   const bot = new Bot(token);
   const shellService = new RemoteShellService(config.commandTimeoutMs);
+  const messageBatcher = new TelegramMessageBatcher(
+    config.telegramMessageBatchMs,
+    async (ctx, botId, chatId, text) => {
+      await runWithPendingAnimation(ctx, async () => {
+        const responses = await bridge.routeMessage(botId, chatId, text);
+        return {
+          chunks: flattenChunks(bridge.formatResponses(responses), 3900),
+        };
+      });
+    },
+  );
   const getBotId = (): string => bot.botInfo?.username ?? String(bot.botInfo?.id ?? token);
 
   bot.command("start", async (ctx) => {
@@ -49,17 +62,29 @@ export function createBot(token: string, bridge: BridgeService): Bot {
     const botId = getBotId();
     const chatId = String(ctx.chat.id);
     const mapping = await bridge.status(botId, chatId);
-    await ctx.reply(bridge.formatCurrentSession(mapping), { parse_mode: "Markdown" });
+    await ctx.reply(bridge.formatCurrentSession(mapping));
   });
 
-  bot.command("sessions", async (ctx) => {
+  const replySessionList = async (ctx: Context): Promise<void> => {
+    if (!ctx.chat) {
+      throw new Error("Telegram chat context is missing.");
+    }
+
     const botId = getBotId();
     const chatId = String(ctx.chat.id);
     const [mapping, sessions] = await Promise.all([
       bridge.status(botId, chatId),
       bridge.listSessions(),
     ]);
-    await ctx.reply(bridge.formatSessionList(sessions, mapping?.session.sessionId), { parse_mode: "Markdown" });
+    await ctx.reply(bridge.formatSessionList(sessions, mapping?.session.sessionId));
+  };
+
+  bot.command("sessions", async (ctx) => {
+    await replySessionList(ctx);
+  });
+
+  bot.command("list", async (ctx) => {
+    await replySessionList(ctx);
   });
 
   bot.command("new", async (ctx) => {
@@ -77,16 +102,57 @@ export function createBot(token: string, bridge: BridgeService): Bot {
     const sessionId = args[0];
 
     if (!sessionId) {
-      await ctx.reply("Usage: `/switch <session_id>`", {
+      await ctx.reply("Usage: `/switch <session>`", {
         parse_mode: "Markdown",
       });
       return;
     }
 
     const mapping = await bridge.switchSession(botId, chatId, sessionId);
-    await ctx.reply(`Switched this chat to session \`${sessionId}\`.\n\n${bridge.formatCurrentSession(mapping)}`, {
-      parse_mode: "Markdown",
-    });
+    await ctx.reply(`Switched this chat to session ${sessionId}.\n\n${bridge.formatCurrentSession(mapping)}`);
+  });
+
+  bot.command("batch", async (ctx) => {
+    const botId = getBotId();
+    const chatId = String(ctx.chat.id);
+    const { args } = parseCommand(ctx.message?.text, 1);
+    const action = args[0]?.toLowerCase();
+
+    if (!action || !["start", "send", "done", "cancel", "status"].includes(action)) {
+      await ctx.reply("Usage: `/batch start`, `/batch send`, `/batch cancel`, or `/batch status`", {
+        parse_mode: "Markdown",
+      });
+      return;
+    }
+
+    if (action === "start") {
+      messageBatcher.startManual(botId, chatId);
+      await ctx.reply("Batch collection started. Send the log fragments, then run `/batch send`.", {
+        parse_mode: "Markdown",
+      });
+      return;
+    }
+
+    if (action === "send" || action === "done") {
+      const result = await messageBatcher.sendManual(ctx, botId, chatId);
+      if (!result.found) {
+        await ctx.reply("No active batch. Run `/batch start` first.", { parse_mode: "Markdown" });
+        return;
+      }
+      if (result.count === 0) {
+        await ctx.reply("Batch was empty.");
+      }
+      return;
+    }
+
+    if (action === "cancel") {
+      const result = messageBatcher.cancelManual(botId, chatId);
+      await ctx.reply(result.found ? `Canceled batch with ${result.count} collected message(s).` : "No active batch.");
+      return;
+    }
+
+    const result = messageBatcher.manualStatus(botId, chatId);
+    await ctx.reply(result.found ? `Batch collection is active with ${result.count} message(s).` : "No active batch.");
   });
 
   bot.command("startpair", async (ctx) => {
@@ -128,16 +194,14 @@ export function createBot(token: string, bridge: BridgeService): Bot {
     }
 
     const mapping = await bridge.attachPair(botId, chatId, provider as Provider, sessionId, rest);
-    await ctx.reply(`Attached this chat to existing ${provider} session \`${sessionId}\`.\n\n${bridge.formatStatus(mapping)}`, {
-      parse_mode: "Markdown",
-    });
+    await ctx.reply(`Attached this chat to existing ${provider} session ${sessionId}.\n\n${bridge.formatStatus(mapping)}`);
   });
 
   bot.command("status", async (ctx) => {
     const botId = getBotId();
     const chatId = String(ctx.chat.id);
     const mapping = await bridge.status(botId, chatId);
-    await ctx.reply(bridge.formatStatus(mapping), { parse_mode: "Markdown" });
+    await ctx.reply(bridge.formatStatus(mapping));
   });
 
   bot.command("sandbox", async (ctx) => {
@@ -155,9 +219,7 @@ export function createBot(token: string, bridge: BridgeService): Bot {
     }
 
     const mapping = await bridge.setCodexSandboxMode(botId, chatId, sandboxMode);
-    await ctx.reply(`Set Codex sandbox to \`${sandboxMode}\`.\n\n${bridge.formatStatus(mapping)}`, {
-      parse_mode: "Markdown",
-    });
+    await ctx.reply(`Set Codex sandbox to ${sandboxMode}.\n\n${bridge.formatStatus(mapping)}`);
   });
 
   bot.command("mode", async (ctx) => {
@@ -216,12 +278,7 @@ export function createBot(token: string, bridge: BridgeService): Bot {
       return;
     }
 
-    await runWithPendingAnimation(ctx, async () => {
-      const responses = await bridge.routeMessage(botId, chatId, text);
-      return {
-        chunks: flattenChunks(bridge.formatResponses(responses), 3900),
-      };
-    });
+    messageBatcher.enqueue(ctx, botId, chatId, text);
   });
 
   bot.catch((error) => {
@@ -243,6 +300,131 @@ export function createBot(token: string, bridge: BridgeService): Bot {
   });
 
   return bot;
+}
+
+type PendingTelegramBatch = {
+  ctx: Context;
+  botId: string;
+  chatId: string;
+  messages: string[];
+  timer: ReturnType<typeof setTimeout>;
+};
+
+type ManualTelegramBatch = {
+  messages: string[];
+};
+
+class TelegramMessageBatcher {
+  private readonly pending = new Map<string, PendingTelegramBatch>();
+  private readonly manual = new Map<string, ManualTelegramBatch>();
+
+  constructor(
+    private readonly delayMs: number,
+    private readonly onBatch: (ctx: Context, botId: string, chatId: string, text: string) => Promise<void>,
+  ) {}
+
+  enqueue(ctx: Context, botId: string, chatId: string, text: string): void {
+    const key = this.key(botId, chatId);
+    const manualBatch = this.manual.get(key);
+    if (manualBatch) {
+      manualBatch.messages.push(text);
+      return;
+    }
+
+    if (this.delayMs === 0) {
+      void this.run(ctx, botId, chatId, text);
+      return;
+    }
+
+    const existing = this.pending.get(key);
+    if (existing) {
+      existing.ctx = ctx;
+      existing.messages.push(text);
+      clearTimeout(existing.timer);
+      existing.timer = setTimeout(() => {
+        void this.flush(key);
+      }, this.delayMs);
+      return;
+    }
+
+    this.pending.set(key, {
+      ctx,
+      botId,
+      chatId,
+      messages: [text],
+      timer: setTimeout(() => {
+        void this.flush(key);
+      }, this.delayMs),
+    });
+  }
+
+  startManual(botId: string, chatId: string): void {
+    const key = this.key(botId, chatId);
+    const pendingBatch = this.pending.get(key);
+    if (pendingBatch) {
+      clearTimeout(pendingBatch.timer);
+      this.pending.delete(key);
+    }
+
+    this.manual.set(key, { messages: pendingBatch?.messages ?? [] });
+  }
+
+  async sendManual(ctx: Context, botId: string, chatId: string): Promise<{ found: boolean; count: number }> {
+    const key = this.key(botId, chatId);
+    const batch = this.manual.get(key);
+    if (!batch) {
+      return { found: false, count: 0 };
+    }
+
+    this.manual.delete(key);
+    if (batch.messages.length === 0) {
+      return { found: true, count: 0 };
+    }
+
+    await this.run(ctx, botId, chatId, batch.messages.join("\n"));
+    return { found: true, count: batch.messages.length };
+  }
+
+  cancelManual(botId: string, chatId: string): { found: boolean; count: number } {
+    const key = this.key(botId, chatId);
+    const batch = this.manual.get(key);
+    if (!batch) {
+      return { found: false, count: 0 };
+    }
+
+    this.manual.delete(key);
+    return { found: true, count: batch.messages.length };
+  }
+
+  manualStatus(botId: string, chatId: string): { found: boolean; count: number } {
+    const batch = this.manual.get(this.key(botId, chatId));
+    return batch ? { found: true, count: batch.messages.length } : { found: false, count: 0 };
+  }
+
+  private async flush(key: string): Promise<void> {
+    const batch = this.pending.get(key);
+    if (!batch) {
+      return;
+    }
+
+    this.pending.delete(key);
+    clearTimeout(batch.timer);
+
+    await this.run(batch.ctx, batch.botId, batch.chatId, batch.messages.join("\n"));
+  }
+
+  private async run(ctx: Context, botId: string, chatId: string, text: string): Promise<void> {
+    try {
+      await this.onBatch(ctx, botId, chatId, text);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "An unexpected error occurred.";
+      await ctx.reply(message).catch(() => undefined);
+    }
+  }
+
+  private key(botId: string, chatId: string): string {
+    return `${botId}:${chatId}`;
+  }
 }
 
 async function runWithPendingAnimation(

@@ -70,6 +70,18 @@ function readTimeout(name: string, fallback: number): number {
   return parsed;
 }
 
+function readNonNegativeTimeout(name: string, fallback: number): number {
+  const value = process.env[name]?.trim();
+  if (!value) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`Invalid ${name}: ${value}`);
+  }
+  return parsed;
+}
+
 function readBoolean(name: string, fallback: boolean): boolean {
   const value = process.env[name]?.trim().toLowerCase();
   if (!value) {
@@ -110,6 +122,7 @@ function readCodexSandboxMode(name: string): "read-only" | "workspace-write" | "
 export const config = {
   telegramBotTokens: readTelegramBotTokens(),
   telegramOwnerId: readOptional("TELEGRAM_OWNER_ID"),
+  telegramMessageBatchMs: readNonNegativeTimeout("TELEGRAM_MESSAGE_BATCH_MS", 1500),
   dataDir: defaultDataDir,
   defaultMode: readMode("DEFAULT_MODE", "codex"),
   defaultWorkspace: path.resolve(process.env.DEFAULT_WORKSPACE?.trim() || os.homedir()),

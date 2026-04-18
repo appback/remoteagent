@@ -30,6 +30,7 @@ Today the repository already supports:
 - `/sessions`
 - `/new [path]`
 - `/switch <session_id>`
+- `/batch start|send|cancel|status`
 - local PC chat UI at `http://127.0.0.1:3794` by default
 - `/startpair codex [path]`
 - `/startpair claude [path]`
@@ -63,6 +64,10 @@ The important capability is attach/resume:
 | `/sessions` | List recent RemoteAgent sessions | Supported |
 | `/new [path]` | Create a new RemoteAgent session and bind this chat to it | Supported |
 | `/switch <session_id>` | Rebind this chat to an existing RemoteAgent session | Supported |
+| `/batch start` | Start collecting multiple Telegram text messages into one provider prompt | Supported |
+| `/batch send` | Send the collected Telegram text messages as one provider prompt | Supported |
+| `/batch cancel` | Discard the current collected batch | Supported |
+| `/batch status` | Show whether batch collection is active | Supported |
 | `/status` | Show current RemoteAgent session, workspace, provider session ids, and sandbox state | Supported |
 | `/mode codex` | Route new messages to Codex only | Supported |
 | `/mode claude` | Route new messages to Claude only | Supported |
@@ -155,6 +160,7 @@ Useful:
 
 - `DEFAULT_WORKSPACE`
 - `TELEGRAM_OWNER_ID`
+- `TELEGRAM_MESSAGE_BATCH_MS`
 - `CODEX_BIN`
 - `CODEX_SANDBOX_MODE`
 - `CLAUDE_BIN`
@@ -166,6 +172,16 @@ Useful:
 - `LOCAL_UI_PORT`
 
 `TELEGRAM_BOT_TOKENS` may contain multiple bot tokens separated by commas or new lines. If it is set, RemoteAgent starts one Telegram bot per token and keeps them all attached to the same local session runtime. If it is not set, `TELEGRAM_BOT_TOKEN` is used as the single-bot fallback.
+
+`TELEGRAM_MESSAGE_BATCH_MS` controls how long RemoteAgent waits for additional plain-text Telegram messages before sending them to the active provider as one combined prompt. It defaults to `1500`; set it to `0` to disable batching.
+
+For long logs that Telegram may split across multiple messages, use explicit batch mode:
+
+```text
+/batch start
+<send the log fragments>
+/batch send
+```
 
 `CODEX_BIN` defaults to `codex`, and `CLAUDE_BIN` defaults to `claude`. `CODEX_SANDBOX_MODE` may be set to `read-only`, `workspace-write`, or `danger-full-access`. If you need custom wrappers instead, set `CODEX_COMMAND` or `CLAUDE_COMMAND`.
 

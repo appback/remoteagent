@@ -81,6 +81,7 @@ export class FileStore {
 
     state.sessions[sessionId] = {
       sessionId,
+      publicId: this.nextPublicSessionId(state),
       mode: mode ?? this.defaultMode,
       workspace,
       createdAt: now,
@@ -215,7 +216,9 @@ export class FileStore {
   private async readState(): Promise<BridgeState> {
     const directoryState = await this.readStateFromDirectories();
     const legacyState = await this.readLegacyState();
-    return this.mergeStates(directoryState, legacyState);
+    const state = this.mergeStates(directoryState, legacyState);
+    this.ensurePublicSessionIds(state);
+    return state;
   }
 
   private async writeState(state: BridgeState): Promise<void> {
@@ -406,6 +409,7 @@ export class FileStore {
 
       migrated.sessions[sessionId] = {
         sessionId,
+        publicId: this.nextPublicSessionId(migrated),
         mode: mapping.mode || this.defaultMode,
         workspace,
         codex: mapping.codex ? { ...mapping.codex, provider: "codex", cwd: mapping.codex.cwd || workspace } : undefined,
@@ -480,6 +484,7 @@ export class FileStore {
   }
 
   private normalizeSession(session: SessionRecord): SessionRecord {
+    session.publicId = session.publicId || "";
     session.workspace = session.workspace || session.codex?.cwd || session.claude?.cwd || this.dataDir;
     session.createdAt = session.createdAt || session.updatedAt || new Date().toISOString();
     session.updatedAt = session.updatedAt || session.createdAt;
@@ -538,6 +543,7 @@ export class FileStore {
       const sessionId = randomUUID();
       record = {
         sessionId,
+        publicId: this.nextPublicSessionId(state),
         mode: this.defaultMode,
         workspace,
         createdAt: now,
@@ -611,5 +617,67 @@ export class FileStore {
 
   private chatKey(botId: string | undefined, chatId: string): string {
     return botId ? `${botId}:${chatId}` : chatId;
+  }
+
+  private ensurePublicSessionIds(state: BridgeState): void {
+    const used = new Set<number>();
+
+    for (const session of Object.values(state.sessions)) {
+      const parsed = this.parsePublicSessionNumber(session.publicId);
+      if (parsed !== undefined) {
+        used.add(parsed);
+      }
+    }
+
+    const missing = Object.values(state.sessions)
+      .filter((session) => this.parsePublicSessionNumber(session.publicId) === undefined)
+      .sort((left, right) => {
+        const timeCompare = left.createdAt.localeCompare(right.createdAt);
+        if (timeCompare !== 0) {
+          return timeCompare;
+        }
+        return left.sessionId.localeCompare(right.sessionId);
+      });
+
+    for (const session of missing) {
+      let next = 1;
+      while (used.has(next)) {
+        next += 1;
+      }
+
+      session.publicId = this.formatPublicSessionId(next);
+      used.add(next);
+    }
+  }
+
+  private nextPublicSessionId(state: BridgeState): string {
+    let max = 0;
+
+    for (const session of Object.values(state.sessions)) {
+      const parsed = this.parsePublicSessionNumber(session.publicId);
+      if (parsed !== undefined && parsed > max) {
+        max = parsed;
+      }
+    }
+
+    return this.formatPublicSessionId(max + 1);
+  }
+
+  private parsePublicSessionNumber(publicId: string | undefined): number | undefined {
+    if (!publicId) {
+      return undefined;
+    }
+
+    const match = publicId.trim().match(/^S(\d+)$/i);
+    if (!match) {
+      return undefined;
+    }
+
+    const parsed = Number.parseInt(match[1], 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+  }
+
+  private formatPublicSessionId(value: number): string {
+    return `S${String(value).padStart(3, "0")}`;
   }
 }

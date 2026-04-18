@@ -15,6 +15,7 @@ export type ProviderSession = {
 
 export type SessionRecord = {
   sessionId: string;
+  publicId: string;
   mode: BridgeMode;
   workspace: string;
   codex?: ProviderSession;

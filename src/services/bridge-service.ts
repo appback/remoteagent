@@ -1,4 +1,6 @@
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { ProviderAdapter } from "../adapters/provider-adapter.js";
 import type {
   BridgeMode,
@@ -27,17 +29,17 @@ export class BridgeService {
   }
 
   async switchSession(botId: string, chatId: string, sessionId: string): Promise<ChatSession> {
-    const normalizedSessionId = sessionId.trim();
-    if (!normalizedSessionId) {
-      throw new Error("Session id is required.");
+    const selector = sessionId.trim();
+    if (!selector) {
+      throw new Error("Session selector is required.");
     }
 
-    const session = await this.store.getSession(normalizedSessionId);
+    const session = await this.resolveSessionSelector(selector);
     if (!session) {
-      throw new Error(`Session was not found: ${normalizedSessionId}`);
+      throw new Error(`Session was not found: ${selector}`);
     }
 
-    return this.store.bindChatToSession(botId, chatId, normalizedSessionId);
+    return this.store.bindChatToSession(botId, chatId, session.sessionId);
   }
 
   async startPair(botId: string, chatId: string, provider: Provider, cwd?: string): Promise<ChatSession> {
@@ -62,22 +64,38 @@ export class BridgeService {
     cwd?: string,
   ): Promise<ChatSession> {
     const existing = await this.store.getChatSession(botId, chatId);
-    const workspace = this.resolveWorkspace(existing?.session[provider]?.cwd ?? existing?.session.workspace, cwd);
-    await this.ensureWorkspaceExists(workspace);
-
     const normalizedSessionId = sessionId.trim();
     if (!normalizedSessionId) {
       throw new Error("Session id is required.");
     }
 
+    let workspace: string;
     if (provider === "codex") {
-      await this.verifyCodexAttachWorkspace(
-        botId,
-        chatId,
-        normalizedSessionId,
-        workspace,
-        existing?.session.codex,
-      );
+      const requestedWorkspace = cwd?.trim();
+      const detectedWorkspace = await this.readCodexSessionWorkspace(normalizedSessionId);
+
+      if (detectedWorkspace) {
+        if (requestedWorkspace && !this.pathsMatch(detectedWorkspace, requestedWorkspace)) {
+          throw new Error(
+            `Attach blocked: Codex session workspace is '${detectedWorkspace}', not provided '${requestedWorkspace}'. Omit the path or use the session's actual workspace.`,
+          );
+        }
+        workspace = detectedWorkspace;
+        await this.ensureWorkspaceExists(workspace);
+      } else {
+        workspace = this.resolveWorkspace(existing?.session[provider]?.cwd ?? existing?.session.workspace, cwd);
+        await this.ensureWorkspaceExists(workspace);
+        await this.verifyCodexAttachWorkspace(
+          botId,
+          chatId,
+          normalizedSessionId,
+          workspace,
+          existing?.session.codex,
+        );
+      }
+    } else {
+      workspace = this.resolveWorkspace(existing?.session[provider]?.cwd ?? existing?.session.workspace, cwd);
+      await this.ensureWorkspaceExists(workspace);
     }
 
     return this.store.upsertProviderForChat(botId, chatId, provider, {
@@ -222,7 +240,7 @@ export class BridgeService {
       : "- claude: not paired";
 
     return [
-      `remoteSession: ${session.sessionId}`,
+      `session: ${session.publicId}`,
       `bot: ${chatSession.botId ?? chatSession.binding.botId ?? "unknown"}`,
       `chat: ${chatSession.chatId}`,
       `mode: ${session.mode}`,
@@ -248,7 +266,7 @@ export class BridgeService {
 
     const { session } = chatSession;
     return [
-      `session: ${session.sessionId}`,
+      `session: ${session.publicId}`,
       `bot: ${chatSession.botId ?? chatSession.binding.botId ?? "unknown"}`,
       `chat: ${chatSession.chatId}`,
       `mode: ${session.mode}`,
@@ -266,13 +284,30 @@ export class BridgeService {
       .slice(0, limit)
       .map((session, index) => {
         const marker = session.sessionId === currentSessionId ? "*" : " ";
-        return `${marker} ${index + 1}. ${session.sessionId}\n   mode: ${session.mode}\n   workspace: ${session.workspace}\n   updatedAt: ${session.updatedAt}`;
+        return `${marker} ${index + 1}. [${session.publicId}] ${this.workspaceLabel(session.workspace)}\n   mode: ${session.mode}\n   updatedAt: ${session.updatedAt}`;
       });
 
     return [
       `Sessions (${Math.min(limit, sessions.length)}/${sessions.length})`,
       ...rows,
     ].join("\n");
+  }
+
+  private async resolveSessionSelector(selector: string): Promise<SessionRecord | undefined> {
+    const sessions = await this.store.listSessions();
+    const trimmed = selector.trim();
+
+    if (/^\d+$/.test(trimmed)) {
+      const index = Number.parseInt(trimmed, 10);
+      if (index >= 1 && index <= sessions.length) {
+        return sessions[index - 1];
+      }
+    }
+
+    const normalized = trimmed.toUpperCase();
+    return sessions.find((session) =>
+      session.publicId.toUpperCase() === normalized || session.sessionId === trimmed,
+    );
   }
 
   private resolveProviders(mode: BridgeMode): Provider[] {
@@ -385,6 +420,87 @@ export class BridgeService {
     requestedWorkspace: string,
     existingSession?: ProviderSession,
   ): Promise<void> {
+    const actualWorkspace =
+      await this.readCodexSessionWorkspace(providerSessionId)
+      ?? await this.probeCodexAttachWorkspace(
+        botId,
+        chatId,
+        providerSessionId,
+        requestedWorkspace,
+        existingSession,
+      );
+
+    if (!actualWorkspace) {
+      throw new Error("Attach blocked: could not verify the resumed Codex session working directory.");
+    }
+
+    if (!this.pathsMatch(actualWorkspace, requestedWorkspace)) {
+      throw new Error(
+        `Attach blocked: resumed Codex session workspace is '${actualWorkspace}', not requested '${requestedWorkspace}'.`,
+      );
+    }
+  }
+
+  private async readCodexSessionWorkspace(providerSessionId: string): Promise<string | undefined> {
+    const sessionsRoot = path.join(os.homedir(), ".codex", "sessions");
+    const sessionFile = await this.findCodexSessionFile(sessionsRoot, providerSessionId);
+    if (!sessionFile) {
+      return undefined;
+    }
+
+    const raw = await fs.readFile(sessionFile, "utf8").catch(() => undefined);
+    if (!raw) {
+      return undefined;
+    }
+
+    const firstLine = raw.split(/\r?\n/, 1)[0]?.trim();
+    if (!firstLine) {
+      return undefined;
+    }
+
+    try {
+      const event = JSON.parse(firstLine) as {
+        type?: string;
+        payload?: { cwd?: unknown };
+      };
+      if (event.type === "session_meta" && typeof event.payload?.cwd === "string" && event.payload.cwd.trim()) {
+        return event.payload.cwd.trim();
+      }
+    } catch {
+      return undefined;
+    }
+
+    return undefined;
+  }
+
+  private async findCodexSessionFile(root: string, providerSessionId: string): Promise<string | undefined> {
+    const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
+
+    for (const entry of entries) {
+      const entryPath = path.join(root, entry.name);
+      if (entry.isDirectory()) {
+        const nested = await this.findCodexSessionFile(entryPath, providerSessionId);
+        if (nested) {
+          return nested;
+        }
+        continue;
+      }
+
+      if (entry.isFile() && entry.name.endsWith(`${providerSessionId}.jsonl`)) {
+        return entryPath;
+      }
+    }
+
+    return undefined;
+  }
+
+  private async probeCodexAttachWorkspace(
+    botId: string,
+    chatId: string,
+    providerSessionId: string,
+    requestedWorkspace: string,
+    existingSession?: ProviderSession,
+  ): Promise<string | undefined> {
     this.ensureConfigured("codex");
 
     const probe = await this.adapters.codex!.send({
@@ -402,16 +518,7 @@ export class BridgeService {
       ].join("\n"),
     });
 
-    const actualWorkspace = this.extractCodexCwd(probe.output);
-    if (!actualWorkspace) {
-      throw new Error("Attach blocked: could not verify the resumed Codex session working directory.");
-    }
-
-    if (!this.pathsMatch(actualWorkspace, requestedWorkspace)) {
-      throw new Error(
-        `Attach blocked: resumed Codex session workspace is '${actualWorkspace}', not requested '${requestedWorkspace}'.`,
-      );
-    }
+    return this.extractCodexCwd(probe.output);
   }
 
   private extractCodexCwd(output: string): string | undefined {
@@ -469,7 +576,7 @@ export class BridgeService {
 
   private describeProviderSession(session: ProviderSession): string {
     const state = session.sessionId
-      ? `attached ${session.sessionId}`
+      ? "attached"
       : "pending-first-run";
     const details = [`- ${session.provider}: ${state} @ ${session.cwd}`];
 
@@ -486,6 +593,12 @@ export class BridgeService {
 
   private resolveWorkspace(current: string | undefined, next: string | undefined): string {
     return next?.trim() || current || this.defaultWorkspace;
+  }
+
+  private workspaceLabel(workspace: string): string {
+    const normalized = workspace.replace(/\\/g, "/").replace(/\/+$/, "");
+    const parts = normalized.split("/");
+    return parts[parts.length - 1] || workspace;
   }
 
   private async ensureWorkspaceExists(cwd: string): Promise<void> {
