@@ -39,12 +39,9 @@ export function createBot(token: string, bridge: BridgeService): Bot {
   const shellService = new RemoteShellService(config.commandTimeoutMs);
   const messageBatcher = new TelegramMessageBatcher(
     config.telegramMessageBatchMs,
-    async (ctx, botId, chatId, text) => {
-      if (!ctx.chat) {
-        throw new Error("Telegram chat context is missing.");
-      }
-
-      await runWithPendingAnimation(ctx.api, ctx.chat.id, async () => {
+    async (target, botId, chatId, text) => {
+      await bridge.logSystem(botId, chatId, `Telegram text dispatch (${text.length} chars).`);
+      await runWithPendingAnimation(target.api, target.telegramChatId, async () => {
         const responses = await bridge.routeMessage(botId, chatId, text);
         return {
           chunks: flattenChunks(bridge.formatResponses(responses), 3900),
@@ -143,7 +140,7 @@ export function createBot(token: string, bridge: BridgeService): Bot {
     }
 
     if (action === "send" || action === "done") {
-      const result = await messageBatcher.sendManual(ctx, botId, chatId);
+      const result = await messageBatcher.sendManual({ api: ctx.api, telegramChatId: ctx.chat.id }, botId, chatId);
       if (!result.found) {
         await ctx.reply("No active batch. Run `/batch start` first.", { parse_mode: "Markdown" });
         return;
@@ -287,7 +284,8 @@ export function createBot(token: string, bridge: BridgeService): Bot {
       return;
     }
 
-    messageBatcher.enqueue(ctx, botId, chatId, text);
+    await bridge.logSystem(botId, chatId, `Telegram text received (${text.length} chars).`);
+    await messageBatcher.enqueue({ api: ctx.api, telegramChatId: ctx.chat.id }, botId, chatId, text);
   });
 
   bot.catch((error) => {
@@ -312,7 +310,7 @@ export function createBot(token: string, bridge: BridgeService): Bot {
 }
 
 type PendingTelegramBatch = {
-  ctx: Context;
+  target: TelegramReplyTarget;
   botId: string;
   chatId: string;
   messages: string[];
@@ -323,16 +321,21 @@ type ManualTelegramBatch = {
   messages: string[];
 };
 
+type TelegramReplyTarget = {
+  api: Context["api"];
+  telegramChatId: number;
+};
+
 class TelegramMessageBatcher {
   private readonly pending = new Map<string, PendingTelegramBatch>();
   private readonly manual = new Map<string, ManualTelegramBatch>();
 
   constructor(
     private readonly delayMs: number,
-    private readonly onBatch: (ctx: Context, botId: string, chatId: string, text: string) => Promise<void>,
+    private readonly onBatch: (target: TelegramReplyTarget, botId: string, chatId: string, text: string) => Promise<void>,
   ) {}
 
-  enqueue(ctx: Context, botId: string, chatId: string, text: string): void {
+  async enqueue(target: TelegramReplyTarget, botId: string, chatId: string, text: string): Promise<void> {
     const key = this.key(botId, chatId);
     const manualBatch = this.manual.get(key);
     if (manualBatch) {
@@ -341,13 +344,13 @@ class TelegramMessageBatcher {
     }
 
     if (this.delayMs === 0) {
-      void this.run(ctx, botId, chatId, text);
+      await this.run(target, botId, chatId, text);
       return;
     }
 
     const existing = this.pending.get(key);
     if (existing) {
-      existing.ctx = ctx;
+      existing.target = target;
       existing.messages.push(text);
       clearTimeout(existing.timer);
       existing.timer = setTimeout(() => {
@@ -357,7 +360,7 @@ class TelegramMessageBatcher {
     }
 
     this.pending.set(key, {
-      ctx,
+      target,
       botId,
       chatId,
       messages: [text],
@@ -378,7 +381,7 @@ class TelegramMessageBatcher {
     this.manual.set(key, { messages: pendingBatch?.messages ?? [] });
   }
 
-  async sendManual(ctx: Context, botId: string, chatId: string): Promise<{ found: boolean; count: number }> {
+  async sendManual(target: TelegramReplyTarget, botId: string, chatId: string): Promise<{ found: boolean; count: number }> {
     const key = this.key(botId, chatId);
     const batch = this.manual.get(key);
     if (!batch) {
@@ -390,7 +393,7 @@ class TelegramMessageBatcher {
       return { found: true, count: 0 };
     }
 
-    await this.run(ctx, botId, chatId, batch.messages.join("\n"));
+    await this.run(target, botId, chatId, batch.messages.join("\n"));
     return { found: true, count: batch.messages.length };
   }
 
@@ -419,17 +422,15 @@ class TelegramMessageBatcher {
     this.pending.delete(key);
     clearTimeout(batch.timer);
 
-    await this.run(batch.ctx, batch.botId, batch.chatId, batch.messages.join("\n"));
+    await this.run(batch.target, batch.botId, batch.chatId, batch.messages.join("\n"));
   }
 
-  private async run(ctx: Context, botId: string, chatId: string, text: string): Promise<void> {
+  private async run(target: TelegramReplyTarget, botId: string, chatId: string, text: string): Promise<void> {
     try {
-      await this.onBatch(ctx, botId, chatId, text);
+      await this.onBatch(target, botId, chatId, text);
     } catch (error) {
       const message = error instanceof Error ? error.message : "An unexpected error occurred.";
-      if (ctx.chat) {
-        await ctx.api.sendMessage(ctx.chat.id, message).catch(() => undefined);
-      }
+      await target.api.sendMessage(target.telegramChatId, message).catch(() => undefined);
     }
   }
 
