@@ -1,10 +1,14 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { Bot, GrammyError, HttpError } from "grammy";
 import type { Context } from "grammy";
 import { config } from "./config.js";
 import { BridgeService } from "./services/bridge-service.js";
 import { RemoteShellService } from "./services/remote-shell-service.js";
-import { telegramFetch } from "./telegram-fetch.js";
 import type { BridgeMode, ChatSession, CodexSandboxMode, Provider } from "./types.js";
+import type { UserFromGetMe } from "grammy/types";
+
+const execFileAsync = promisify(execFile);
 
 const HELP_TEXT = [
   "Commands:",
@@ -30,18 +34,14 @@ const HELP_TEXT = [
   "/!bash <command>",
 ].join("\n");
 
-export function createBot(token: string, bridge: BridgeService): Bot {
-  const bot = new Bot(token, {
-    client: {
-      fetch: telegramFetch as typeof fetch,
-    },
-  });
+export function createBot(token: string, bridge: BridgeService, botInfo: UserFromGetMe): Bot {
+  const bot = new Bot(token, { botInfo });
   const shellService = new RemoteShellService(config.commandTimeoutMs);
   const messageBatcher = new TelegramMessageBatcher(
     config.telegramMessageBatchMs,
     async (target, botId, chatId, text) => {
       await bridge.logSystem(botId, chatId, `Telegram text dispatch (${text.length} chars).`);
-      await runWithPendingAnimation(target.api, target.telegramChatId, async () => {
+      await runWithPendingAnimation(target.botToken, target.telegramChatId, async () => {
         const responses = await bridge.routeMessage(botId, chatId, text);
         return {
           chunks: flattenChunks(bridge.formatResponses(responses), 3900),
@@ -50,9 +50,25 @@ export function createBot(token: string, bridge: BridgeService): Bot {
     },
   );
   const getBotId = (): string => bot.botInfo?.username ?? String(bot.botInfo?.id ?? token);
+  const reply = async (ctx: Context, text: string, extra?: TelegramMessageOptions): Promise<TelegramMessageResult> => {
+    if (!ctx.chat) {
+      throw new Error("Telegram chat context is missing.");
+    }
+    return sendTelegramMessage(token, ctx.chat.id, text, extra);
+  };
+
+  bot.use(async (ctx, next) => {
+    const updateKind = Object.keys(ctx.update).join(",");
+    const text = ctx.message?.text ?? ctx.editedMessage?.text ?? ctx.channelPost?.text ?? "";
+    console.log(
+      `[tg-update] bot=${getBotId()} kind=${updateKind} chat=${ctx.chat?.id ?? "?"} text=${JSON.stringify(text).slice(0, 240)}`,
+    );
+    await next();
+  });
 
   bot.command("start", async (ctx) => {
-    await ctx.reply(
+    await reply(
+      ctx,
       [
         "Pair this Telegram chat 1:1 with a Codex or Claude session.",
         HELP_TEXT,
@@ -61,14 +77,14 @@ export function createBot(token: string, bridge: BridgeService): Bot {
   });
 
   bot.command("help", async (ctx) => {
-    await ctx.reply(HELP_TEXT);
+    await reply(ctx, HELP_TEXT);
   });
 
   bot.command("session", async (ctx) => {
     const botId = getBotId();
     const chatId = String(ctx.chat.id);
     const mapping = await bridge.status(botId, chatId);
-    await ctx.reply(bridge.formatCurrentSession(mapping));
+    await reply(ctx, bridge.formatCurrentSession(mapping));
   });
 
   const replySessionList = async (ctx: Context): Promise<void> => {
@@ -82,7 +98,7 @@ export function createBot(token: string, bridge: BridgeService): Bot {
       bridge.status(botId, chatId),
       bridge.listSessions(),
     ]);
-    await ctx.reply(bridge.formatSessionList(sessions, mapping?.session.sessionId));
+    await reply(ctx, bridge.formatSessionList(sessions, mapping?.session.sessionId));
   };
 
   bot.command("sessions", async (ctx) => {
@@ -98,7 +114,7 @@ export function createBot(token: string, bridge: BridgeService): Bot {
     const chatId = String(ctx.chat.id);
     const { rest } = parseCommand(ctx.message?.text, 0);
     const mapping = await bridge.createSession(botId, chatId, rest);
-    await ctx.reply(`Created and bound a new session.\n\n${bridge.formatCurrentSession(mapping)}`);
+    await reply(ctx, `Created and bound a new session.\n\n${bridge.formatCurrentSession(mapping)}`);
   });
 
   bot.command("switch", async (ctx) => {
@@ -108,14 +124,14 @@ export function createBot(token: string, bridge: BridgeService): Bot {
     const sessionId = args[0];
 
     if (!sessionId) {
-      await ctx.reply("Usage: `/switch <session>`", {
+      await reply(ctx, "Usage: `/switch <session>`", {
         parse_mode: "Markdown",
       });
       return;
     }
 
     const mapping = await bridge.switchSession(botId, chatId, sessionId);
-    await ctx.reply(`Switched this chat to session ${sessionId}.\n\n${bridge.formatCurrentSession(mapping)}`);
+    await reply(ctx, `Switched this chat to session ${sessionId}.\n\n${bridge.formatCurrentSession(mapping)}`);
   });
 
   bot.command("batch", async (ctx) => {
@@ -125,7 +141,7 @@ export function createBot(token: string, bridge: BridgeService): Bot {
     const action = args[0]?.toLowerCase();
 
     if (!action || !["start", "send", "done", "cancel", "status"].includes(action)) {
-      await ctx.reply("Usage: `/batch start`, `/batch send`, `/batch cancel`, or `/batch status`", {
+      await reply(ctx, "Usage: `/batch start`, `/batch send`, `/batch cancel`, or `/batch status`", {
         parse_mode: "Markdown",
       });
       return;
@@ -133,32 +149,32 @@ export function createBot(token: string, bridge: BridgeService): Bot {
 
     if (action === "start") {
       messageBatcher.startManual(botId, chatId);
-      await ctx.reply("Batch collection started. Send the log fragments, then run `/batch send`.", {
+      await reply(ctx, "Batch collection started. Send the log fragments, then run `/batch send`.", {
         parse_mode: "Markdown",
       });
       return;
     }
 
     if (action === "send" || action === "done") {
-      const result = await messageBatcher.sendManual({ api: ctx.api, telegramChatId: ctx.chat.id }, botId, chatId);
+      const result = await messageBatcher.sendManual({ botToken: token, telegramChatId: ctx.chat.id }, botId, chatId);
       if (!result.found) {
-        await ctx.reply("No active batch. Run `/batch start` first.", { parse_mode: "Markdown" });
+        await reply(ctx, "No active batch. Run `/batch start` first.", { parse_mode: "Markdown" });
         return;
       }
       if (result.count === 0) {
-        await ctx.reply("Batch was empty.");
+        await reply(ctx, "Batch was empty.");
       }
       return;
     }
 
     if (action === "cancel") {
       const result = messageBatcher.cancelManual(botId, chatId);
-      await ctx.reply(result.found ? `Canceled batch with ${result.count} collected message(s).` : "No active batch.");
+      await reply(ctx, result.found ? `Canceled batch with ${result.count} collected message(s).` : "No active batch.");
       return;
     }
 
     const result = messageBatcher.manualStatus(botId, chatId);
-    await ctx.reply(result.found ? `Batch collection is active with ${result.count} message(s).` : "No active batch.");
+    await reply(ctx, result.found ? `Batch collection is active with ${result.count} message(s).` : "No active batch.");
   });
 
   bot.command("startpair", async (ctx) => {
@@ -168,7 +184,7 @@ export function createBot(token: string, bridge: BridgeService): Bot {
     const target = args[0]?.toLowerCase();
 
     if (!target || !["codex", "claude", "both"].includes(target)) {
-      await ctx.reply("Usage: `/startpair codex [path]`, `/startpair claude [path]`, `/startpair both [path]`", {
+      await reply(ctx, "Usage: `/startpair codex [path]`, `/startpair claude [path]`, `/startpair both [path]`", {
         parse_mode: "Markdown",
       });
       return;
@@ -177,12 +193,12 @@ export function createBot(token: string, bridge: BridgeService): Bot {
     if (target === "both") {
       await bridge.startPair(botId, chatId, "codex", rest);
       const mapping = await bridge.startPair(botId, chatId, "claude", rest);
-      await ctx.reply(`Started fresh Codex and Claude pairings.\n\n${bridge.formatStatus(mapping)}`);
+      await reply(ctx, `Started fresh Codex and Claude pairings.\n\n${bridge.formatStatus(mapping)}`);
       return;
     }
 
     const mapping = await bridge.startPair(botId, chatId, target as Provider, rest);
-    await ctx.reply(`Started a fresh ${target} pairing.\n\n${bridge.formatStatus(mapping)}`);
+    await reply(ctx, `Started a fresh ${target} pairing.\n\n${bridge.formatStatus(mapping)}`);
   });
 
   bot.command("attach", async (ctx) => {
@@ -193,21 +209,21 @@ export function createBot(token: string, bridge: BridgeService): Bot {
     const sessionId = args[1];
 
     if (!provider || !["codex", "claude"].includes(provider) || !sessionId) {
-      await ctx.reply("Usage: `/attach codex <thread_id> [path]`, `/attach claude <session_id> [path]`", {
+      await reply(ctx, "Usage: `/attach codex <thread_id> [path]`, `/attach claude <session_id> [path]`", {
         parse_mode: "Markdown",
       });
       return;
     }
 
     const mapping = await bridge.attachPair(botId, chatId, provider as Provider, sessionId, rest);
-    await ctx.reply(`Attached this chat to existing ${provider} session ${sessionId}.\n\n${bridge.formatStatus(mapping)}`);
+    await reply(ctx, `Attached this chat to existing ${provider} session ${sessionId}.\n\n${bridge.formatStatus(mapping)}`);
   });
 
   bot.command("status", async (ctx) => {
     const botId = getBotId();
     const chatId = String(ctx.chat.id);
     const mapping = await bridge.status(botId, chatId);
-    await ctx.reply(bridge.formatStatus(mapping));
+    await reply(ctx, bridge.formatStatus(mapping));
   });
 
   bot.command("sandbox", async (ctx) => {
@@ -218,14 +234,14 @@ export function createBot(token: string, bridge: BridgeService): Bot {
     const sandboxMode = args[1]?.toLowerCase();
 
     if (provider !== "codex" || !sandboxMode || !isCodexSandboxMode(sandboxMode)) {
-      await ctx.reply("Usage: `/sandbox codex <read-only|workspace-write|danger-full-access>`", {
+      await reply(ctx, "Usage: `/sandbox codex <read-only|workspace-write|danger-full-access>`", {
         parse_mode: "Markdown",
       });
       return;
     }
 
     const mapping = await bridge.setCodexSandboxMode(botId, chatId, sandboxMode);
-    await ctx.reply(`Set Codex sandbox to ${sandboxMode}.\n\n${bridge.formatStatus(mapping)}`);
+    await reply(ctx, `Set Codex sandbox to ${sandboxMode}.\n\n${bridge.formatStatus(mapping)}`);
   });
 
   bot.command("mode", async (ctx) => {
@@ -235,21 +251,21 @@ export function createBot(token: string, bridge: BridgeService): Bot {
     const mode = args[0]?.toLowerCase();
 
     if (!mode || !["codex", "claude", "compare"].includes(mode)) {
-      await ctx.reply("Usage: `/mode codex`, `/mode claude`, `/mode compare`", {
+      await reply(ctx, "Usage: `/mode codex`, `/mode claude`, `/mode compare`", {
         parse_mode: "Markdown",
       });
       return;
     }
 
     const mapping = await bridge.setMode(botId, chatId, mode as BridgeMode);
-    await ctx.reply(`Switched mode to ${mapping.session.mode}.\n\n${bridge.formatStatus(mapping)}`);
+    await reply(ctx, `Switched mode to ${mapping.session.mode}.\n\n${bridge.formatStatus(mapping)}`);
   });
 
   bot.command("reset", async (ctx) => {
     const botId = getBotId();
     const chatId = String(ctx.chat.id);
     await bridge.reset(botId, chatId);
-    await ctx.reply("Cleared all pairings for this chat.");
+    await reply(ctx, "Cleared all pairings for this chat.");
   });
 
   bot.on("message:text", async (ctx) => {
@@ -260,7 +276,7 @@ export function createBot(token: string, bridge: BridgeService): Bot {
     if (isRemoteShellMessage(text)) {
       const shellRequest = parseRemoteShellRequest(text);
       if (!shellRequest) {
-        await ctx.reply("Usage: `/! <command>`, `/!cmd <command>`, or `/!bash <command>`", {
+        await reply(ctx, "Usage: `/! <command>`, `/!cmd <command>`, or `/!bash <command>`", {
           parse_mode: "Markdown",
         });
         return;
@@ -269,7 +285,7 @@ export function createBot(token: string, bridge: BridgeService): Bot {
       const chatSession = await ensureRemoteShellAccess(ctx, bridge, botId, chatId);
       await bridge.logSystem(botId, chatId, `Remote shell request (${shellRequest.kind}): ${shellRequest.command}`);
 
-      await runWithPendingAnimation(ctx.api, ctx.chat.id, async () => {
+      await runWithPendingAnimation(token, ctx.chat.id, async () => {
         const result = await shellService.execute(shellRequest.command, chatSession.session.workspace, shellRequest.kind);
         await bridge.logSystem(botId, chatId, `Remote shell finished (${result.shell}, exit ${result.code ?? "unknown"}).`);
         return {
@@ -285,7 +301,7 @@ export function createBot(token: string, bridge: BridgeService): Bot {
     }
 
     await bridge.logSystem(botId, chatId, `Telegram text received (${text.length} chars).`);
-    await messageBatcher.enqueue({ api: ctx.api, telegramChatId: ctx.chat.id }, botId, chatId, text);
+    await messageBatcher.enqueue({ botToken: token, telegramChatId: ctx.chat.id }, botId, chatId, text);
   });
 
   bot.catch((error) => {
@@ -303,7 +319,9 @@ export function createBot(token: string, bridge: BridgeService): Bot {
     }
 
     console.error("Unhandled error:", error.error);
-    void ctx.reply(error.error instanceof Error ? error.error.message : "An unexpected error occurred.");
+    if (ctx.chat) {
+      void sendTelegramMessage(token, ctx.chat.id, error.error instanceof Error ? error.error.message : "An unexpected error occurred.").catch(() => undefined);
+    }
   });
 
   return bot;
@@ -322,7 +340,7 @@ type ManualTelegramBatch = {
 };
 
 type TelegramReplyTarget = {
-  api: Context["api"];
+  botToken: string;
   telegramChatId: number;
 };
 
@@ -430,7 +448,7 @@ class TelegramMessageBatcher {
       await this.onBatch(target, botId, chatId, text);
     } catch (error) {
       const message = error instanceof Error ? error.message : "An unexpected error occurred.";
-      await target.api.sendMessage(target.telegramChatId, message).catch(() => undefined);
+      await sendTelegramMessage(target.botToken, target.telegramChatId, message).catch(() => undefined);
     }
   }
 
@@ -440,16 +458,16 @@ class TelegramMessageBatcher {
 }
 
 async function runWithPendingAnimation(
-  api: Context["api"],
+  botToken: string,
   chatId: number,
   task: () => Promise<{ chunks: string[]; parseMode?: "HTML" | "MarkdownV2" }>,
 ): Promise<void> {
-  const pending = await api.sendMessage(chatId, "Working.");
+  const pending = await sendTelegramMessage(botToken, chatId, "Working.");
   const pendingFrames = ["Working.", "Working..", "Working...", "Working...."];
   let pendingIndex = 0;
   const pendingLoop = setInterval(() => {
     pendingIndex = (pendingIndex + 1) % pendingFrames.length;
-    void api.editMessageText(chatId, pending.message_id, pendingFrames[pendingIndex]).catch(() => undefined);
+    void editTelegramMessageText(botToken, chatId, pending.message_id, pendingFrames[pendingIndex]).catch(() => undefined);
   }, 3000);
 
   try {
@@ -458,22 +476,18 @@ async function runWithPendingAnimation(
     const extra = result.parseMode ? { parse_mode: result.parseMode } : undefined;
 
     if (chunks.length === 0) {
-      await api.editMessageText(chatId, pending.message_id, "Response was empty.");
+      await editTelegramMessageText(botToken, chatId, pending.message_id, "Response was empty.");
       return;
     }
 
-    await api.deleteMessage(chatId, pending.message_id).catch(() => undefined);
+    await deleteTelegramMessage(botToken, chatId, pending.message_id).catch(() => undefined);
     for (const chunk of chunks) {
-      if (extra) {
-        await api.sendMessage(chatId, chunk, extra);
-      } else {
-        await api.sendMessage(chatId, chunk);
-      }
+      await sendTelegramMessage(botToken, chatId, chunk, extra);
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : "An unexpected error occurred.";
-    await api.editMessageText(chatId, pending.message_id, message).catch(async () => {
-      await api.sendMessage(chatId, message);
+    await editTelegramMessageText(botToken, chatId, pending.message_id, message).catch(async () => {
+      await sendTelegramMessage(botToken, chatId, message);
     });
   } finally {
     clearInterval(pendingLoop);
@@ -637,5 +651,79 @@ function escapeHtml(text: string): string {
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
+}
+
+type TelegramMessageOptions = {
+  parse_mode?: "Markdown" | "MarkdownV2" | "HTML";
+};
+
+type TelegramMessageResult = {
+  message_id: number;
+};
+
+async function sendTelegramMessage(
+  botToken: string,
+  chatId: number,
+  text: string,
+  extra?: TelegramMessageOptions,
+): Promise<TelegramMessageResult> {
+  return callTelegramApi<TelegramMessageResult>(botToken, "sendMessage", {
+    chat_id: String(chatId),
+    text,
+    parse_mode: extra?.parse_mode,
+  });
+}
+
+async function editTelegramMessageText(
+  botToken: string,
+  chatId: number,
+  messageId: number,
+  text: string,
+  extra?: TelegramMessageOptions,
+): Promise<void> {
+  await callTelegramApi(botToken, "editMessageText", {
+    chat_id: String(chatId),
+    message_id: String(messageId),
+    text,
+    parse_mode: extra?.parse_mode,
+  });
+}
+
+async function deleteTelegramMessage(botToken: string, chatId: number, messageId: number): Promise<void> {
+  await callTelegramApi(botToken, "deleteMessage", {
+    chat_id: String(chatId),
+    message_id: String(messageId),
+  });
+}
+
+async function callTelegramApi<T>(
+  botToken: string,
+  method: string,
+  params: Record<string, string | undefined>,
+): Promise<T> {
+  const args = [
+    "-sS",
+    "--max-time",
+    "35",
+    `https://api.telegram.org/bot${botToken}/${method}`,
+  ];
+
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined) {
+      args.push("--data-urlencode", `${key}=${value}`);
+    }
+  }
+
+  const { stdout, stderr } = await execFileAsync("curl", args);
+  if (stderr?.trim()) {
+    console.error(`curl stderr for ${method}: ${stderr.trim()}`);
+  }
+
+  const payload = JSON.parse(stdout) as { ok?: boolean; result?: T; description?: string };
+  if (!payload.ok) {
+    throw new Error(payload.description || `Telegram API ${method} failed.`);
+  }
+
+  return payload.result as T;
 }
 

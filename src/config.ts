@@ -42,6 +42,18 @@ function readTelegramBotTokens(): string[] {
   return [readRequired("TELEGRAM_BOT_TOKEN")];
 }
 
+function readTelegramBotUsernames(): string[] {
+  const raw = process.env.TELEGRAM_BOT_USERNAMES?.trim();
+  if (!raw) {
+    return [];
+  }
+
+  return raw
+    .split(/[\r\n,]+/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
 function readOptional(name: string): string | undefined {
   const value = process.env[name]?.trim();
   return value ? value : undefined;
@@ -121,6 +133,7 @@ function readCodexSandboxMode(name: string): "read-only" | "workspace-write" | "
 
 export const config = {
   telegramBotTokens: readTelegramBotTokens(),
+  telegramBotUsernames: readTelegramBotUsernames(),
   telegramOwnerId: readOptional("TELEGRAM_OWNER_ID"),
   telegramMessageBatchMs: readNonNegativeTimeout("TELEGRAM_MESSAGE_BATCH_MS", 1500),
   dataDir: defaultDataDir,

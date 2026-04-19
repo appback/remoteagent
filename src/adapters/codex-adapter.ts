@@ -24,7 +24,7 @@ export class CodexAdapter implements ProviderAdapter {
 
     try {
       const sessionId = this.extractThreadId(stdout) ?? request.sessionId;
-      const output = await this.readOutput(outputPath);
+      const output = await this.readOutput(outputPath) || this.extractAgentMessage(stdout);
 
       if (sessionId && output) {
         return {
@@ -154,6 +154,33 @@ export class CodexAdapter implements ProviderAdapter {
     }
 
     return undefined;
+  }
+
+  private extractAgentMessage(stdout: string): string {
+    let latest = "";
+
+    for (const line of stdout.split(/\r?\n/)) {
+      if (!line.startsWith("{")) {
+        continue;
+      }
+
+      try {
+        const event = JSON.parse(line) as {
+          type?: string;
+          item?: {
+            type?: string;
+            text?: string;
+          };
+        };
+        if (event.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string") {
+          latest = event.item.text.trim();
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    return latest;
   }
 
   private async readOutput(outputPath: string): Promise<string> {
