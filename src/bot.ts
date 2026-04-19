@@ -3,6 +3,7 @@ import type { Context } from "grammy";
 import { config } from "./config.js";
 import { BridgeService } from "./services/bridge-service.js";
 import { RemoteShellService } from "./services/remote-shell-service.js";
+import { telegramFetch } from "./telegram-fetch.js";
 import type { BridgeMode, ChatSession, CodexSandboxMode, Provider } from "./types.js";
 
 const HELP_TEXT = [
@@ -30,7 +31,11 @@ const HELP_TEXT = [
 ].join("\n");
 
 export function createBot(token: string, bridge: BridgeService): Bot {
-  const bot = new Bot(token);
+  const bot = new Bot(token, {
+    client: {
+      fetch: telegramFetch as typeof fetch,
+    },
+  });
   const shellService = new RemoteShellService(config.commandTimeoutMs);
   const messageBatcher = new TelegramMessageBatcher(
     config.telegramMessageBatchMs,
