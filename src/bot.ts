@@ -40,7 +40,11 @@ export function createBot(token: string, bridge: BridgeService): Bot {
   const messageBatcher = new TelegramMessageBatcher(
     config.telegramMessageBatchMs,
     async (ctx, botId, chatId, text) => {
-      await runWithPendingAnimation(ctx, async () => {
+      if (!ctx.chat) {
+        throw new Error("Telegram chat context is missing.");
+      }
+
+      await runWithPendingAnimation(ctx.api, ctx.chat.id, async () => {
         const responses = await bridge.routeMessage(botId, chatId, text);
         return {
           chunks: flattenChunks(bridge.formatResponses(responses), 3900),
@@ -268,7 +272,7 @@ export function createBot(token: string, bridge: BridgeService): Bot {
       const chatSession = await ensureRemoteShellAccess(ctx, bridge, botId, chatId);
       await bridge.logSystem(botId, chatId, `Remote shell request (${shellRequest.kind}): ${shellRequest.command}`);
 
-      await runWithPendingAnimation(ctx, async () => {
+      await runWithPendingAnimation(ctx.api, ctx.chat.id, async () => {
         const result = await shellService.execute(shellRequest.command, chatSession.session.workspace, shellRequest.kind);
         await bridge.logSystem(botId, chatId, `Remote shell finished (${result.shell}, exit ${result.code ?? "unknown"}).`);
         return {
@@ -423,7 +427,9 @@ class TelegramMessageBatcher {
       await this.onBatch(ctx, botId, chatId, text);
     } catch (error) {
       const message = error instanceof Error ? error.message : "An unexpected error occurred.";
-      await ctx.reply(message).catch(() => undefined);
+      if (ctx.chat) {
+        await ctx.api.sendMessage(ctx.chat.id, message).catch(() => undefined);
+      }
     }
   }
 
@@ -433,19 +439,16 @@ class TelegramMessageBatcher {
 }
 
 async function runWithPendingAnimation(
-  ctx: Context,
+  api: Context["api"],
+  chatId: number,
   task: () => Promise<{ chunks: string[]; parseMode?: "HTML" | "MarkdownV2" }>,
 ): Promise<void> {
-  if (!ctx.chat) {
-    throw new Error("Telegram chat context is missing.");
-  }
-
-  const pending = await ctx.reply("Working.");
+  const pending = await api.sendMessage(chatId, "Working.");
   const pendingFrames = ["Working.", "Working..", "Working...", "Working...."];
   let pendingIndex = 0;
   const pendingLoop = setInterval(() => {
     pendingIndex = (pendingIndex + 1) % pendingFrames.length;
-    void ctx.api.editMessageText(ctx.chat!.id, pending.message_id, pendingFrames[pendingIndex]).catch(() => undefined);
+    void api.editMessageText(chatId, pending.message_id, pendingFrames[pendingIndex]).catch(() => undefined);
   }, 3000);
 
   try {
@@ -454,18 +457,22 @@ async function runWithPendingAnimation(
     const extra = result.parseMode ? { parse_mode: result.parseMode } : undefined;
 
     if (chunks.length === 0) {
-      await ctx.api.editMessageText(ctx.chat.id, pending.message_id, "응답이 비어 있습니다.");
+      await api.editMessageText(chatId, pending.message_id, "Response was empty.");
       return;
     }
 
-    await ctx.api.deleteMessage(ctx.chat.id, pending.message_id).catch(() => undefined);
+    await api.deleteMessage(chatId, pending.message_id).catch(() => undefined);
     for (const chunk of chunks) {
-      await ctx.reply(chunk, extra);
+      if (extra) {
+        await api.sendMessage(chatId, chunk, extra);
+      } else {
+        await api.sendMessage(chatId, chunk);
+      }
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : "An unexpected error occurred.";
-    await ctx.api.editMessageText(ctx.chat.id, pending.message_id, message).catch(async () => {
-      await ctx.reply(message);
+    await api.editMessageText(chatId, pending.message_id, message).catch(async () => {
+      await api.sendMessage(chatId, message);
     });
   } finally {
     clearInterval(pendingLoop);
@@ -630,3 +637,4 @@ function escapeHtml(text: string): string {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
 }
+
