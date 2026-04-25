@@ -8,29 +8,25 @@ import type { Context } from "grammy";
 import { config } from "./config.js";
 import { BridgeService } from "./services/bridge-service.js";
 import { RemoteShellService } from "./services/remote-shell-service.js";
-import type { BridgeMode, ChatSession, CodexSandboxMode, Provider } from "./types.js";
+import type { ChatSession, CodexSandboxMode, Provider } from "./types.js";
 import type { UserFromGetMe } from "grammy/types";
 
 const execFileAsync = promisify(execFile);
 
 const HELP_TEXT = [
   "Commands:",
-  "/session",
-  "/sessions",
+  "/start [codex|claude] [path]",
+  "/help",
   "/list",
   "/new [path]",
   "/switch <session>",
   "/batch start|send|cancel|status",
-  "/startpair codex [path]",
-  "/startpair claude [path]",
-  "/startpair both [path]",
   "/attach codex <thread_id> [path]",
   "/attach claude <session_id> [path]",
   "/sandbox codex <read-only|workspace-write|danger-full-access>",
   "/status",
   "/mode codex",
   "/mode claude",
-  "/mode compare",
   "/reset",
   "/! <command>",
   "/!cmd <command>",
@@ -70,24 +66,37 @@ export function createBot(token: string, bridge: BridgeService, botInfo: UserFro
   });
 
   bot.command("start", async (ctx) => {
-    await reply(
-      ctx,
-      [
-        "Pair this Telegram chat 1:1 with a Codex or Claude session.",
-        HELP_TEXT,
-      ].join("\n\n"),
-    );
+    const botId = getBotId();
+    const chatId = String(ctx.chat.id);
+    const { args, rest } = parseCommand(ctx.message?.text, 1);
+    const target = args[0]?.toLowerCase();
+
+    if (!target) {
+      await reply(
+        ctx,
+        [
+          "Start a fresh Codex or Claude session for this Telegram chat.",
+          "Usage: `/start codex [path]` or `/start claude [path]`",
+          HELP_TEXT,
+        ].join("\n\n"),
+        { parse_mode: "Markdown" },
+      );
+      return;
+    }
+
+    if (!(["codex", "claude"] as const).includes(target as Provider)) {
+      await reply(ctx, "Usage: `/start codex [path]` or `/start claude [path]`", {
+        parse_mode: "Markdown",
+      });
+      return;
+    }
+
+    const mapping = await bridge.startPair(botId, chatId, target as Provider, rest);
+    await reply(ctx, `Started a fresh ${target} pairing.\n\n${bridge.formatStatus(mapping)}`);
   });
 
   bot.command("help", async (ctx) => {
     await reply(ctx, HELP_TEXT);
-  });
-
-  bot.command("session", async (ctx) => {
-    const botId = getBotId();
-    const chatId = String(ctx.chat.id);
-    const mapping = await bridge.status(botId, chatId);
-    await reply(ctx, bridge.formatCurrentSession(mapping));
   });
 
   const replySessionList = async (ctx: Context): Promise<void> => {
@@ -103,10 +112,6 @@ export function createBot(token: string, bridge: BridgeService, botInfo: UserFro
     ]);
     await reply(ctx, bridge.formatSessionList(sessions, mapping?.session.sessionId));
   };
-
-  bot.command("sessions", async (ctx) => {
-    await replySessionList(ctx);
-  });
 
   bot.command("list", async (ctx) => {
     await replySessionList(ctx);
@@ -180,30 +185,6 @@ export function createBot(token: string, bridge: BridgeService, botInfo: UserFro
     await reply(ctx, result.found ? `Batch collection is active with ${result.count} message(s).` : "No active batch.");
   });
 
-  bot.command("startpair", async (ctx) => {
-    const botId = getBotId();
-    const chatId = String(ctx.chat.id);
-    const { args, rest } = parseCommand(ctx.message?.text, 1);
-    const target = args[0]?.toLowerCase();
-
-    if (!target || !["codex", "claude", "both"].includes(target)) {
-      await reply(ctx, "Usage: `/startpair codex [path]`, `/startpair claude [path]`, `/startpair both [path]`", {
-        parse_mode: "Markdown",
-      });
-      return;
-    }
-
-    if (target === "both") {
-      await bridge.startPair(botId, chatId, "codex", rest);
-      const mapping = await bridge.startPair(botId, chatId, "claude", rest);
-      await reply(ctx, `Started fresh Codex and Claude pairings.\n\n${bridge.formatStatus(mapping)}`);
-      return;
-    }
-
-    const mapping = await bridge.startPair(botId, chatId, target as Provider, rest);
-    await reply(ctx, `Started a fresh ${target} pairing.\n\n${bridge.formatStatus(mapping)}`);
-  });
-
   bot.command("attach", async (ctx) => {
     const botId = getBotId();
     const chatId = String(ctx.chat.id);
@@ -253,15 +234,17 @@ export function createBot(token: string, bridge: BridgeService, botInfo: UserFro
     const { args } = parseCommand(ctx.message?.text, 1);
     const mode = args[0]?.toLowerCase();
 
-    if (!mode || !["codex", "claude", "compare"].includes(mode)) {
-      await reply(ctx, "Usage: `/mode codex`, `/mode claude`, `/mode compare`", {
+    if (!mode || !["codex", "claude"].includes(mode)) {
+      await reply(ctx, "Usage: `/mode codex` or `/mode claude`", {
         parse_mode: "Markdown",
       });
       return;
     }
 
-    const mapping = await bridge.setMode(botId, chatId, mode as BridgeMode);
-    await reply(ctx, `Switched mode to ${mapping.session.mode}.\n\n${bridge.formatStatus(mapping)}`);
+    const mapping = await bridge.setMode(botId, chatId, mode as Provider);
+    await reply(ctx, `Switched mode to ${mapping.session.mode}.
+
+${bridge.formatStatus(mapping)}`);
   });
 
   bot.command("reset", async (ctx) => {

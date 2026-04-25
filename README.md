@@ -10,7 +10,7 @@ RemoteAgent is currently organized around five core capabilities.
 
 | Capability | What it means today | Status |
 | --- | --- | --- |
-| Telegram control | Telegram chat can create, attach, switch, inspect, and reset local sessions | Supported |
+| Telegram control | Telegram chat can start, attach, switch, inspect, and reset local sessions | Supported |
 | Terminal control | The owner can run restricted remote shell commands from Telegram | Supported with restrictions |
 | Telegram <-> Codex | A Telegram chat can start or attach to a Codex session and continue it | Supported |
 | Telegram <-> Claude Code | A Telegram chat can start or attach to a Claude Code session and continue it | Supported |
@@ -65,9 +65,7 @@ Current command surface implemented in `src/bot.ts`:
 | --- | --- |
 | `/start` | Shows the Telegram entry/help message |
 | `/help` | Shows the current command list |
-| `/session` | Shows the current session bound to this chat |
-| `/sessions` | Lists recent sessions |
-| `/list` | Alias for `/sessions` |
+| `/list` | Lists recent sessions |
 | `/new [path]` | Creates and binds a new RemoteAgent session |
 | `/switch <session>` | Rebinds this chat to an existing RemoteAgent session |
 | `/status` | Shows current session, workspace, provider, and sandbox state |
@@ -79,7 +77,6 @@ Current command surface implemented in `src/bot.ts`:
 | `/batch status` | Shows current batch state |
 | `/mode codex` | Routes new messages to Codex |
 | `/mode claude` | Routes new messages to Claude |
-| `/mode compare` | Routes the same message to both providers |
 
 ### 2. Terminal control
 
@@ -104,7 +101,7 @@ RemoteAgent supports both fresh Codex pairing and attach/resume.
 
 Current Codex entry commands:
 
-- `/startpair codex [path]`
+- `/start codex [path]`
 - `/attach codex <thread_id> [path]`
 - `/sandbox codex <read-only|workspace-write|danger-full-access>`
 
@@ -114,7 +111,6 @@ Current Codex behavior:
 - attach to existing `thread_id`
 - continue the same Codex session across turns
 - per-session sandbox selection
-- participate in `/mode compare`
 
 ### 4. Telegram and Claude Code
 
@@ -122,7 +118,7 @@ RemoteAgent also supports fresh Claude Code pairing and attach/resume.
 
 Current Claude entry commands:
 
-- `/startpair claude [path]`
+- `/start claude [path]`
 - `/attach claude <session_id> [path]`
 
 Current Claude behavior:
@@ -130,9 +126,6 @@ Current Claude behavior:
 - fresh pairing from Telegram
 - attach to existing `session_id`
 - continue the same Claude Code session across turns
-- participate in `/mode compare`
-
-The current bot also supports `/startpair both [path]` to bind Codex and Claude together for compare mode.
 
 ### 5. Telegram attachments
 
@@ -220,8 +213,8 @@ Then open Telegram and start with one of these common flows.
 
 ```text
 /start
-/startpair codex /path/to/project
-/startpair claude /path/to/project
+/start codex /path/to/project
+/start claude /path/to/project
 /attach codex <thread_id> /path/to/project
 /attach claude <session_id> /path/to/project
 ```

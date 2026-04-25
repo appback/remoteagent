@@ -13,7 +13,7 @@ if (fs.existsSync(installedEnvPath)) {
   dotenv.config({ path: installedEnvPath, override: true });
 }
 
-const VALID_MODES = new Set<BridgeMode>(["codex", "claude", "compare"]);
+const VALID_MODES = new Set<BridgeMode>(["codex", "claude"]);
 const VALID_CODEX_SANDBOX_MODES = new Set(["read-only", "workspace-write", "danger-full-access"]);
 
 function readRequired(name: string): string {

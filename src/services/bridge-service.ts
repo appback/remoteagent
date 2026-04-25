@@ -110,26 +110,9 @@ export class BridgeService {
   }
 
   async setMode(botId: string, chatId: string, mode: BridgeMode): Promise<ChatSession> {
-    if (mode === "compare") {
-      const chatSession = await this.requireChat(botId, chatId);
-      this.ensurePaired(chatSession, "codex");
-      this.ensurePaired(chatSession, "claude");
-      this.ensureConfigured("codex");
-      this.ensureConfigured("claude");
-    }
-
-    if (mode === "codex") {
-      const chatSession = await this.requireChat(botId, chatId);
-      this.ensurePaired(chatSession, "codex");
-      this.ensureConfigured("codex");
-    }
-
-    if (mode === "claude") {
-      const chatSession = await this.requireChat(botId, chatId);
-      this.ensurePaired(chatSession, "claude");
-      this.ensureConfigured("claude");
-    }
-
+    const chatSession = await this.requireChat(botId, chatId);
+    this.ensurePaired(chatSession, mode);
+    this.ensureConfigured(mode);
     return this.store.setModeForChat(botId, chatId, mode);
   }
 
@@ -230,7 +213,7 @@ export class BridgeService {
 
   formatStatus(chatSession: ChatSession | undefined): string {
     if (!chatSession) {
-      return "No paired session yet. Use `/startpair codex`, `/startpair claude`, or `/attach ...`.";
+      return "No paired session yet. Use `/start codex`, `/start claude`, or `/attach ...`.";
     }
 
     const { session } = chatSession;
@@ -313,17 +296,13 @@ export class BridgeService {
   }
 
   private resolveProviders(mode: BridgeMode): Provider[] {
-    if (mode === "compare") {
-      return ["codex", "claude"];
-    }
-
     return [mode];
   }
 
   private async requireChat(botId: string, chatId: string): Promise<ChatSession> {
     const chatSession = await this.store.getChatSession(botId, chatId);
     if (!chatSession) {
-      throw new Error("No paired session for this chat yet. Run `/startpair codex`, `/startpair claude`, or `/attach ...` first.");
+      throw new Error("No paired session for this chat yet. Run `/start codex`, `/start claude`, or `/attach ...` first.");
     }
 
     return chatSession;
@@ -331,7 +310,7 @@ export class BridgeService {
 
   private ensurePaired(chatSession: ChatSession, provider: Provider): void {
     if (!chatSession.session[provider]?.cwd) {
-      throw new Error(`This chat is not paired with ${provider}. Run \`/startpair ${provider}\` or \`/attach ${provider} <session_id>\`.`);
+      throw new Error(`This chat is not paired with ${provider}. Run \`/start ${provider}\` or \`/attach ${provider} <session_id>\`.`);
     }
   }
 

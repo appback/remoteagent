@@ -1,7 +1,7 @@
 export type Provider = "codex" | "claude";
 export type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 
-export type BridgeMode = Provider | "compare";
+export type BridgeMode = Provider;
 
 export type ProviderSession = {
   provider: Provider;

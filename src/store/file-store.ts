@@ -489,6 +489,10 @@ export class FileStore {
     session.createdAt = session.createdAt || session.updatedAt || new Date().toISOString();
     session.updatedAt = session.updatedAt || session.createdAt;
 
+    if (session.mode !== "codex" && session.mode !== "claude") {
+      session.mode = session.codex ? "codex" : session.claude ? "claude" : this.defaultMode;
+    }
+
     for (const provider of ["codex", "claude"] as Provider[]) {
       const binding = session[provider];
       if (binding && !binding.cwd) {
