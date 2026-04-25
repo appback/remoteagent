@@ -4,6 +4,16 @@ set -euo pipefail
 DATA_DIR="${DATA_DIR:-$HOME/.remoteagent}"
 PID_FILE="$DATA_DIR/remoteagent.pid"
 
+if command -v systemctl >/dev/null 2>&1 && systemctl cat remoteagent >/dev/null 2>&1; then
+  if sudo -n true >/dev/null 2>&1; then
+    sudo systemctl stop remoteagent
+    exit 0
+  fi
+
+  echo "remoteagent.service is installed. Use sudo systemctl stop remoteagent." >&2
+  exit 1
+fi
+
 if [ ! -f "$PID_FILE" ]; then
   echo "RemoteAgent is not running."
   exit 0

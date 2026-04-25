@@ -1,3 +1,7 @@
+import fs from "node:fs";
+import fsp from "node:fs/promises";
+import path from "node:path";
+import process from "node:process";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { CodexAdapter } from "./adapters/codex-adapter.js";
@@ -14,8 +18,12 @@ import type { Bot } from "grammy";
 import type { UserFromGetMe } from "grammy/types";
 
 const execFileAsync = promisify(execFile);
+let processLockPath: string | undefined;
 
 async function main(): Promise<void> {
+  processLockPath = await acquireProcessLock(config.dataDir);
+  registerProcessLifecycle();
+
   const store = new FileStore(config.dataDir, config.defaultMode);
   await store.init();
 
@@ -63,7 +71,8 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
-  console.error(error);
+  console.error("RemoteAgent fatal error:", error);
+  releaseProcessLockSync();
   process.exitCode = 1;
 });
 
@@ -163,4 +172,85 @@ function knownBotUsername(id: number): string | undefined {
     return "sqream_bot";
   }
   return undefined;
+}
+
+async function acquireProcessLock(dataDir: string): Promise<string> {
+  await fsp.mkdir(dataDir, { recursive: true });
+  const lockPath = path.join(dataDir, "remoteagent.lock");
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const handle = await fsp.open(lockPath, "wx");
+      await handle.writeFile(String(process.pid));
+      await handle.close();
+      return lockPath;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EEXIST") {
+        throw error;
+      }
+
+      const existingPid = Number.parseInt((await fsp.readFile(lockPath, "utf8").catch(() => "")).trim(), 10);
+      if (!Number.isFinite(existingPid) || !isProcessAlive(existingPid)) {
+        await fsp.rm(lockPath, { force: true }).catch(() => undefined);
+        continue;
+      }
+
+      throw new Error(`RemoteAgent is already running with PID ${existingPid}.`);
+    }
+  }
+
+  throw new Error("RemoteAgent could not acquire its process lock.");
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+function registerProcessLifecycle(): void {
+  process.on("unhandledRejection", (reason) => {
+    console.error("Unhandled promise rejection:", reason);
+  });
+
+  process.on("uncaughtException", (error) => {
+    console.error("Uncaught exception:", error);
+    releaseProcessLockSync();
+    process.exit(1);
+  });
+
+  process.once("SIGINT", () => {
+    console.error("Received SIGINT, shutting down RemoteAgent.");
+    releaseProcessLockSync();
+    process.exit(0);
+  });
+
+  process.once("SIGTERM", () => {
+    console.error("Received SIGTERM, shutting down RemoteAgent.");
+    releaseProcessLockSync();
+    process.exit(0);
+  });
+
+  process.once("exit", () => {
+    releaseProcessLockSync();
+  });
+}
+
+function releaseProcessLockSync(): void {
+  if (!processLockPath) {
+    return;
+  }
+
+  try {
+    const recordedPid = fs.readFileSync(processLockPath, "utf8").trim();
+    if (recordedPid === String(process.pid)) {
+      fs.rmSync(processLockPath, { force: true });
+    }
+  } catch {
+    // Ignore best-effort cleanup errors.
+  }
 }

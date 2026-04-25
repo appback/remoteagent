@@ -10,6 +10,17 @@ ENV_FILE="$DATA_DIR/.env"
 
 mkdir -p "$DATA_DIR" "$(dirname "$LOG_FILE")"
 
+if command -v systemctl >/dev/null 2>&1 && systemctl cat remoteagent >/dev/null 2>&1; then
+  if sudo -n true >/dev/null 2>&1; then
+    sudo systemctl start remoteagent
+    sudo systemctl status remoteagent --no-pager -l --lines=5 || true
+    exit 0
+  fi
+
+  echo "remoteagent.service is installed. Use sudo systemctl start remoteagent." >&2
+  exit 1
+fi
+
 if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
   echo "RemoteAgent is already running with PID $(cat "$PID_FILE")"
   exit 0

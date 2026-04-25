@@ -15,6 +15,8 @@ import type {
 import { FileStore } from "../store/file-store.js";
 
 export class BridgeService {
+  private readonly sessionLocks = new Map<string, Promise<void>>();
+
   constructor(
     private readonly store: FileStore,
     private readonly adapters: Partial<Record<Provider, ProviderAdapter>>,
@@ -206,7 +208,7 @@ export class BridgeService {
       text: message,
     });
 
-    return this.routeSession(chatSession.session, message, "telegram", botId, chatId);
+    return this.withSessionLock(chatSession.session.sessionId, () => this.routeSession(chatSession.session, message, "telegram", botId, chatId));
   }
 
   async routeSessionMessage(sessionId: string, message: string): Promise<ProviderResponse[]> {
@@ -223,7 +225,7 @@ export class BridgeService {
       text: message,
     });
 
-    return this.routeSession(session, message, "pc-ui");
+    return this.withSessionLock(session.sessionId, () => this.routeSession(session, message, "pc-ui"));
   }
 
   formatStatus(chatSession: ChatSession | undefined): string {
@@ -350,6 +352,27 @@ export class BridgeService {
 
   private async log(entry: LogEntry): Promise<void> {
     await this.store.appendLog(entry.remoteSessionId, JSON.stringify(entry));
+  }
+
+  private async withSessionLock<T>(sessionId: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.sessionLocks.get(sessionId) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const queued = previous.catch(() => undefined).then(() => current);
+    this.sessionLocks.set(sessionId, queued);
+
+    await previous.catch(() => undefined);
+
+    try {
+      return await task();
+    } finally {
+      release();
+      if (this.sessionLocks.get(sessionId) === queued) {
+        this.sessionLocks.delete(sessionId);
+      }
+    }
   }
 
   private async routeSession(
