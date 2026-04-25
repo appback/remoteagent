@@ -21,13 +21,13 @@ export class BridgeService {
     private readonly store: FileStore,
     private readonly adapters: Partial<Record<Provider, ProviderAdapter>>,
     private readonly defaultWorkspace: string,
+    private readonly availableProviders: Provider[],
+    private readonly preferredStartMode: BridgeMode,
   ) {}
 
   async createSession(botId: string, chatId: string, cwd?: string): Promise<ChatSession> {
-    const existing = await this.store.getChatSession(botId, chatId);
-    const workspace = this.resolveWorkspace(existing?.session.workspace, cwd);
-    await this.ensureWorkspaceExists(workspace);
-    return this.store.createSessionForChat(botId, chatId, workspace, existing?.session.mode);
+    const provider = await this.resolveStartProvider();
+    return this.startSession(botId, chatId, provider, cwd);
   }
 
   async switchSession(botId: string, chatId: string, sessionId: string): Promise<ChatSession> {
@@ -44,18 +44,23 @@ export class BridgeService {
     return this.store.bindChatToSession(botId, chatId, session.sessionId);
   }
 
-  async startPair(botId: string, chatId: string, provider: Provider, cwd?: string): Promise<ChatSession> {
+  async startSession(botId: string, chatId: string, provider: Provider, cwd?: string): Promise<ChatSession> {
+    this.ensureConfigured(provider);
+
     const existing = await this.store.getChatSession(botId, chatId);
-    const workspace = this.resolveWorkspace(existing?.session[provider]?.cwd ?? existing?.session.workspace, cwd);
+    const workspace = this.resolveWorkspace(existing?.session.workspace, cwd);
     await this.ensureWorkspaceExists(workspace);
 
-    return this.store.upsertProviderForChat(botId, chatId, provider, {
+    await this.store.createSessionForChat(botId, chatId, workspace, provider);
+    const chatSession = await this.store.upsertProviderForChat(botId, chatId, provider, {
       cwd: workspace,
       pairedAt: new Date().toISOString(),
       sessionId: undefined,
       model: provider === "codex" ? "gpt-5.4" : "sonnet",
       lastUsedAt: undefined,
     }, workspace);
+    await this.store.ensureDefaultStartMode(provider);
+    return chatSession;
   }
 
   async attachPair(
@@ -63,8 +68,9 @@ export class BridgeService {
     chatId: string,
     provider: Provider,
     sessionId: string,
-    cwd?: string,
   ): Promise<ChatSession> {
+    this.ensureConfigured(provider);
+
     const existing = await this.store.getChatSession(botId, chatId);
     const normalizedSessionId = sessionId.trim();
     if (!normalizedSessionId) {
@@ -73,19 +79,13 @@ export class BridgeService {
 
     let workspace: string;
     if (provider === "codex") {
-      const requestedWorkspace = cwd?.trim();
       const detectedWorkspace = await this.readCodexSessionWorkspace(normalizedSessionId);
 
       if (detectedWorkspace) {
-        if (requestedWorkspace && !this.pathsMatch(detectedWorkspace, requestedWorkspace)) {
-          throw new Error(
-            `Attach blocked: Codex session workspace is '${detectedWorkspace}', not provided '${requestedWorkspace}'. Omit the path or use the session's actual workspace.`,
-          );
-        }
         workspace = detectedWorkspace;
         await this.ensureWorkspaceExists(workspace);
       } else {
-        workspace = this.resolveWorkspace(existing?.session[provider]?.cwd ?? existing?.session.workspace, cwd);
+        workspace = this.resolveWorkspace(existing?.session[provider]?.cwd ?? existing?.session.workspace, undefined);
         await this.ensureWorkspaceExists(workspace);
         await this.verifyCodexAttachWorkspace(
           botId,
@@ -96,24 +96,73 @@ export class BridgeService {
         );
       }
     } else {
-      workspace = this.resolveWorkspace(existing?.session[provider]?.cwd ?? existing?.session.workspace, cwd);
+      workspace = this.resolveWorkspace(existing?.session[provider]?.cwd ?? existing?.session.workspace, undefined);
       await this.ensureWorkspaceExists(workspace);
     }
 
-    return this.store.upsertProviderForChat(botId, chatId, provider, {
+    const chatSession = await this.store.upsertProviderForChat(botId, chatId, provider, {
       cwd: workspace,
       pairedAt: new Date().toISOString(),
       sessionId: normalizedSessionId,
       model: existing?.session[provider]?.model ?? (provider === "codex" ? "gpt-5.4" : "sonnet"),
       lastUsedAt: undefined,
     }, workspace);
+    await this.store.ensureDefaultStartMode(provider);
+    return chatSession;
   }
 
-  async setMode(botId: string, chatId: string, mode: BridgeMode): Promise<ChatSession> {
-    const chatSession = await this.requireChat(botId, chatId);
-    this.ensurePaired(chatSession, mode);
-    this.ensureConfigured(mode);
-    return this.store.setModeForChat(botId, chatId, mode);
+  async resolveStartProvider(requested?: string): Promise<Provider> {
+    const normalized = requested?.trim().toLowerCase();
+    if (normalized) {
+      if (normalized !== "codex" && normalized !== "claude") {
+        throw new Error("Provider must be codex or claude.");
+      }
+
+      const explicit = normalized as Provider;
+      if (!this.isProviderAvailable(explicit)) {
+        throw new Error(this.formatInstallGuidance(explicit));
+      }
+      return explicit;
+    }
+
+    const savedDefault = await this.store.getDefaultStartMode();
+    const candidates = [savedDefault, this.preferredStartMode, ...this.availableProviders]
+      .filter((value, index, items): value is Provider => Boolean(value) && items.indexOf(value) === index);
+
+    const provider = candidates.find((item) => this.isProviderAvailable(item));
+    if (!provider) {
+      throw new Error(this.formatInstallGuidance());
+    }
+
+    return provider;
+  }
+
+  listAvailableProviders(): Provider[] {
+    return [...this.availableProviders];
+  }
+
+  formatInstallGuidance(requested?: Provider): string {
+    const available = this.listAvailableProviders();
+    const availableLine = available.length > 0
+      ? `Installed modes: ${available.join(", ")}`
+      : "Installed modes: none";
+
+    if (requested) {
+      const nextStep = requested === "claude"
+        ? "Install Claude Code on this machine and finish the CLI login, then run /start claude."
+        : "Install Codex CLI on this machine, then run /start codex.";
+      return [
+        `${requested} is not installed on this machine yet.`,
+        availableLine,
+        nextStep,
+      ].join("\n");
+    }
+
+    return [
+      "No installed coding mode was found on this machine.",
+      availableLine,
+      "Install Codex CLI or Claude Code first, then run /start, /start codex, or /start claude.",
+    ].join("\n");
   }
 
   async setCodexSandboxMode(botId: string, chatId: string, sandboxMode: CodexSandboxMode): Promise<ChatSession> {
@@ -213,7 +262,7 @@ export class BridgeService {
 
   formatStatus(chatSession: ChatSession | undefined): string {
     if (!chatSession) {
-      return "No paired session yet. Use `/start codex`, `/start claude`, or `/attach ...`.";
+      return "No paired session yet. Use /start, /start codex, /start claude, or /attach ...";
     }
 
     const { session } = chatSession;
@@ -324,9 +373,13 @@ export class BridgeService {
   }
 
   private ensureConfigured(provider: Provider): void {
-    if (!this.adapters[provider]) {
-      throw new Error(`${provider} adapter is not configured. Check the install and environment settings.`);
+    if (!this.isProviderAvailable(provider)) {
+      throw new Error(this.formatInstallGuidance(provider));
     }
+  }
+
+  private isProviderAvailable(provider: Provider): boolean {
+    return this.availableProviders.includes(provider) && Boolean(this.adapters[provider]);
   }
 
   private async log(entry: LogEntry): Promise<void> {

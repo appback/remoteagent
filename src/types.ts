@@ -39,9 +39,14 @@ export type ChatSession = {
   session: SessionRecord;
 };
 
+export type BridgeSettings = {
+  defaultStartMode?: Provider;
+};
+
 export type BridgeState = {
   chats: Record<string, ChatBinding>;
   sessions: Record<string, SessionRecord>;
+  settings: BridgeSettings;
 };
 
 export type ProviderRequest = {

@@ -25,7 +25,7 @@ type LegacyBridgeState = {
   chats: Record<string, LegacyChatMapping>;
 };
 
-const EMPTY_STATE: BridgeState = { chats: {}, sessions: {} };
+const EMPTY_STATE: BridgeState = { chats: {}, sessions: {}, settings: {} };
 
 export class FileStore {
   private readonly stateFile: string;
@@ -72,6 +72,21 @@ export class FileStore {
   async getSession(sessionId: string): Promise<SessionRecord | undefined> {
     const state = await this.readState();
     return state.sessions[sessionId];
+  }
+
+  async getDefaultStartMode(): Promise<Provider | undefined> {
+    const state = await this.readState();
+    return state.settings.defaultStartMode;
+  }
+
+  async ensureDefaultStartMode(provider: Provider): Promise<void> {
+    const state = await this.readState();
+    if (state.settings.defaultStartMode) {
+      return;
+    }
+
+    state.settings.defaultStartMode = provider;
+    await this.writeState(state);
   }
 
   async createSessionForChat(botId: string, chatId: string, workspace: string, mode?: BridgeMode): Promise<ChatSession> {
@@ -231,7 +246,7 @@ export class FileStore {
   }
 
   private async readStateFromDirectories(): Promise<BridgeState> {
-    const state: BridgeState = { chats: {}, sessions: {} };
+    const state: BridgeState = { chats: {}, sessions: {}, settings: {} };
 
     const sessionDirs = await fs.readdir(this.sessionsDir, { withFileTypes: true }).catch(() => []);
     for (const entry of sessionDirs) {
@@ -391,6 +406,7 @@ export class FileStore {
   private normalizeState(rawState: BridgeState | LegacyBridgeState): { state: BridgeState; migrated: boolean } {
     if ("sessions" in rawState) {
       const state = rawState as BridgeState;
+      state.settings = this.normalizeSettings(state.settings);
 
       for (const session of Object.values(state.sessions)) {
         this.normalizeSession(session);
@@ -400,7 +416,7 @@ export class FileStore {
     }
 
     const legacy = rawState as LegacyBridgeState;
-    const migrated: BridgeState = { chats: {}, sessions: {} };
+    const migrated: BridgeState = { chats: {}, sessions: {}, settings: {} };
 
     for (const [chatId, mapping] of Object.entries(legacy.chats || {})) {
       const sessionId = randomUUID();
@@ -433,6 +449,7 @@ export class FileStore {
     const state: BridgeState = {
       chats: { ...fallback.chats, ...primary.chats },
       sessions: { ...fallback.sessions, ...primary.sessions },
+      settings: this.normalizeSettings({ ...fallback.settings, ...primary.settings }),
     };
 
     for (const session of Object.values(state.sessions)) {
@@ -481,6 +498,14 @@ export class FileStore {
     }
 
     return state;
+  }
+
+  private normalizeSettings(settings: BridgeState["settings"] | undefined): BridgeState["settings"] {
+    const normalized = settings ? { ...settings } : {};
+    if (normalized.defaultStartMode !== "codex" && normalized.defaultStartMode !== "claude") {
+      delete normalized.defaultStartMode;
+    }
+    return normalized;
   }
 
   private normalizeSession(session: SessionRecord): SessionRecord {

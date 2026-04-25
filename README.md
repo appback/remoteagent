@@ -63,10 +63,10 @@ Current command surface implemented in `src/bot.ts`:
 
 | Command | What it does |
 | --- | --- |
-| `/start` | Shows the Telegram entry/help message |
+| `/start [codex|claude] [path]` | Starts a fresh fixed-mode session; without a mode it starts the saved default mode |
 | `/help` | Shows the current command list |
 | `/list` | Lists recent sessions |
-| `/new [path]` | Creates and binds a new RemoteAgent session |
+| `/new [path]` | Creates and binds a new session using the saved default mode |
 | `/switch <session>` | Rebinds this chat to an existing RemoteAgent session |
 | `/status` | Shows current session, workspace, provider, and sandbox state |
 | `/reset` | Clears the current chat binding |
@@ -75,8 +75,6 @@ Current command surface implemented in `src/bot.ts`:
 | `/batch done` | Alias for `/batch send` |
 | `/batch cancel` | Discards the current batch |
 | `/batch status` | Shows current batch state |
-| `/mode codex` | Routes new messages to Codex |
-| `/mode claude` | Routes new messages to Claude |
 
 ### 2. Terminal control
 
@@ -102,7 +100,7 @@ RemoteAgent supports both fresh Codex pairing and attach/resume.
 Current Codex entry commands:
 
 - `/start codex [path]`
-- `/attach codex <thread_id> [path]`
+- `/attach codex <thread_id>`
 - `/sandbox codex <read-only|workspace-write|danger-full-access>`
 
 Current Codex behavior:
@@ -119,7 +117,7 @@ RemoteAgent also supports fresh Claude Code pairing and attach/resume.
 Current Claude entry commands:
 
 - `/start claude [path]`
-- `/attach claude <session_id> [path]`
+- `/attach claude <session_id>`
 
 Current Claude behavior:
 
@@ -209,14 +207,14 @@ Useful runtime variables:
 .\scripts\start.ps1
 ```
 
-Then open Telegram and start with one of these common flows.
+Then open Telegram and start with one of these common flows. `/start` without a mode uses the saved default mode once a provider has been started or attached at least once.
 
 ```text
 /start
 /start codex /path/to/project
 /start claude /path/to/project
-/attach codex <thread_id> /path/to/project
-/attach claude <session_id> /path/to/project
+/attach codex <thread_id>
+/attach claude <session_id>
 ```
 
 Once a chat is bound, ordinary text messages continue the active session. Supported attachments can also be sent directly as normal Telegram messages.

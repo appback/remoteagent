@@ -2,7 +2,7 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
-import { execFile } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { promisify } from "node:util";
 import { CodexAdapter } from "./adapters/codex-adapter.js";
 import { ClaudeAdapter } from "./adapters/claude-adapter.js";
@@ -28,26 +28,32 @@ async function main(): Promise<void> {
   await store.init();
 
   const adapters: Partial<Record<Provider, ProviderAdapter>> = {};
-  if (config.commands.codex) {
-    adapters.codex = new ShellAdapter("codex", config.commands.codex, config.commandTimeoutMs);
-  } else {
-    adapters.codex = new CodexAdapter(
-      config.codexBin,
-      config.commandTimeoutMs,
-      config.codexSandboxMode,
-    );
-  }
-  if (config.commands.claude) {
-    adapters.claude = new ShellAdapter("claude", config.commands.claude, config.commandTimeoutMs);
-  } else {
-    adapters.claude = new ClaudeAdapter(
-      config.claudeBin,
-      config.commandTimeoutMs,
-      config.claudePermissionMode,
-    );
+  const availableProviders: Provider[] = [];
+
+  if (config.commands.codex || commandExists(config.codexBin)) {
+    adapters.codex = config.commands.codex
+      ? new ShellAdapter("codex", config.commands.codex, config.commandTimeoutMs)
+      : new CodexAdapter(
+        config.codexBin,
+        config.commandTimeoutMs,
+        config.codexSandboxMode,
+      );
+    availableProviders.push("codex");
   }
 
-  const bridge = new BridgeService(store, adapters, config.defaultWorkspace);
+  if (config.commands.claude || commandExists(config.claudeBin)) {
+    adapters.claude = config.commands.claude
+      ? new ShellAdapter("claude", config.commands.claude, config.commandTimeoutMs)
+      : new ClaudeAdapter(
+        config.claudeBin,
+        config.commandTimeoutMs,
+        config.claudePermissionMode,
+      );
+    availableProviders.push("claude");
+  }
+
+  console.log(`Available providers: ${availableProviders.length > 0 ? availableProviders.join(", ") : "none"}`);
+  const bridge = new BridgeService(store, adapters, config.defaultWorkspace, availableProviders, config.defaultMode);
   if (config.localUiEnabled) {
     const localUi = new LocalUiService(bridge, config.localUiHost, config.localUiPort);
     await localUi.start()
@@ -173,6 +179,24 @@ function knownBotUsername(id: number): string | undefined {
   }
   return undefined;
 }
+
+function commandExists(command: string): boolean {
+  const trimmed = command.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  if (trimmed.includes("/") || trimmed.includes("\\")) {
+    return fs.existsSync(trimmed);
+  }
+
+  if (process.platform === "win32") {
+    return spawnSync("where", [trimmed], { stdio: "ignore" }).status === 0;
+  }
+
+  return spawnSync("sh", ["-lc", 'command -v "$0" >/dev/null 2>&1', trimmed], { stdio: "ignore" }).status === 0;
+}
+
 
 async function acquireProcessLock(dataDir: string): Promise<string> {
   await fsp.mkdir(dataDir, { recursive: true });
