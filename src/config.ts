@@ -131,6 +131,9 @@ function readCodexSandboxMode(name: string): "read-only" | "workspace-write" | "
   return value as "read-only" | "workspace-write" | "danger-full-access";
 }
 
+const codexCommand = readOptional("CODEX_COMMAND");
+const claudeCommand = readOptional("CLAUDE_COMMAND");
+
 export const config = {
   telegramBotTokens: readTelegramBotTokens(),
   telegramBotUsernames: readTelegramBotUsernames(),
@@ -140,15 +143,20 @@ export const config = {
   defaultMode: readMode("DEFAULT_MODE", "codex"),
   defaultWorkspace: path.resolve(process.env.DEFAULT_WORKSPACE?.trim() || os.homedir()),
   commandTimeoutMs: readTimeout("COMMAND_TIMEOUT_MS", 120_000),
+  setupCommandTimeoutMs: readTimeout("SETUP_COMMAND_TIMEOUT_MS", 600_000),
   codexBin: readOptional("CODEX_BIN") || "codex",
   codexSandboxMode: readCodexSandboxMode("CODEX_SANDBOX_MODE"),
+  codexInstallCommand: readOptional("CODEX_INSTALL_COMMAND"),
   claudeBin: readOptional("CLAUDE_BIN") || "claude",
   claudePermissionMode: readOptional("CLAUDE_PERMISSION_MODE") || "bypassPermissions",
+  claudeInstallCommand: readOptional("CLAUDE_INSTALL_COMMAND"),
+  claudeLoginStartCommand: readOptional("CLAUDE_LOGIN_START_COMMAND"),
+  claudeLoginFinishCommand: readOptional("CLAUDE_LOGIN_FINISH_COMMAND"),
   localUiEnabled: readBoolean("LOCAL_UI_ENABLED", true),
   localUiHost: readOptional("LOCAL_UI_HOST") || "127.0.0.1",
   localUiPort: readPort("LOCAL_UI_PORT", 3794),
   commands: {
-    codex: readOptional("CODEX_COMMAND"),
-    claude: readOptional("CLAUDE_COMMAND"),
+    codex: codexCommand,
+    claude: claudeCommand,
   } satisfies Record<Provider, string | undefined>,
 };

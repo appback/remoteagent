@@ -21,7 +21,7 @@ export class BridgeService {
     private readonly store: FileStore,
     private readonly adapters: Partial<Record<Provider, ProviderAdapter>>,
     private readonly defaultWorkspace: string,
-    private readonly availableProviders: Provider[],
+    private readonly isProviderInstalled: (provider: Provider) => boolean,
     private readonly preferredStartMode: BridgeMode,
   ) {}
 
@@ -126,7 +126,7 @@ export class BridgeService {
     }
 
     const savedDefault = await this.store.getDefaultStartMode();
-    const candidates = [savedDefault, this.preferredStartMode, ...this.availableProviders]
+    const candidates = [savedDefault, this.preferredStartMode, ...this.listAvailableProviders()]
       .filter((value, index, items): value is Provider => Boolean(value) && items.indexOf(value) === index);
 
     const provider = candidates.find((item) => this.isProviderAvailable(item));
@@ -138,7 +138,13 @@ export class BridgeService {
   }
 
   listAvailableProviders(): Provider[] {
-    return [...this.availableProviders];
+    return (["codex", "claude"] as const).filter((provider) => this.isProviderAvailable(provider));
+  }
+
+  async rememberDefaultStartMode(provider: Provider): Promise<void> {
+    if (this.isProviderAvailable(provider)) {
+      await this.store.ensureDefaultStartMode(provider);
+    }
   }
 
   formatInstallGuidance(requested?: Provider): string {
@@ -149,8 +155,8 @@ export class BridgeService {
 
     if (requested) {
       const nextStep = requested === "claude"
-        ? "Install Claude Code on this machine and finish the CLI login, then run /start claude."
-        : "Install Codex CLI on this machine, then run /start codex.";
+        ? "Install Claude Code on this machine with /install claude, finish the CLI login with /login claude, then run /start claude."
+        : "Install Codex CLI on this machine, then run /install codex or /start codex.";
       return [
         `${requested} is not installed on this machine yet.`,
         availableLine,
@@ -161,7 +167,7 @@ export class BridgeService {
     return [
       "No installed coding mode was found on this machine.",
       availableLine,
-      "Install Codex CLI or Claude Code first, then run /start, /start codex, or /start claude.",
+      "Install Codex CLI or Claude Code first. You can run /install codex or /install claude, then use /start.",
     ].join("\n");
   }
 
@@ -379,7 +385,7 @@ export class BridgeService {
   }
 
   private isProviderAvailable(provider: Provider): boolean {
-    return this.availableProviders.includes(provider) && Boolean(this.adapters[provider]);
+    return this.isProviderInstalled(provider) && Boolean(this.adapters[provider]);
   }
 
   private async log(entry: LogEntry): Promise<void> {

@@ -69,6 +69,8 @@ Current command surface implemented in `src/bot.ts`:
 | `/new [path]` | Creates and binds a new session using the saved default mode |
 | `/switch <session>` | Rebinds this chat to an existing RemoteAgent session |
 | `/status` | Shows current session, workspace, provider, and sandbox state |
+| `/install codex\|claude` | Runs the configured provider install command for the bot owner |
+| `/login claude [token]` | Starts or finishes the configured Claude Code login flow for the bot owner |
 | `/reset` | Clears the current chat binding |
 | `/batch start` | Starts manual batching of multiple text messages |
 | `/batch send` | Sends the collected batch |
@@ -124,6 +126,7 @@ Current Claude behavior:
 - fresh pairing from Telegram
 - attach to existing `session_id`
 - continue the same Claude Code session across turns
+- optional owner-only install/login flow through `/install claude` and `/login claude [token]`
 
 ### 5. Telegram attachments
 
@@ -177,16 +180,23 @@ Typical directories and files include:
 
 Useful runtime variables:
 
+Provider install/login hooks are optional and are executed only from owner-only Telegram commands.
+
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_BOT_TOKENS`
 - `TELEGRAM_OWNER_ID`
 - `DEFAULT_WORKSPACE`
 - `COMMAND_TIMEOUT_MS`
+- `SETUP_COMMAND_TIMEOUT_MS`
 - `CODEX_BIN`
 - `CODEX_SANDBOX_MODE`
+- `CODEX_INSTALL_COMMAND`
 - `CLAUDE_BIN`
 - `CLAUDE_COMMAND`
 - `CLAUDE_PERMISSION_MODE`
+- `CLAUDE_INSTALL_COMMAND`
+- `CLAUDE_LOGIN_START_COMMAND`
+- `CLAUDE_LOGIN_FINISH_COMMAND`
 - `LOCAL_UI_ENABLED`
 - `LOCAL_UI_HOST`
 - `LOCAL_UI_PORT`
@@ -213,6 +223,10 @@ Then open Telegram and start with one of these common flows. `/start` without a 
 /start
 /start codex /path/to/project
 /start claude /path/to/project
+/install codex
+/install claude
+/login claude
+/login claude <token>
 /attach codex <thread_id>
 /attach claude <session_id>
 ```

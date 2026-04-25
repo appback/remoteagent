@@ -27,33 +27,35 @@ async function main(): Promise<void> {
   const store = new FileStore(config.dataDir, config.defaultMode);
   await store.init();
 
-  const adapters: Partial<Record<Provider, ProviderAdapter>> = {};
-  const availableProviders: Provider[] = [];
-
-  if (config.commands.codex || commandExists(config.codexBin)) {
-    adapters.codex = config.commands.codex
+  const adapters: Partial<Record<Provider, ProviderAdapter>> = {
+    codex: config.commands.codex
       ? new ShellAdapter("codex", config.commands.codex, config.commandTimeoutMs)
       : new CodexAdapter(
         config.codexBin,
         config.commandTimeoutMs,
         config.codexSandboxMode,
-      );
-    availableProviders.push("codex");
-  }
-
-  if (config.commands.claude || commandExists(config.claudeBin)) {
-    adapters.claude = config.commands.claude
+      ),
+    claude: config.commands.claude
       ? new ShellAdapter("claude", config.commands.claude, config.commandTimeoutMs)
       : new ClaudeAdapter(
         config.claudeBin,
         config.commandTimeoutMs,
         config.claudePermissionMode,
-      );
-    availableProviders.push("claude");
-  }
+      ),
+  };
 
+  const isProviderInstalled = (provider: Provider): boolean => {
+    if (config.commands[provider]) {
+      return true;
+    }
+    return provider === "codex"
+      ? commandExists(config.codexBin)
+      : commandExists(config.claudeBin);
+  };
+
+  const availableProviders = (["codex", "claude"] as const).filter((provider) => isProviderInstalled(provider));
   console.log(`Available providers: ${availableProviders.length > 0 ? availableProviders.join(", ") : "none"}`);
-  const bridge = new BridgeService(store, adapters, config.defaultWorkspace, availableProviders, config.defaultMode);
+  const bridge = new BridgeService(store, adapters, config.defaultWorkspace, isProviderInstalled, config.defaultMode);
   if (config.localUiEnabled) {
     const localUi = new LocalUiService(bridge, config.localUiHost, config.localUiPort);
     await localUi.start()

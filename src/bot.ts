@@ -7,6 +7,7 @@ import { Bot, GrammyError, HttpError } from "grammy";
 import type { Context } from "grammy";
 import { config } from "./config.js";
 import { BridgeService } from "./services/bridge-service.js";
+import { ProviderSetupService } from "./services/provider-setup-service.js";
 import { RemoteShellService } from "./services/remote-shell-service.js";
 import type { ChatSession, CodexSandboxMode, Provider } from "./types.js";
 import type { UserFromGetMe } from "grammy/types";
@@ -25,6 +26,8 @@ const HELP_TEXT = [
   "/attach claude <session_id>",
   "/sandbox codex <read-only|workspace-write|danger-full-access>",
   "/status",
+  "/install codex|claude",
+  "/login claude [token]",
   "/reset",
   "/! <command>",
   "/!cmd <command>",
@@ -34,6 +37,16 @@ const HELP_TEXT = [
 export function createBot(token: string, bridge: BridgeService, botInfo: UserFromGetMe): Bot {
   const bot = new Bot(token, { botInfo });
   const shellService = new RemoteShellService(config.commandTimeoutMs);
+  const setupService = new ProviderSetupService(
+    config.setupCommandTimeoutMs,
+    (provider) => bridge.listAvailableProviders().includes(provider),
+    {
+      codex: config.codexInstallCommand,
+      claude: config.claudeInstallCommand,
+    },
+    config.claudeLoginStartCommand,
+    config.claudeLoginFinishCommand,
+  );
   const messageBatcher = new TelegramMessageBatcher(
     config.telegramMessageBatchMs,
     async (target, botId, chatId, text) => {
@@ -197,6 +210,44 @@ ${bridge.formatStatus(mapping)}`);
     const chatId = String(ctx.chat.id);
     const mapping = await bridge.status(botId, chatId);
     await reply(ctx, bridge.formatStatus(mapping));
+  });
+
+  bot.command("install", async (ctx) => {
+    await ensureOwnerControlAccess(ctx);
+    const { args } = parseCommand(ctx.message?.text, 1);
+    const provider = args[0]?.toLowerCase();
+
+    if (!provider || !["codex", "claude"].includes(provider)) {
+      await reply(ctx, "Usage: `/install codex` or `/install claude`", { parse_mode: "Markdown" });
+      return;
+    }
+
+    await runWithPendingAnimation(token, ctx.chat.id, async () => {
+      const result = await setupService.install(provider as Provider);
+      if (result.after) {
+        await bridge.rememberDefaultStartMode(provider as Provider);
+      }
+      return { chunks: flattenChunks([result.output], 3900) };
+    });
+  });
+
+  bot.command("login", async (ctx) => {
+    await ensureOwnerControlAccess(ctx);
+    const { args, rest } = parseCommand(ctx.message?.text, 1);
+    const provider = args[0]?.toLowerCase();
+
+    if (provider !== "claude") {
+      await reply(ctx, "Usage: `/login claude` or `/login claude <token>`", { parse_mode: "Markdown" });
+      return;
+    }
+
+    await runWithPendingAnimation(token, ctx.chat.id, async () => {
+      const output = rest?.trim()
+        ? await setupService.finishClaudeLogin(rest)
+        : await setupService.startClaudeLogin();
+      await bridge.rememberDefaultStartMode("claude");
+      return { chunks: flattenChunks([output], 3900) };
+    });
   });
 
   bot.command("sandbox", async (ctx) => {
@@ -508,6 +559,20 @@ async function runWithPendingAnimation(
     });
   } finally {
     clearInterval(pendingLoop);
+  }
+}
+
+async function ensureOwnerControlAccess(ctx: Context): Promise<void> {
+  if (ctx.chat?.type !== "private") {
+    throw new Error("This command is available only in private 1:1 chats.");
+  }
+
+  if (!config.telegramOwnerId) {
+    throw new Error("This command is disabled until TELEGRAM_OWNER_ID is configured.");
+  }
+
+  if (String(ctx.from?.id ?? "") !== config.telegramOwnerId) {
+    throw new Error("This command is available only to the configured bot owner.");
   }
 }
 
