@@ -1,196 +1,183 @@
 # RemoteAgent
 
-Personal installable session server for continuing local AI work across PC and Telegram.
+RemoteAgent is a personal installable runtime for controlling coding sessions from Telegram and the terminal.
 
-## Goal
+It is built for one owner running their own agents on their own machine, then continuing that work remotely without introducing a hosted multi-user backend.
 
-RemoteAgent is for a single owner running their own AI work from their own work PC.
+## What it does
 
-The target workflow is simple:
+RemoteAgent is currently organized around five core capabilities.
 
-1. Start or resume a session on the work PC.
-2. Continue that same session from Telegram while away from the desk.
-3. Come back to the PC and keep going from the same session context.
-
-This repository is not aiming at a hosted multi-user SaaS. It is a personal, installable runtime for one person's own accounts, own machine, and own workspaces.
+| Capability | What it means today | Status |
+| --- | --- | --- |
+| Telegram control | Telegram chat can create, attach, switch, inspect, and reset local sessions | Supported |
+| Terminal control | The owner can run restricted remote shell commands from Telegram | Supported with restrictions |
+| Telegram <-> Codex | A Telegram chat can start or attach to a Codex session and continue it | Supported |
+| Telegram <-> Claude Code | A Telegram chat can start or attach to a Claude Code session and continue it | Supported |
+| Telegram attachments | Telegram can send images, text, Markdown, PDF, archives, and audio/voice inputs into the runtime | Supported |
 
 ## Product direction
 
-RemoteAgent is moving from a Telegram bridge toward a personal session runtime:
+RemoteAgent is an installable personal runtime, not a hosted SaaS.
 
-- the work PC is the source of truth
-- sessions are stored locally
-- Telegram is a remote client for those sessions
-- a future local PC chat UI will use the same session server
-- providers such as Codex, Claude, and OpenClaw will sit behind a shared session model
+The intended shape is:
 
-Today the repository already supports:
+1. the machine running RemoteAgent is the source of truth
+2. Telegram is a remote client for that runtime
+3. Codex and Claude Code are provider adapters behind one local session model
+4. terminal control is an owner-only extension of that same runtime
+5. files sent from Telegram are materialized locally and then routed through the active session
 
-- `/session`
-- `/sessions`
+This repository is optimized for continuity:
+
+- start work on the machine
+- continue from Telegram
+- come back and keep going from the same runtime-owned session state
+
+## Current scope
+
+In scope:
+
+- one owner
+- one installable local runtime
+- local session persistence
+- Telegram control
+- Codex and Claude Code adapters
+- restricted terminal control
+- Telegram attachment intake
+
+Out of scope:
+
+- multi-tenant hosted backend
+- account resale
+- team-facing SaaS control plane
+- pretending to mirror official desktop apps exactly
+
+## Current capabilities
+
+### 1. Telegram control
+
+Telegram is the main remote control surface today.
+
+Current session-oriented commands include:
+
 - `/new [path]`
-- `/switch <session_id>`
+- `/switch <session>`
+- `/list`
+- `/status`
+- `/reset`
 - `/batch start|send|cancel|status`
-- local PC chat UI at `http://127.0.0.1:3794` by default
+
+Provider binding commands include:
+
 - `/startpair codex [path]`
 - `/startpair claude [path]`
-- `/startpair both [path]`
 - `/attach codex <thread_id> [path]`
 - `/attach claude <session_id> [path]`
 - `/sandbox codex <read-only|workspace-write|danger-full-access>`
+
+### 2. Terminal control
+
+Remote shell control is available through:
+
 - `/! <command>`
 - `/!cmd <command>`
 - `/!bash <command>`
-- `/status`
-- `/mode codex|claude|compare`
-- `/reset`
 
-The important capability is attach/resume:
+This is intentionally restricted.
 
-- Codex chats can bind to an existing `thread_id`
-- Claude chats can bind to an existing `session_id`
-- each Telegram chat keeps its own provider, workspace, and session metadata
+Remote shell requires all of the following:
 
-## Current commands
+- private 1:1 Telegram chat
+- sender matches `TELEGRAM_OWNER_ID`
+- active Codex binding exists
+- current Codex sandbox is `danger-full-access`
 
-| Command | Purpose | Status |
-| --- | --- | --- |
-| `/startpair codex [path]` | Start a fresh Codex pairing for this Telegram chat | Supported |
-| `/startpair claude [path]` | Start a fresh Claude pairing for this Telegram chat | Supported |
-| `/startpair both [path]` | Pair Codex and Claude together for compare mode | Supported |
-| `/attach codex <thread_id> [path]` | Attach this chat to an existing Codex session | Supported |
-| `/attach claude <session_id> [path]` | Attach this chat to an existing Claude session | Supported |
-| `/session` | Show the current RemoteAgent session bound to this chat | Supported |
-| `/sessions` | List recent RemoteAgent sessions | Supported |
-| `/new [path]` | Create a new RemoteAgent session and bind this chat to it | Supported |
-| `/switch <session_id>` | Rebind this chat to an existing RemoteAgent session | Supported |
-| `/batch start` | Start collecting multiple Telegram text messages into one provider prompt | Supported |
-| `/batch send` | Send the collected Telegram text messages as one provider prompt | Supported |
-| `/batch cancel` | Discard the current collected batch | Supported |
-| `/batch status` | Show whether batch collection is active | Supported |
-| `/status` | Show current RemoteAgent session, workspace, provider session ids, and sandbox state | Supported |
-| `/mode codex` | Route new messages to Codex only | Supported |
-| `/mode claude` | Route new messages to Claude only | Supported |
-| `/mode compare` | Route the same message to both providers | Supported |
-| `/sandbox codex <read-only|workspace-write|danger-full-access>` | Change Codex sandbox mode for the current chat session | Supported |
-| `/! <command>` | Run a native shell command in the current workspace | Supported with restrictions |
-| `/!cmd <command>` | Run a `cmd.exe` command on Windows | Supported with restrictions |
-| `/!bash <command>` | Run a `bash -lc` command | Supported with restrictions |
-| `/reset` | Clear the current chat binding from the active RemoteAgent session | Supported |
+### 3. Telegram and Codex
+
+RemoteAgent supports both fresh Codex pairing and attach/resume.
+
+Current Codex behavior:
+
+- fresh pairing from Telegram
+- attach to existing `thread_id`
+- continue the same Codex session across turns
+- per-session sandbox selection
+
+### 4. Telegram and Claude Code
+
+RemoteAgent also supports fresh Claude Code pairing and attach/resume.
+
+Current Claude behavior:
+
+- fresh pairing from Telegram
+- attach to existing `session_id`
+- continue the same Claude Code session across turns
+
+Claude does not currently expose the same Telegram sandbox control surface that Codex does.
+
+### 5. Telegram attachments
+
+Telegram attachments are written into the local runtime under `~/.remoteagent/uploads/telegram/...` and then routed through the active session.
+
+Current supported attachment classes:
+
+- photos
+- image files
+- text files
+- Markdown files
+- PDF documents
+- archive files
+- voice messages
+- audio files
+
+The runtime transport for attachments is implemented. User-facing response policy for attachment results is still being improved.
 
 ## Provider support matrix
 
 | Capability | Codex | Claude Code | OpenClaw |
 | --- | --- | --- | --- |
-| Fresh session from Telegram | Yes | Yes | Planned |
-| Attach to existing session | Yes (`thread_id`) | Yes (`session_id`) | Planned |
+| Fresh Telegram pairing | Yes | Yes | Planned |
+| Attach to existing session | Yes | Yes | Planned |
 | Resume same session across turns | Yes | Yes | Planned |
-| Compare mode participation | Yes | Yes | Planned |
-| Per-session sandbox control | Yes | No | Planned |
-| `read-only` mode | Yes | N/A | Planned |
-| `workspace-write` mode | Yes | N/A | Planned |
-| `danger-full-access` mode | Yes | N/A | Planned |
-| Restricted remote shell (`/!`) | Yes, when allowed | No | Planned |
-| Current production adapter in this repo | Yes | Yes | No |
-| Local PC chat UI integration | Planned | Planned | Planned |
+| Telegram-based remote shell participation | Yes | No | Planned |
+| Per-session sandbox control from Telegram | Yes | No | Planned |
+| Attachment routing through active session | Yes | Yes | Planned |
+| Production adapter in this repo | Yes | Yes | No |
 
-Notes:
-
-- Codex sandbox control is exposed through `/sandbox codex ...`.
-- Remote shell commands are allowed only for the configured bot owner, only in private 1:1 chats, and only when the current Codex session sandbox is `danger-full-access`.
-- Claude currently follows its adapter/runtime settings and does not have an equivalent Telegram sandbox command in this repo.
-- OpenClaw is part of the planned architecture, but not implemented yet.
-
-## Architecture
-
-The high-level architecture is documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-The first implementation scope is documented in [docs/MVP.md](docs/MVP.md).
-
-## Operations
-
-Operational ownership and deployment rules are documented in [docs/OPERATIONS.md](docs/OPERATIONS.md).
-Reference notes about `cokacdir` and how RemoteAgent differs are documented in [docs/COKACDIR_NOTES.md](docs/COKACDIR_NOTES.md).
-
-In short:
-
-```text
-Telegram <-> RemoteAgent session server on work PC <-> provider adapters
-                                              |-> Codex
-                                              |-> Claude
-                                              |-> OpenClaw (planned)
-                                              |-> future local PC chat UI
-```
-
-## Scope
-
-In scope:
-
-- personal installation on a work PC
-- single-owner usage
-- local session persistence
-- Telegram-based resume and control
-- provider adapters with a shared session model
-
-Out of scope for this repo direction:
-
-- multi-tenant hosted service
-- account resale or shared access
-- pretending to mirror the internal state of official desktop apps exactly
-
-## Installable layout
+## Runtime layout
 
 Installed runtime data lives in:
 
 - Linux/macOS: `~/.remoteagent`
-- Windows: `%USERPROFILE%\\.remoteagent`
+- Windows: `%USERPROFILE%\.remoteagent`
 
-The app loads configuration from:
+Typical directories and files include:
 
-1. repo root `.env`
-2. installed config `~/.remoteagent/.env` or `%USERPROFILE%\\.remoteagent\\.env`
-
-Installed state lives in `state.json` under that same directory.
+- `.env`
+- `logs/`
+- `uploads/telegram/`
+- `sessions/`
+- `channels/telegram/`
+- `state.json`
 
 ## Environment
 
-Required:
+Useful runtime variables:
 
 - `TELEGRAM_BOT_TOKEN`
-
-Optional multi-bot:
-
 - `TELEGRAM_BOT_TOKENS`
-
-Useful:
-
-- `DEFAULT_WORKSPACE`
 - `TELEGRAM_OWNER_ID`
-- `TELEGRAM_MESSAGE_BATCH_MS`
+- `DEFAULT_WORKSPACE`
+- `COMMAND_TIMEOUT_MS`
 - `CODEX_BIN`
 - `CODEX_SANDBOX_MODE`
 - `CLAUDE_BIN`
 - `CLAUDE_COMMAND`
 - `CLAUDE_PERMISSION_MODE`
-- `COMMAND_TIMEOUT_MS`
 - `LOCAL_UI_ENABLED`
 - `LOCAL_UI_HOST`
 - `LOCAL_UI_PORT`
-
-`TELEGRAM_BOT_TOKENS` may contain multiple bot tokens separated by commas or new lines. If it is set, RemoteAgent starts one Telegram bot per token and keeps them all attached to the same local session runtime. If it is not set, `TELEGRAM_BOT_TOKEN` is used as the single-bot fallback.
-
-`TELEGRAM_MESSAGE_BATCH_MS` controls how long RemoteAgent waits for additional plain-text Telegram messages before sending them to the active provider as one combined prompt. It defaults to `1500`; set it to `0` to disable batching.
-
-For long logs that Telegram may split across multiple messages, use explicit batch mode:
-
-```text
-/batch start
-<send the log fragments>
-/batch send
-```
-
-`CODEX_BIN` defaults to `codex`, and `CLAUDE_BIN` defaults to `claude`. `CODEX_SANDBOX_MODE` may be set to `read-only`, `workspace-write`, or `danger-full-access`. If you need custom wrappers instead, set `CODEX_COMMAND` or `CLAUDE_COMMAND`.
-
-The local PC chat UI is enabled by default on `127.0.0.1:3794`. Set `LOCAL_UI_ENABLED=false` to disable it, or set `LOCAL_UI_HOST` and `LOCAL_UI_PORT` to change the bind address.
 
 ## Quick start
 
@@ -208,18 +195,22 @@ The local PC chat UI is enabled by default on `127.0.0.1:3794`. Set `LOCAL_UI_EN
 .\scripts\start.ps1
 ```
 
-Then open Telegram and run one of these:
+Then open Telegram and use one of the current entry commands.
 
 ```text
-/startpair codex C:\path\to\project
-/attach codex <thread_id> C:\path\to\project
+/startpair codex /path/to/project
+/attach codex <thread_id> /path/to/project
 ```
 
-Open the local PC chat UI at:
+## Architecture and operations
 
-```text
-http://127.0.0.1:3794
-```
+High-level architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+
+MVP scope: [docs/MVP.md](docs/MVP.md)
+
+Operational ownership and deployment rules: [docs/OPERATIONS.md](docs/OPERATIONS.md)
+
+Reference notes about `cokacdir`: [docs/COKACDIR_NOTES.md](docs/COKACDIR_NOTES.md)
 
 ## Development
 

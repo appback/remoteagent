@@ -2,140 +2,131 @@
 
 ## Intent
 
-RemoteAgent is a personal installable runtime for continuing the same AI work session across:
+RemoteAgent is a personal installable runtime for five primary jobs:
 
-- the work PC
-- Telegram
-- a future local PC chat UI
+1. Telegram control
+2. terminal control
+3. Telegram to Codex session continuity
+4. Telegram to Claude Code session continuity
+5. Telegram attachment intake for images, documents, and related files
 
-The work PC is the source of truth.
+The runtime machine is the source of truth.
+Telegram is a client of that runtime, not the owner of the session state.
 
 ## Core principles
 
-1. One owner, one machine, local control.
-2. Sessions belong to the local runtime, not to a hosted backend.
-3. Channels such as Telegram and the future PC UI are clients of the same session server.
-4. Providers such as Codex, Claude, and OpenClaw are adapters behind a shared model.
-5. Workspaces, session ids, logs, and routing state are persisted locally.
+1. One owner, one runtime, local control.
+2. Sessions belong to the local runtime.
+3. Telegram is a remote control surface over those sessions.
+4. Codex and Claude Code are adapters behind a shared local session model.
+5. Terminal control is gated and attached to runtime-owned session state.
+6. Telegram attachments are materialized locally before provider routing.
+7. Process ownership must remain single-instance and deterministic.
 
 ## System shape
 
 ```text
-                           +----------------------+
-                           |   Telegram Client    |
-                           +----------+-----------+
-                                      |
-                                      v
-                    +---------------------------------------+
-                    | RemoteAgent Session Server            |
-                    | running on the work PC               |
-                    |                                       |
-                    | - chat/session registry               |
-                    | - local state store                   |
-                    | - message log                         |
-                    | - provider router                     |
-                    | - workspace guardrails                |
-                    +----+----------------+-----------------+
-                         |                |
-                         |                +----------------------+
-                         v                                       v
-              +------------------+                    +------------------+
-              | Codex Adapter    |                    | Claude Adapter   |
-              +------------------+                    +------------------+
-                         |
-                         +----------------------+
-                                                |
-                                                v
-                                      +------------------+
-                                      | OpenClaw Adapter |
-                                      | planned          |
-                                      +------------------+
-
-                    future:
-                    +----------------------+
-                    | Local PC Chat UI     |
-                    +----------------------+
+Telegram client
+  -> RemoteAgent runtime on the owner machine
+       -> session store
+       -> chat/session bindings
+       -> event logs
+       -> attachment store
+       -> provider router
+       -> owner-only terminal gateway
+       -> Codex adapter
+       -> Claude Code adapter
+       -> future providers
 ```
 
-## Session model
+## Main subsystems
 
-Each Telegram chat maps to one logical session binding.
+### Telegram control layer
 
-The next-step directory-backed session plan is documented in [SESSION_DIRECTORY_PLAN.md](./SESSION_DIRECTORY_PLAN.md).
+Responsibilities:
 
-Current stored data per provider includes:
+- accept Telegram commands and messages
+- bind chats to runtime sessions
+- expose status/list/switch/reset flows
+- accept attachments and route them to the active session
+- gate privileged commands such as remote shell
 
-- provider
-- workspace path
-- paired time
-- session id or thread id
-- model
-- last used time
+### Session layer
 
-The same model is intended to back the future PC chat UI.
+Responsibilities:
 
-## Current behavior
+- own RemoteAgent session ids
+- persist workspace metadata
+- track provider bindings
+- record append-only event history
+- serialize work per session when needed
 
-### Supported providers today
+### Provider adapter layer
+
+Responsibilities:
+
+- start or continue provider sessions
+- translate runtime requests into provider-specific commands
+- store provider session identifiers such as Codex `thread_id` and Claude `session_id`
+- return normalized outputs back to the runtime
+
+### Terminal control layer
+
+Responsibilities:
+
+- execute owner-only shell commands in the active workspace
+- enforce private-chat and owner-only restrictions
+- keep terminal access tied to Codex danger-full-access mode
+
+### Attachment layer
+
+Responsibilities:
+
+- download Telegram-hosted files
+- store them under runtime-owned local paths
+- build attachment prompts for the active provider flow
+- keep internal runtime paths out of user-facing responses where possible
+
+## Provider support today
 
 | Provider | Current state | Resume identifier | Notes |
 | --- | --- | --- | --- |
-| Codex | Implemented | `thread_id` | Supports per-chat sandbox selection in Telegram |
-| Claude Code | Implemented | `session_id` | Resume depends on matching workspace |
-| OpenClaw | Planned | TBD | Not implemented in the current runtime |
+| Codex | Implemented | `thread_id` | Supports Telegram sandbox control and remote-shell gating |
+| Claude Code | Implemented | `session_id` | Supports attach/resume through the same runtime model |
+| OpenClaw | Planned | TBD | Not yet implemented |
 
-### Fresh pairing
+## Operational constraints
 
-- `/startpair codex [path]`
-- `/startpair claude [path]`
-- `/startpair both [path]`
+The runtime must behave as a single owned process.
 
-This creates or resets a provider binding for that Telegram chat. The first real user message creates the underlying provider session if needed.
+That means:
 
-### Existing-session attach
+- `systemd` owns the production runtime on server 30
+- ad hoc duplicate `node dist/index.js` processes must not coexist
+- stale PID and stale lock state must not become the effective source of truth
+- image and attachment incidents must be debugged against one live process generation, not many
 
-- `/attach codex <thread_id> [path]`
-- `/attach claude <session_id> [path]`
+The production operating rules are documented in [OPERATIONS.md](./OPERATIONS.md).
 
-This binds the Telegram chat to an already existing provider session and continues from that stored context.
+## Current status
 
-### Restricted remote shell
+Stable today:
 
-- `/! <command>`
-- `/!cmd <command>`
-- `/!bash <command>`
+- Telegram control
+- owner-only terminal control
+- Telegram <-> Codex session handling
+- Telegram <-> Claude Code session handling
+- Telegram attachment download and local materialization
+- single-instance runtime locking on server 30
 
-This feature is intentionally gated:
+Still improving:
 
-- bot owner only
-- private 1:1 Telegram chats only
-- only when the current Codex session sandbox is `danger-full-access`
-
-## Planned evolution
-
-### Near term
-
-- improve status output
-- stronger session inspection tools
-- export/import session bindings
-- safer process supervision
-
-### Medium term
-
-- local PC chat UI using the same session server
-- OpenClaw adapter
-- richer compare mode
-- attachment handling and file references
-
-### Long term
-
-- a true session-centric UX where Telegram and PC UI are peers
-- shared event history across channels
-- local-first tooling around one session record
+- attachment response policy and user-facing output quality
+- broader inspection and debugging UX
+- future local PC chat UI maturity
 
 ## Non-goals
 
-- multi-tenant hosted backend
-- account resale
-- using one personal account to serve multiple outside users
-- claiming exact internal parity with official desktop UIs
+- hosted multi-tenant control plane
+- account pooling or resale
+- pretending RemoteAgent is the official Codex or Claude desktop product

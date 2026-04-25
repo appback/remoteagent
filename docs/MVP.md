@@ -2,226 +2,107 @@
 
 ## Objective
 
-Build the first usable version of RemoteAgent as a personal installable session server that lets one owner continue the same AI work session across:
+The MVP is a usable personal runtime that proves five things together:
 
-- the work PC
-- Telegram
-- a minimal local PC chat UI
+1. Telegram can control the runtime
+2. the owner can use terminal control safely
+3. Telegram can continue Codex work
+4. Telegram can continue Claude Code work
+5. Telegram can pass images and documents into the active session flow
 
-The MVP is successful when the owner can start work on the PC, continue it from Telegram, return to the PC, and keep going from the same session context.
+Success means the owner can work on their machine, continue from Telegram, and return without losing the local runtime context.
 
 ## Product boundary
 
 This MVP is for:
 
 - one owner
-- one work PC
+- one installable local runtime
+- personal provider credentials
 - local state only
-- personal provider credentials only
 
 This MVP is not for:
 
-- multiple outside users
 - hosted SaaS
-- team collaboration
-- billing, org management, or account sharing
-
-## User story
-
-1. I start or resume a session on my work PC.
-2. I leave my desk and continue from Telegram.
-3. I return to the PC and see the same session history and current state.
-4. I switch providers per session without learning a different UI for each one.
+- external users
+- team billing or org management
+- account sharing
 
 ## MVP pillars
 
-### 1. Session server
-
-The work PC runs a local process that owns:
-
-- session records
-- provider bindings
-- message history
-- workspace metadata
-- routing between clients and providers
+### 1. Telegram control
 
 Minimum requirements:
 
-- local state file or local lightweight database
-- stable per-session identifier owned by RemoteAgent
-- mapping from RemoteAgent session to provider session id
-- append-only event log for messages and important actions
+- create or bind a local session from Telegram
+- inspect status
+- switch sessions
+- reset a chat binding
+- send normal Telegram text messages into the active provider session
 
-### 2. Telegram client
-
-Telegram acts as a remote client to the session server.
-
-Minimum requirements:
-
-- create a session
-- attach to an existing provider session
-- view status
-- send normal messages
-- receive streamed or final responses in a usable way
-
-Current commands already cover much of this:
-
-- `/startpair`
-- `/attach`
-- `/sandbox codex ...`
-- `/! ...` with strict gating
-- `/status`
-- `/mode`
-- `/reset`
-
-### 3. Local PC chat UI
-
-The first PC UI can be minimal. It does not need to match official desktop apps.
+### 2. Terminal control
 
 Minimum requirements:
 
-- list sessions
-- open one session
-- read the event history
-- send a new message
-- show current provider, workspace, and attached provider session id
+- run shell commands from Telegram
+- keep this owner-only
+- keep this private-chat-only
+- tie dangerous shell access to the current Codex sandbox policy
 
-Good enough for MVP:
+### 3. Codex integration
 
-- Electron app, local web app, or even a simple browser-based local UI
+Minimum requirements:
 
-### 4. Provider adapters
+- start a fresh Codex pairing
+- attach to an existing Codex `thread_id`
+- continue the same Codex session across turns
+- keep workspace metadata with the session
 
-The session server talks to providers through adapters.
+### 4. Claude Code integration
 
-MVP adapters:
+Minimum requirements:
 
-- Codex
-- Claude
+- start a fresh Claude pairing
+- attach to an existing Claude `session_id`
+- continue the same Claude session across turns
+- keep workspace metadata with the session
 
-Next adapter after MVP:
+### 5. Attachment intake
 
-- OpenClaw
+Minimum requirements:
 
-Minimum adapter contract:
+- accept Telegram photos and supported files
+- materialize them locally in runtime-owned storage
+- route them through the active session flow
+- avoid leaking internal local paths in normal user-facing replies when possible
 
-- start or continue a provider session
-- send one user message
-- return provider output
-- persist provider session id
-- fail clearly when workspace or credentials are invalid
+## Supporting runtime requirements
 
-## Recommended implementation order
+To make the five pillars actually usable, the runtime also needs:
 
-### Phase 1. Harden the current Telegram runtime
-
-Target:
-
-- reliable local process supervision
-- better status output
-- explicit session inspection
-- import/export of session bindings
-
-Acceptance:
-
-- Telegram can create and resume Codex and Claude sessions reliably on the work PC
-- local state survives restart
-
-### Phase 2. Introduce RemoteAgent-owned session ids
-
-Target:
-
-- add a first-class RemoteAgent session record
-- store provider bindings under that session
-- stop treating Telegram chat id as the only top-level identity
-
-Acceptance:
-
-- one RemoteAgent session can outlive Telegram chat details
-- provider session ids are internal bindings, not the primary user-facing identity
-
-### Phase 3. Build the local PC chat UI
-
-Target:
-
-- simple local UI backed by the same session server
-- same session can be viewed and continued from Telegram and the PC UI
-
-Acceptance:
-
-- a session started in the local UI can be continued from Telegram
-- a session continued from Telegram can be reopened in the local UI
-
-### Phase 4. Shared event history
-
-Target:
-
-- both channels read from the same event log
-- messages sent from Telegram are visible in the PC UI
-- messages sent from the PC UI are visible in Telegram where appropriate
-
-Acceptance:
-
-- the owner no longer has to guess which channel said what
-- session history remains readable after restart
-
-## Data model for MVP
-
-Suggested top-level entities:
-
-### Session
-
-- `sessionId`
-- `title`
-- `createdAt`
-- `updatedAt`
-- `activeProvider`
-- `workspace`
-- `status`
-
-### ProviderBinding
-
-- `sessionId`
-- `provider`
-- `providerSessionId`
-- `model`
-- `cwd`
-- `lastUsedAt`
-
-### Event
-
-- `eventId`
-- `sessionId`
-- `source` such as `telegram`, `pc-ui`, `provider`
-- `direction` such as `in`, `out`, `system`
-- `timestamp`
-- `text`
-- optional metadata
+- local session persistence
+- provider binding persistence
+- append-only event logs
+- stable runtime-owned session ids
+- deterministic single-instance process ownership
+- recoverable restart behavior
 
 ## Acceptance criteria
 
 The MVP is done when all of the following are true:
 
-1. A user can create a session on the work PC.
-2. The same session can be resumed from Telegram.
-3. The same session can later be resumed from the local PC chat UI.
-4. Codex and Claude both work through the same session model.
-5. Session history survives process restarts.
-6. The local install remains single-user and local-first.
+1. Telegram can control a local runtime session reliably.
+2. Terminal control works under explicit restrictions.
+3. Codex can be paired or attached from Telegram.
+4. Claude Code can be paired or attached from Telegram.
+5. Telegram image/document inputs reach the active session flow.
+6. Restarts do not create ambiguous multi-process ownership.
+7. Session state survives process restarts.
 
-## Explicit non-goals for MVP
+## Explicit non-goals
 
 - hosted sync service
-- shared cloud account pool
-- multi-device conflict resolution
-- mobile app
-- exact parity with official Codex or Claude desktop UIs
-
-## Nice-to-have after MVP
-
-- OpenClaw adapter
-- compare mode in the local UI
-- file attachment handling
-- searchable history
-- local notifications
-- session archive and restore tools
+- public multi-user bot service
+- account resale
+- exact parity with official desktop apps
+- turning RemoteAgent into a general-purpose terminal file manager
