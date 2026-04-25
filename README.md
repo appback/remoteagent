@@ -182,6 +182,13 @@ Useful runtime variables:
 
 Provider install/login hooks are optional and are executed only from owner-only Telegram commands.
 
+Recommended Linux hooks in this repo:
+
+- `scripts/install-codex.sh`
+- `scripts/install-claude.sh`
+- `scripts/start-claude-login.sh`
+- `scripts/finish-claude-login.sh`
+
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_BOT_TOKENS`
 - `TELEGRAM_OWNER_ID`
