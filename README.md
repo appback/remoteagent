@@ -106,6 +106,11 @@ Notes:
 The high-level architecture is documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 The first implementation scope is documented in [docs/MVP.md](docs/MVP.md).
 
+## Operations
+
+Operational ownership and deployment rules are documented in [docs/OPERATIONS.md](docs/OPERATIONS.md).
+Reference notes about `cokacdir` and how RemoteAgent differs are documented in [docs/COKACDIR_NOTES.md](docs/COKACDIR_NOTES.md).
+
 In short:
 
 ```text
