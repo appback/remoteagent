@@ -1,4 +1,7 @@
 import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { Bot, GrammyError, HttpError } from "grammy";
 import type { Context } from "grammy";
@@ -268,10 +271,70 @@ export function createBot(token: string, bridge: BridgeService, botInfo: UserFro
     await reply(ctx, "Cleared all pairings for this chat.");
   });
 
-  bot.on("message:text", async (ctx) => {
-    const text = ctx.message.text.trim();
+  bot.on("message", async (ctx) => {
     const botId = getBotId();
     const chatId = String(ctx.chat.id);
+    const photo = ctx.message.photo?.at(-1);
+    const document = ctx.message.document;
+    const voice = ctx.message.voice;
+    const audio = ctx.message.audio;
+
+    if (photo) {
+      const downloaded = await downloadTelegramFile(token, botId, chatId, photo.file_id, "telegram-photo.jpg");
+      const message = await formatTelegramAttachmentPrompt("image", downloaded.path, ctx.message.caption?.trim());
+
+      await bridge.logSystem(botId, chatId, `Telegram image received: ${downloaded.path}`);
+      await runWithPendingAnimation(token, ctx.chat.id, async () => {
+        const responses = await bridge.routeMessage(botId, chatId, message);
+        return {
+          chunks: flattenChunks(sanitizeAttachmentResponseBlocks(bridge.formatResponses(responses)), 3900),
+        };
+      });
+      return;
+    }
+
+    if (document) {
+      const attachmentKind = classifyTelegramDocument(document.mime_type, document.file_name);
+      if (attachmentKind) {
+        const downloaded = await downloadTelegramFile(token, botId, chatId, document.file_id, document.file_name);
+        const message = await formatTelegramAttachmentPrompt(attachmentKind, downloaded.path, ctx.message.caption?.trim());
+
+        await bridge.logSystem(botId, chatId, `Telegram ${attachmentKind} received: ${downloaded.path}`);
+        await runWithPendingAnimation(token, ctx.chat.id, async () => {
+          const responses = await bridge.routeMessage(botId, chatId, message);
+          return {
+            chunks: flattenChunks(sanitizeAttachmentResponseBlocks(bridge.formatResponses(responses)), 3900),
+          };
+        });
+        return;
+      }
+    }
+
+    if (voice || audio) {
+      const attachmentKind = voice ? "voice message" : "audio file";
+      const downloaded = await downloadTelegramFile(
+        token,
+        botId,
+        chatId,
+        voice ? voice.file_id : audio!.file_id,
+        voice ? "telegram-voice.ogg" : audio?.file_name,
+      );
+      const message = await formatTelegramAttachmentPrompt(attachmentKind, downloaded.path, ctx.message.caption?.trim());
+
+      await bridge.logSystem(botId, chatId, `Telegram ${attachmentKind} received: ${downloaded.path}`);
+      await runWithPendingAnimation(token, ctx.chat.id, async () => {
+        const responses = await bridge.routeMessage(botId, chatId, message);
+        return {
+          chunks: flattenChunks(sanitizeAttachmentResponseBlocks(bridge.formatResponses(responses)), 3900),
+        };
+      });
+      return;
+    }
+
+    const text = ctx.message.text?.trim();
+    if (!text) {
+      return;
+    }
 
     if (isRemoteShellMessage(text)) {
       const shellRequest = parseRemoteShellRequest(text);
@@ -653,6 +716,147 @@ function escapeHtml(text: string): string {
     .replaceAll(">", "&gt;");
 }
 
+function sanitizeAttachmentResponseBlocks(blocks: string[]): string[] {
+  const sanitized = blocks
+    .map((block) => sanitizeAttachmentResponseText(block))
+    .filter((block) => block.trim().length > 0);
+
+  return sanitized.length > 0 ? sanitized : ["첨부는 받았습니다. 내부 경로는 숨기고 있습니다. 필요한 분석을 한 줄로 다시 보내 주세요."];
+}
+
+function sanitizeAttachmentResponseText(text: string): string {
+  const lines = text.split(/\r?\n/);
+  const filtered = lines.filter((line) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      return true;
+    }
+
+    if (/^A Telegram .* was saved locally\.$/.test(trimmed)) {
+      return false;
+    }
+    if (trimmed === "Do not repeat internal metadata such as local file paths unless it is strictly necessary.") {
+      return false;
+    }
+    if (trimmed.startsWith("Treat this caption as the user's instruction:")) {
+      return false;
+    }
+    if (trimmed.startsWith("Attachment path for tool use:")) {
+      return false;
+    }
+    if (trimmed === "File content preview:") {
+      return false;
+    }
+    if (trimmed.startsWith("/home/")) {
+      return false;
+    }
+    if (trimmed.includes(".remoteagent/uploads/telegram/")) {
+      return false;
+    }
+
+    return true;
+  });
+
+  return filtered.join("\n").trim();
+}
+
+async function formatTelegramAttachmentPrompt(kind: string, filePath: string, caption: string | undefined): Promise<string> {
+  const parts = [
+    `A Telegram ${kind} was saved locally.`,
+    "Do not repeat internal metadata such as local file paths unless it is strictly necessary.",
+    caption
+      ? `Treat this caption as the user's instruction: ${caption}`
+      : "If the user gave no caption, inspect the attachment and respond briefly with the useful result.",
+    `Attachment path for tool use: ${filePath}`,
+  ].filter(Boolean);
+
+  const inlineText = await readInlineTextPreview(kind, filePath);
+  if (inlineText) {
+    parts.push("File content preview:");
+    parts.push(inlineText);
+  }
+
+  return parts.join("\n");
+}
+
+function classifyTelegramDocument(mimeType: string | undefined, fileName: string | undefined): string | undefined {
+  const lowerName = fileName?.toLowerCase() ?? "";
+
+  if (mimeType?.startsWith("image/")) {
+    return "image document";
+  }
+
+  if (mimeType === "application/pdf" || lowerName.endsWith(".pdf")) {
+    return "PDF document";
+  }
+
+  if (
+    mimeType?.startsWith("text/")
+    || mimeType === "application/markdown"
+    || lowerName.endsWith(".txt")
+    || lowerName.endsWith(".md")
+    || lowerName.endsWith(".markdown")
+  ) {
+    return lowerName.endsWith(".md") || lowerName.endsWith(".markdown") || mimeType === "text/markdown" || mimeType === "application/markdown"
+      ? "Markdown document"
+      : "text document";
+  }
+
+  if (isArchiveDocument(mimeType, lowerName)) {
+    return "archive document";
+  }
+
+  return undefined;
+}
+
+function isArchiveDocument(mimeType: string | undefined, lowerName: string): boolean {
+  const archiveMimeTypes = new Set([
+    "application/zip",
+    "application/x-zip-compressed",
+    "application/x-tar",
+    "application/gzip",
+    "application/x-gzip",
+    "application/x-7z-compressed",
+    "application/vnd.rar",
+    "application/x-rar-compressed",
+    "application/x-bzip2",
+    "application/x-xz",
+  ]);
+  if (mimeType && archiveMimeTypes.has(mimeType)) {
+    return true;
+  }
+
+  return [
+    ".zip",
+    ".tar",
+    ".tar.gz",
+    ".tgz",
+    ".gz",
+    ".7z",
+    ".rar",
+    ".bz2",
+    ".xz",
+  ].some((extension) => lowerName.endsWith(extension));
+}
+
+async function readInlineTextPreview(kind: string, filePath: string): Promise<string | undefined> {
+  if (!["text document", "Markdown document"].includes(kind)) {
+    return undefined;
+  }
+
+  const maxChars = 20_000;
+  const text = await fs.readFile(filePath, "utf8").catch(() => undefined);
+  if (!text) {
+    return undefined;
+  }
+
+  if (text.length <= maxChars) {
+    return text;
+  }
+
+  return `${text.slice(0, maxChars)}\n\n[truncated: ${text.length - maxChars} more chars in local file]`;
+}
+
 type TelegramMessageOptions = {
   parse_mode?: "Markdown" | "MarkdownV2" | "HTML";
 };
@@ -660,6 +864,56 @@ type TelegramMessageOptions = {
 type TelegramMessageResult = {
   message_id: number;
 };
+
+type TelegramGetFileResult = {
+  file_id: string;
+  file_unique_id: string;
+  file_size?: number;
+  file_path?: string;
+};
+
+async function downloadTelegramFile(
+  botToken: string,
+  botId: string,
+  chatId: string,
+  fileId: string,
+  preferredName?: string,
+): Promise<{ path: string }> {
+  const file = await callTelegramApi<TelegramGetFileResult>(botToken, "getFile", {
+    file_id: fileId,
+  });
+  if (!file.file_path) {
+    throw new Error("Telegram did not return a file path for the attachment.");
+  }
+
+  const directory = path.join(config.dataDir, "uploads", "telegram", safePathSegment(botId), safePathSegment(chatId));
+  await fs.mkdir(directory, { recursive: true });
+
+  const extension = path.extname(file.file_path) || path.extname(preferredName ?? "") || ".bin";
+  const basename = path.basename(preferredName ?? file.file_path, path.extname(preferredName ?? file.file_path));
+  const outputPath = path.join(directory, `${Date.now()}-${safePathSegment(basename)}-${randomUUID()}${extension}`);
+  const fileUrl = new URL(file.file_path, `https://api.telegram.org/file/bot${botToken}/`).toString();
+
+  const { stderr } = await execFileAsync("curl", [
+    "-fL",
+    "-sS",
+    "--max-time",
+    "60",
+    "-o",
+    outputPath,
+    fileUrl,
+  ]);
+  if (stderr?.trim()) {
+    console.error(`curl stderr for Telegram file download: ${stderr.trim()}`);
+  }
+
+  return { path: outputPath };
+}
+
+function safePathSegment(value: string): string {
+  const safe = value.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
+  return safe || "file";
+}
 
 async function sendTelegramMessage(
   botToken: string,
@@ -726,4 +980,3 @@ async function callTelegramApi<T>(
 
   return payload.result as T;
 }
-
