@@ -7,6 +7,7 @@ import { Bot, GrammyError, HttpError } from "grammy";
 import type { Context } from "grammy";
 import { config } from "./config.js";
 import { BridgeService } from "./services/bridge-service.js";
+import { BotManagementService } from "./services/bot-management-service.js";
 import { ProviderSetupService } from "./services/provider-setup-service.js";
 import { RemoteShellService } from "./services/remote-shell-service.js";
 import type { ChatSession, CodexSandboxMode, Provider } from "./types.js";
@@ -26,6 +27,10 @@ const HELP_TEXT = [
   "/attach claude <session_id>",
   "/sandbox codex <read-only|workspace-write|danger-full-access>",
   "/status",
+  "/bots",
+  "/bot add <token>",
+  "/bot remove <username|id>",
+  "/bot reload",
   "/install codex|claude",
   "/login claude [token]",
   "/reset",
@@ -34,9 +39,10 @@ const HELP_TEXT = [
   "/!bash <command>",
 ].join("\n");
 
-export function createBot(token: string, bridge: BridgeService, botInfo: UserFromGetMe): Bot {
+export function createBot(token: string, bridge: BridgeService, botManagement: BotManagementService, botInfo: UserFromGetMe): Bot {
   const bot = new Bot(token, { botInfo });
   const shellService = new RemoteShellService(config.commandTimeoutMs);
+  const sourceBotToken = token;
   const setupService = new ProviderSetupService(
     config.setupCommandTimeoutMs,
     (provider) => bridge.listAvailableProviders().includes(provider),
@@ -70,8 +76,9 @@ export function createBot(token: string, bridge: BridgeService, botInfo: UserFro
   bot.use(async (ctx, next) => {
     const updateKind = Object.keys(ctx.update).join(",");
     const text = ctx.message?.text ?? ctx.editedMessage?.text ?? ctx.channelPost?.text ?? "";
+    const safeText = sanitizeLoggedTelegramText(text);
     console.log(
-      `[tg-update] bot=${getBotId()} kind=${updateKind} chat=${ctx.chat?.id ?? "?"} text=${JSON.stringify(text).slice(0, 240)}`,
+      `[tg-update] bot=${getBotId()} kind=${updateKind} chat=${ctx.chat?.id ?? "?"} text=${JSON.stringify(safeText).slice(0, 240)}`,
     );
     await next();
   });
@@ -210,6 +217,40 @@ ${bridge.formatStatus(mapping)}`);
     const chatId = String(ctx.chat.id);
     const mapping = await bridge.status(botId, chatId);
     await reply(ctx, bridge.formatStatus(mapping));
+  });
+
+  bot.command("bots", async (ctx) => {
+    await ensureOwnerControlAccess(ctx);
+    await reply(ctx, await botManagement.listBots());
+  });
+
+  bot.command("bot", async (ctx) => {
+    await ensureOwnerControlAccess(ctx);
+    const sourceBotId = getBotId();
+    const { args, rest } = parseCommand(ctx.message?.text, 1);
+    const action = args[0]?.toLowerCase();
+
+    if (!action || !["add", "remove", "reload"].includes(action)) {
+      await reply(ctx, "Usage: `/bot add <token>`, `/bot remove <username|id>`, or `/bot reload`", {
+        parse_mode: "Markdown",
+      });
+      return;
+    }
+
+    if (action === "add") {
+      const result = await botManagement.addBot(rest?.trim() ?? "", sourceBotId, sourceBotToken, ctx.chat.id);
+      await reply(ctx, result.message);
+      return;
+    }
+
+    if (action === "remove") {
+      const result = await botManagement.removeBot(rest?.trim() ?? "", sourceBotId, sourceBotToken, ctx.chat.id);
+      await reply(ctx, result.message);
+      return;
+    }
+
+    const result = await botManagement.reloadBots(sourceBotId, sourceBotToken, ctx.chat.id);
+    await reply(ctx, result.message);
   });
 
   bot.command("install", async (ctx) => {
@@ -523,6 +564,17 @@ class TelegramMessageBatcher {
   private key(botId: string, chatId: string): string {
     return `${botId}:${chatId}`;
   }
+}
+
+function sanitizeLoggedTelegramText(text: string): string {
+  const trimmed = text.trim();
+  if (/^\/bot\s+add\s+/i.test(trimmed)) {
+    return "/bot add [redacted]";
+  }
+  if (/^\/login\s+claude\s+/i.test(trimmed)) {
+    return "/login claude [redacted]";
+  }
+  return text;
 }
 
 async function runWithPendingAnimation(

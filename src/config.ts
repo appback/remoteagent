@@ -152,6 +152,8 @@ export const config = {
   claudeInstallCommand: readOptional("CLAUDE_INSTALL_COMMAND"),
   claudeLoginStartCommand: readOptional("CLAUDE_LOGIN_START_COMMAND"),
   claudeLoginFinishCommand: readOptional("CLAUDE_LOGIN_FINISH_COMMAND"),
+  botRestartServiceName: readOptional("REMOTEAGENT_SERVICE_NAME") || "remoteagent",
+  botRestartHelperPath: readOptional("BOT_RESTART_HELPER_PATH") || path.resolve(process.cwd(), "scripts", "restart-after-bot-op.sh"),
   localUiEnabled: readBoolean("LOCAL_UI_ENABLED", true),
   localUiHost: readOptional("LOCAL_UI_HOST") || "127.0.0.1",
   localUiPort: readPort("LOCAL_UI_PORT", 3794),

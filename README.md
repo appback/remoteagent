@@ -69,6 +69,10 @@ Current command surface implemented in `src/bot.ts`:
 | `/new [path]` | Creates and binds a new session using the saved default mode |
 | `/switch <session>` | Rebinds this chat to an existing RemoteAgent session |
 | `/status` | Shows current session, workspace, provider, and sandbox state |
+| `/bots` | Lists the currently configured Telegram bots |
+| `/bot add <token>` | Adds a Telegram bot token, restarts the runtime, and confirms the result after restart |
+| `/bot remove <username\|id>` | Removes a configured Telegram bot, restarts the runtime, and confirms the result after restart |
+| `/bot reload` | Restarts the runtime and confirms the result after restart |
 | `/install codex\|claude` | Runs the configured provider install command for the bot owner |
 | `/login claude [token]` | Starts or finishes the configured Claude Code login flow for the bot owner |
 | `/reset` | Clears the current chat binding |
@@ -204,6 +208,8 @@ Recommended Linux hooks in this repo:
 - `CLAUDE_INSTALL_COMMAND`
 - `CLAUDE_LOGIN_START_COMMAND`
 - `CLAUDE_LOGIN_FINISH_COMMAND`
+- `REMOTEAGENT_SERVICE_NAME`
+- `BOT_RESTART_HELPER_PATH`
 - `LOCAL_UI_ENABLED`
 - `LOCAL_UI_HOST`
 - `LOCAL_UI_PORT`

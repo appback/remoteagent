@@ -11,6 +11,7 @@ import { ShellAdapter } from "./adapters/shell-adapter.js";
 import { config } from "./config.js";
 import { FileStore } from "./store/file-store.js";
 import { BridgeService } from "./services/bridge-service.js";
+import { BotManagementService } from "./services/bot-management-service.js";
 import { LocalUiService } from "./services/local-ui-service.js";
 import type { ProviderAdapter } from "./adapters/provider-adapter.js";
 import type { Provider } from "./types.js";
@@ -56,6 +57,11 @@ async function main(): Promise<void> {
   const availableProviders = (["codex", "claude"] as const).filter((provider) => isProviderInstalled(provider));
   console.log(`Available providers: ${availableProviders.length > 0 ? availableProviders.join(", ") : "none"}`);
   const bridge = new BridgeService(store, adapters, config.defaultWorkspace, isProviderInstalled, config.defaultMode);
+  const botManagement = new BotManagementService(
+    config.dataDir,
+    config.botRestartServiceName,
+    config.botRestartHelperPath,
+  );
   if (config.localUiEnabled) {
     const localUi = new LocalUiService(bridge, config.localUiHost, config.localUiPort);
     await localUi.start()
@@ -68,12 +74,16 @@ async function main(): Promise<void> {
   }
 
   const botInfos = config.telegramBotTokens.map((token, index) => buildBotInfo(token, index));
-  const bots = config.telegramBotTokens.map((token, index) => createBot(token, bridge, botInfos[index]!));
+  const bots = config.telegramBotTokens.map((token, index) => createBot(token, bridge, botManagement, botInfos[index]!));
 
   for (const bot of bots) {
     const username = bot.botInfo.username;
     console.log(`Bot @${username} is ready`);
   }
+
+  await botManagement.reportPendingOperationResult().catch((error) => {
+    console.error("Failed to report pending bot operation result:", error);
+  });
 
   await Promise.all(bots.map((bot) => startManualPolling(bot)));
 }
