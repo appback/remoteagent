@@ -63,10 +63,10 @@ Current command surface implemented in `src/bot.ts`:
 
 | Command | What it does |
 | --- | --- |
-| `/start [codex|claude] [path]` | Starts a fresh fixed-mode session; without a path it creates a new managed workspace under `WORKSPACE_ROOT` |
+| `/start [codex|claude]` | Starts a fresh fixed-mode session in a new managed workspace under `WORKSPACE_ROOT` |
 | `/help` | Shows the current command list |
 | `/list` | Lists recent sessions |
-| `/new [path]` | Creates and binds a new session using the saved default mode; without a path it creates a managed workspace |
+| `/new` | Creates and binds a new session using the saved default mode in a new managed workspace |
 | `/switch <session>` | Rebinds this chat to an existing RemoteAgent session |
 | `/status` | Shows current session, workspace, provider, and sandbox state |
 | `/bots` | Lists the currently configured Telegram bots |
@@ -105,7 +105,7 @@ RemoteAgent supports both fresh Codex pairing and attach/resume.
 
 Current Codex entry commands:
 
-- `/start codex [path]`
+- `/start codex`
 - `/attach codex <thread_id>`
 - `/sandbox codex <read-only|workspace-write|danger-full-access>`
 
@@ -122,7 +122,7 @@ RemoteAgent also supports fresh Claude Code pairing and attach/resume.
 
 Current Claude entry commands:
 
-- `/start claude [path]`
+- `/start claude`
 - `/attach claude <session_id>`
 
 Current Claude behavior:
@@ -237,8 +237,8 @@ Then open Telegram and start with one of these common flows. `/start` without a 
 
 ```text
 /start
-/start codex /path/to/project
-/start claude /path/to/project
+/start codex
+/start claude
 /install codex
 /install claude
 /login claude

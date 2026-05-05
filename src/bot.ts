@@ -17,10 +17,10 @@ const execFileAsync = promisify(execFile);
 
 const HELP_TEXT = [
   "Commands:",
-  "/start [codex|claude] [path]",
+  "/start [codex|claude]",
   "/help",
   "/list",
-  "/new [path]",
+  "/new",
   "/switch <session>",
   "/batch start|send|cancel|status",
   "/attach codex <thread_id>",
@@ -88,15 +88,24 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
     const chatId = String(ctx.chat.id);
     const { args, rest } = parseCommand(ctx.message?.text, 1);
     const first = args[0]?.trim();
-    const explicitProvider = first && (["codex", "claude"] as const).includes(first.toLowerCase() as Provider)
-      ? first.toLowerCase() as Provider
-      : undefined;
-    const workspace = explicitProvider
-      ? rest
-      : [first, rest].filter((value): value is string => Boolean(value)).join(" ") || undefined;
 
+    if (rest?.trim()) {
+      await reply(ctx, "Usage: `/start` or `/start codex` or `/start claude`", {
+        parse_mode: "Markdown",
+      });
+      return;
+    }
+
+    if (first && !(["codex", "claude"] as const).includes(first.toLowerCase() as Provider)) {
+      await reply(ctx, "Usage: `/start` or `/start codex` or `/start claude`", {
+        parse_mode: "Markdown",
+      });
+      return;
+    }
+
+    const explicitProvider = first ? first.toLowerCase() as Provider : undefined;
     const provider = await bridge.resolveStartProvider(explicitProvider);
-    const mapping = await bridge.startSession(botId, chatId, provider, workspace);
+    const mapping = await bridge.startSession(botId, chatId, provider);
     await reply(ctx, `Started a fresh ${provider} session.
 
 ${bridge.formatStatus(mapping)}`);
