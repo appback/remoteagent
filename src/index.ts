@@ -56,7 +56,14 @@ async function main(): Promise<void> {
 
   const availableProviders = (["codex", "claude"] as const).filter((provider) => isProviderInstalled(provider));
   console.log(`Available providers: ${availableProviders.length > 0 ? availableProviders.join(", ") : "none"}`);
-  const bridge = new BridgeService(store, adapters, config.defaultWorkspace, isProviderInstalled, config.defaultMode);
+  const bridge = new BridgeService(
+    store,
+    adapters,
+    config.defaultWorkspace,
+    config.workspaceRoot,
+    isProviderInstalled,
+    config.defaultMode,
+  );
   const botManagement = new BotManagementService(
     config.dataDir,
     config.botRestartServiceName,

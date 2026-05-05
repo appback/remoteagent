@@ -23,6 +23,19 @@ Local machine 21 should not run `codex_remoteagent_bot`.
 
 ## Runtime model
 
+## Workspace policy
+
+Default fresh sessions should not use a broad parent folder like `/home/au2223/projects` as their direct working directory.
+
+Current policy:
+
+- `DEFAULT_WORKSPACE` is a fallback path for explicit attaches and compatibility
+- `WORKSPACE_ROOT` is the root for runtime-managed fresh session workspaces
+- fresh `/start` and `/new` sessions without an explicit path create a new subdirectory under `WORKSPACE_ROOT`
+- the managed subdirectory name is a random 8-character uid
+- display ids like `S001` remain user-facing session labels only and are not reused as folder names
+
+
 Server 30 runs RemoteAgent as a `systemd` service.
 
 - unit: `remoteagent.service`

@@ -89,7 +89,13 @@ export class FileStore {
     await this.writeState(state);
   }
 
-  async createSessionForChat(botId: string, chatId: string, workspace: string, mode?: BridgeMode): Promise<ChatSession> {
+  async createSessionForChat(
+    botId: string,
+    chatId: string,
+    workspace: string,
+    mode?: BridgeMode,
+    workspaceUid?: string,
+  ): Promise<ChatSession> {
     const state = await this.readState();
     const now = new Date().toISOString();
     const sessionId = randomUUID();
@@ -99,6 +105,7 @@ export class FileStore {
       publicId: this.nextPublicSessionId(state),
       mode: mode ?? this.defaultMode,
       workspace,
+      workspaceUid,
       createdAt: now,
       updatedAt: now,
     };
@@ -511,6 +518,7 @@ export class FileStore {
   private normalizeSession(session: SessionRecord): SessionRecord {
     session.publicId = session.publicId || "";
     session.workspace = session.workspace || session.codex?.cwd || session.claude?.cwd || this.dataDir;
+    session.workspaceUid = typeof session.workspaceUid === "string" && session.workspaceUid.trim() ? session.workspaceUid.trim() : undefined;
     session.createdAt = session.createdAt || session.updatedAt || new Date().toISOString();
     session.updatedAt = session.updatedAt || session.createdAt;
 

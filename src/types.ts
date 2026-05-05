@@ -18,6 +18,7 @@ export type SessionRecord = {
   publicId: string;
   mode: BridgeMode;
   workspace: string;
+  workspaceUid?: string;
   codex?: ProviderSession;
   claude?: ProviderSession;
   createdAt: string;

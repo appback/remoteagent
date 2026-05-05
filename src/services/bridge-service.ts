@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import type { ProviderAdapter } from "../adapters/provider-adapter.js";
@@ -21,6 +22,7 @@ export class BridgeService {
     private readonly store: FileStore,
     private readonly adapters: Partial<Record<Provider, ProviderAdapter>>,
     private readonly defaultWorkspace: string,
+    private readonly workspaceRoot: string,
     private readonly isProviderInstalled: (provider: Provider) => boolean,
     private readonly preferredStartMode: BridgeMode,
   ) {}
@@ -47,11 +49,17 @@ export class BridgeService {
   async startSession(botId: string, chatId: string, provider: Provider, cwd?: string): Promise<ChatSession> {
     this.ensureConfigured(provider);
 
-    const existing = await this.store.getChatSession(botId, chatId);
-    const workspace = this.resolveWorkspace(existing?.session.workspace, cwd);
-    await this.ensureWorkspaceExists(workspace);
+    const explicitWorkspace = cwd?.trim();
+    const managedWorkspace = explicitWorkspace ? undefined : await this.createManagedWorkspace();
+    const workspace = explicitWorkspace
+      ? this.resolveWorkspace(undefined, explicitWorkspace)
+      : managedWorkspace!.workspace;
 
-    await this.store.createSessionForChat(botId, chatId, workspace, provider);
+    if (explicitWorkspace) {
+      await this.ensureWorkspaceExists(workspace);
+    }
+
+    await this.store.createSessionForChat(botId, chatId, workspace, provider, managedWorkspace?.workspaceUid);
     const chatSession = await this.store.upsertProviderForChat(botId, chatId, provider, {
       cwd: workspace,
       pairedAt: new Date().toISOString(),
@@ -654,6 +662,39 @@ export class BridgeService {
 
   private resolveWorkspace(current: string | undefined, next: string | undefined): string {
     return next?.trim() || current || this.defaultWorkspace;
+  }
+
+  private async createManagedWorkspace(): Promise<{ workspace: string; workspaceUid: string }> {
+    await fs.mkdir(this.workspaceRoot, { recursive: true });
+
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const workspaceUid = this.generateWorkspaceUid();
+      const workspace = path.join(this.workspaceRoot, workspaceUid);
+
+      try {
+        await fs.mkdir(workspace);
+        return { workspace, workspaceUid };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    throw new Error("Could not allocate a managed workspace directory.");
+  }
+
+  private generateWorkspaceUid(): string {
+    const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+    const bytes = randomBytes(8);
+    let value = "";
+
+    for (const byte of bytes) {
+      value += alphabet[byte % alphabet.length];
+    }
+
+    return value;
   }
 
   private workspaceLabel(workspace: string): string {

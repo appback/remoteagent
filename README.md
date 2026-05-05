@@ -63,10 +63,10 @@ Current command surface implemented in `src/bot.ts`:
 
 | Command | What it does |
 | --- | --- |
-| `/start [codex|claude] [path]` | Starts a fresh fixed-mode session; without a mode it starts the saved default mode |
+| `/start [codex|claude] [path]` | Starts a fresh fixed-mode session; without a path it creates a new managed workspace under `WORKSPACE_ROOT` |
 | `/help` | Shows the current command list |
 | `/list` | Lists recent sessions |
-| `/new [path]` | Creates and binds a new session using the saved default mode |
+| `/new [path]` | Creates and binds a new session using the saved default mode; without a path it creates a managed workspace |
 | `/switch <session>` | Rebinds this chat to an existing RemoteAgent session |
 | `/status` | Shows current session, workspace, provider, and sandbox state |
 | `/bots` | Lists the currently configured Telegram bots |
@@ -173,6 +173,8 @@ Installed runtime data lives in:
 
 Typical directories and files include:
 
+Managed workspaces created by `/start` without an explicit path live under `WORKSPACE_ROOT` and use random 8-character uid folder names, while public session ids like `S001` remain display-only ids.
+
 - `.env`
 - `logs/`
 - `uploads/telegram/`
@@ -197,6 +199,7 @@ Recommended Linux hooks in this repo:
 - `TELEGRAM_BOT_TOKENS`
 - `TELEGRAM_OWNER_ID`
 - `DEFAULT_WORKSPACE`
+- `WORKSPACE_ROOT`
 - `COMMAND_TIMEOUT_MS`
 - `SETUP_COMMAND_TIMEOUT_MS`
 - `CODEX_BIN`
