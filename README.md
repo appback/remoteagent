@@ -164,6 +164,19 @@ The transport/runtime layer for attachments is implemented. User-facing attachme
 | Attachment routing through active session | Yes | Yes | Planned |
 | Production adapter in this repo | Yes | Yes | No |
 
+## Release policy
+
+Every production deployment must bump the package version using semantic versioning.
+
+- `MAJOR`: breaking changes or migration-required runtime changes
+- `MINOR`: new capabilities or non-breaking feature expansion
+- `PATCH`: bug fixes, hardening, and maintenance updates
+
+A change is not considered finished until it is committed and pushed.
+A deployment on server 30 is not considered complete until machine 21's npm-installed runtime is updated as well.
+
+See [docs/RELEASING.md](docs/RELEASING.md) for the release checklist and version bump commands.
+
 ## Runtime layout
 
 Installed runtime data lives in:

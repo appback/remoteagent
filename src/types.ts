@@ -64,6 +64,7 @@ export type ProviderRequest = {
 export type ProviderResponse = {
   provider: Provider;
   sessionId: string;
+  publicSessionId?: string;
   cwd: string;
   output: string;
 };

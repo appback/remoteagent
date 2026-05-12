@@ -14,15 +14,19 @@ export class ClaudeAdapter implements ProviderAdapter {
   async send(request: ProviderRequest): Promise<ProviderResponse> {
     const sessionId = request.sessionId ?? randomUUID();
     const args = this.buildArgs(request, sessionId);
-    const { stdout, stderr, code } = await this.runClaude(args, request.cwd);
+    const { stdout, stderr, code, timedOut } = await this.runClaude(args, request.cwd, request.remoteSessionId);
 
     if (code !== 0) {
-      throw new Error(this.formatProcessError(stdout, stderr));
+      throw new Error(this.formatProcessError(stdout, stderr, timedOut));
+    }
+
+    if (timedOut) {
+      throw new Error(this.formatTimeoutError());
     }
 
     const output = stdout.trim();
     if (!output) {
-      throw new Error("Claude가 비어 있는 응답을 반환했습니다.");
+      throw new Error("Claude returned an empty response.");
     }
 
     return {
@@ -55,17 +59,27 @@ export class ClaudeAdapter implements ProviderAdapter {
     return args;
   }
 
-  private runClaude(args: string[], cwd: string): Promise<{ stdout: string; stderr: string; code: number | null }> {
-    return spawnWithPlatformShell(this.claudeBin, args, cwd, this.timeoutMs);
+  private runClaude(args: string[], cwd: string, remoteSessionId: string): Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean }> {
+    return spawnWithPlatformShell(this.claudeBin, args, cwd, this.timeoutMs, undefined, remoteSessionId);
   }
 
-  private formatProcessError(stdout: string, stderr: string): string {
+  private formatProcessError(stdout: string, stderr: string, timedOut = false): string {
     const text = [stderr, stdout]
       .map((value) => value.trim())
       .filter(Boolean)
       .join("\n")
       .trim();
 
-    return text || "Claude 실행이 실패했지만 출력이 비어 있습니다.";
+    if (text) {
+      return text;
+    }
+
+    return timedOut
+      ? this.formatTimeoutError()
+      : "Claude execution failed without any output.";
+  }
+
+  private formatTimeoutError(): string {
+    return `Claude timed out after ${Math.round(this.timeoutMs / 1000)}s without returning a final reply.`;
   }
 }

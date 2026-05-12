@@ -1,6 +1,6 @@
 {
   "name": "remoteagent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Personal installable session server for continuing local AI work across PC and Telegram",
   "license": "MIT",
@@ -9,7 +9,10 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
-    "check": "tsc --noEmit -p tsconfig.json"
+    "check": "tsc --noEmit -p tsconfig.json",
+    "version:patch": "npm version --no-git-tag-version patch",
+    "version:minor": "npm version --no-git-tag-version minor",
+    "version:major": "npm version --no-git-tag-version major"
   },
   "dependencies": {
     "dotenv": "^16.6.1",

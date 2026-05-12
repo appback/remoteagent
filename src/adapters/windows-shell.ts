@@ -1,5 +1,19 @@
 import process from "node:process";
 import { spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+
+const activeCommands = new Map<string, ChildProcess>();
+const CHILD_ENV_BLOCKED_PREFIXES = ["TELEGRAM_"];
+
+function buildChildEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (CHILD_ENV_BLOCKED_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+      delete env[key];
+    }
+  }
+  return env;
+}
 
 export function spawnWithPlatformShell(
   bin: string,
@@ -7,21 +21,28 @@ export function spawnWithPlatformShell(
   cwd: string,
   timeoutMs: number,
   input?: string,
-): Promise<{ stdout: string; stderr: string; code: number | null }> {
+  executionKey?: string,
+): Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean }> {
   return new Promise((resolve, reject) => {
     const command = process.platform === "win32"
       ? spawn("cmd.exe", ["/d", "/c", "call", bin, ...args], {
           cwd,
-          env: process.env,
+          env: buildChildEnv(),
         })
       : spawn(bin, args, {
           cwd,
-          env: process.env,
+          env: buildChildEnv(),
         });
+
+    if (executionKey) {
+      activeCommands.set(executionKey, command);
+    }
 
     let stdout = "";
     let stderr = "";
+    let timedOut = false;
     const timer = setTimeout(() => {
+      timedOut = true;
       command.kill("SIGTERM");
     }, timeoutMs);
 
@@ -35,6 +56,9 @@ export function spawnWithPlatformShell(
 
     command.on("error", (error) => {
       clearTimeout(timer);
+      if (executionKey && activeCommands.get(executionKey) === command) {
+        activeCommands.delete(executionKey);
+      }
       reject(error);
     });
 
@@ -45,7 +69,29 @@ export function spawnWithPlatformShell(
 
     command.on("close", (code) => {
       clearTimeout(timer);
-      resolve({ stdout, stderr, code });
+      if (executionKey && activeCommands.get(executionKey) === command) {
+        activeCommands.delete(executionKey);
+      }
+      resolve({ stdout, stderr, code, timedOut });
     });
   });
+}
+
+export function stopSpawnedExecution(executionKey: string): boolean {
+  const command = activeCommands.get(executionKey);
+  if (!command) {
+    return false;
+  }
+
+  try {
+    command.kill("SIGTERM");
+    setTimeout(() => {
+      if (!command.killed) {
+        command.kill("SIGKILL");
+      }
+    }, 3000).unref();
+    return true;
+  } catch {
+    return false;
+  }
 }

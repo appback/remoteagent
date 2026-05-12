@@ -14,6 +14,12 @@ import type {
   SessionRecord,
 } from "../types.js";
 import { FileStore } from "../store/file-store.js";
+import { stopSpawnedExecution } from "../adapters/windows-shell.js";
+
+const MODEL_PRESETS: Record<Provider, string[]> = {
+  codex: ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.1-codex-max"],
+  claude: ["sonnet", "opus", "haiku"],
+};
 
 export class BridgeService {
   private readonly sessionLocks = new Map<string, Promise<void>>();
@@ -38,7 +44,7 @@ export class BridgeService {
       throw new Error("Session selector is required.");
     }
 
-    const session = await this.resolveSessionSelector(selector);
+    const session = await this.resolveSessionSelector(selector, botId);
     if (!session) {
       throw new Error(`Session was not found: ${selector}`);
     }
@@ -190,12 +196,53 @@ export class BridgeService {
     }, chatSession.session.workspace);
   }
 
+  async setModel(botId: string, chatId: string, model: string): Promise<ChatSession> {
+    const chatSession = await this.requireChat(botId, chatId);
+    const provider = chatSession.session.mode;
+    this.ensurePaired(chatSession, provider);
+
+    const nextModel = this.resolveSelectableModel(provider, model);
+    if (!nextModel) {
+      throw new Error("Model name is required.");
+    }
+
+    const providerSession = chatSession.session[provider]!;
+    return this.store.upsertProviderForChat(botId, chatId, provider, {
+      ...providerSession,
+      model: nextModel,
+    }, chatSession.session.workspace);
+  }
+
+  async formatModelSelection(botId: string, chatId: string): Promise<string> {
+    const chatSession = await this.requireChat(botId, chatId);
+    const provider = chatSession.session.mode;
+    this.ensurePaired(chatSession, provider);
+
+    const providerSession = chatSession.session[provider]!;
+    const presets = MODEL_PRESETS[provider] ?? [];
+    const lines = [
+      `session: ${chatSession.session.publicId}`,
+      `mode: ${provider}`,
+      `currentModel: ${providerSession.model ?? this.defaultModelFor(provider)}`,
+      "availablePresets:",
+      ...presets.map((item, index) => ` ${index + 1}. ${item}`),
+      "",
+      "Use `/model <name>` or `/model <number>` to change it.",
+    ];
+
+    if (presets.length === 0) {
+      lines.splice(3, 1, "availablePresets: none");
+    }
+
+    return lines.join("\n");
+  }
+
   async status(botId: string, chatId: string): Promise<ChatSession | undefined> {
     return this.store.getChatSession(botId, chatId);
   }
 
-  async listSessions(): Promise<SessionRecord[]> {
-    return this.store.listSessions();
+  async listSessions(botId?: string): Promise<SessionRecord[]> {
+    return this.store.listSessions(botId);
   }
 
   async sessionEvents(sessionId: string, limit?: number): Promise<LogEntry[]> {
@@ -239,6 +286,28 @@ export class BridgeService {
     }
 
     await this.store.resetChat(botId, chatId);
+  }
+
+  async stopActiveRun(botId: string, chatId: string): Promise<{ stopped: boolean; sessionPublicId?: string }> {
+    const chatSession = await this.store.getChatSession(botId, chatId);
+    if (!chatSession) {
+      return { stopped: false };
+    }
+
+    const stopped = stopSpawnedExecution(chatSession.session.sessionId);
+    if (stopped) {
+      await this.log({
+        timestamp: new Date().toISOString(),
+        remoteSessionId: chatSession.session.sessionId,
+        botId,
+        chatId,
+        provider: "system",
+        direction: "system",
+        text: "Active provider execution was stopped by the user.",
+      });
+    }
+
+    return { stopped, sessionPublicId: chatSession.session.publicId };
   }
 
   async routeMessage(botId: string, chatId: string, message: string): Promise<ProviderResponse[]> {
@@ -302,7 +371,8 @@ export class BridgeService {
 
   formatResponses(responses: ProviderResponse[]): string[] {
     return responses.map((response) => {
-      const header = `[${response.provider.toUpperCase()} | ${response.sessionId}]`;
+      const sessionLabel = response.publicSessionId ?? response.sessionId;
+      const header = `[${response.provider.toUpperCase()} | ${sessionLabel}]`;
       return `${header}\n${response.output}`;
     });
   }
@@ -341,8 +411,8 @@ export class BridgeService {
     ].join("\n");
   }
 
-  private async resolveSessionSelector(selector: string): Promise<SessionRecord | undefined> {
-    const sessions = await this.store.listSessions();
+  private async resolveSessionSelector(selector: string, botId?: string): Promise<SessionRecord | undefined> {
+    const sessions = await this.store.listSessions(botId);
     const trimmed = selector.trim();
 
     if (/^\d+$/.test(trimmed)) {
@@ -476,7 +546,10 @@ export class BridgeService {
         text: response.output,
       });
 
-      responses.push(response);
+      responses.push({
+        ...response,
+        publicSessionId: session.publicId,
+      });
     }
 
     return responses;
@@ -649,6 +722,8 @@ export class BridgeService {
       : "pending-first-run";
     const details = [`- ${session.provider}: ${state} @ ${session.cwd}`];
 
+    details.push(`  model: ${session.model ?? this.defaultModelFor(session.provider)}`);
+
     if (session.provider === "codex" && session.sandboxMode) {
       details.push(`  sandbox: ${session.sandboxMode}`);
     }
@@ -662,6 +737,47 @@ export class BridgeService {
 
   private resolveWorkspace(current: string | undefined, next: string | undefined): string {
     return next?.trim() || current || this.defaultWorkspace;
+  }
+
+  private defaultModelFor(provider: Provider): string {
+    return provider === "codex" ? "gpt-5.4" : "sonnet";
+  }
+
+  private resolveSelectableModel(provider: Provider, input: string): string {
+    const value = input.trim();
+    if (!value) {
+      return value;
+    }
+
+    const presets = MODEL_PRESETS[provider] ?? [];
+    if (presets.length === 0) {
+      return value;
+    }
+
+    if (/^\d+$/.test(value)) {
+      const index = Number.parseInt(value, 10);
+      if (index >= 1 && index <= presets.length) {
+        return presets[index - 1];
+      }
+      throw new Error(this.formatUnknownModel(provider, value, presets));
+    }
+
+    const matched = presets.find((item) => item.toLowerCase() === value.toLowerCase());
+    if (matched) {
+      return matched;
+    }
+
+    throw new Error(this.formatUnknownModel(provider, value, presets));
+  }
+
+  private formatUnknownModel(provider: Provider, value: string, presets: string[]): string {
+    return [
+      `Unknown ${provider} model: ${value}`,
+      "Choose one of:",
+      ...presets.map((item, index) => ` ${index + 1}. ${item}`),
+      "",
+      "Use `/model` to see the list again.",
+    ].join("\n");
   }
 
   private async createManagedWorkspace(): Promise<{ workspace: string; workspaceUid: string }> {

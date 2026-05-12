@@ -94,6 +94,18 @@ function readNonNegativeTimeout(name: string, fallback: number): number {
   return parsed;
 }
 
+function readOptionalNonNegativeInteger(name: string): number | undefined {
+  const value = process.env[name]?.trim();
+  if (!value) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`Invalid ${name}: ${value}`);
+  }
+  return parsed;
+}
+
 function readBoolean(name: string, fallback: boolean): boolean {
   const value = process.env[name]?.trim().toLowerCase();
   if (!value) {
@@ -139,6 +151,8 @@ export const config = {
   telegramBotUsernames: readTelegramBotUsernames(),
   telegramOwnerId: readOptional("TELEGRAM_OWNER_ID"),
   telegramMessageBatchMs: readNonNegativeTimeout("TELEGRAM_MESSAGE_BATCH_MS", 1500),
+  telegramAutoProgressMaxTurns: readOptionalNonNegativeInteger("TELEGRAM_AUTO_PROGRESS_MAX_TURNS"),
+  telegramEmptyResponseRetries: readOptionalNonNegativeInteger("TELEGRAM_EMPTY_RESPONSE_RETRIES") ?? 1,
   dataDir: defaultDataDir,
   defaultMode: readMode("DEFAULT_MODE", "codex"),
   defaultWorkspace: path.resolve(process.env.DEFAULT_WORKSPACE?.trim() || os.homedir()),

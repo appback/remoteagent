@@ -274,12 +274,12 @@ export class BotManagementService {
   }
 
   private async launchRestartJob(): Promise<void> {
+    const unitName = `remoteagent-bot-op-${Date.now()}`;
     const { stderr } = await execFileAsync("sudo", [
       "-n",
       "systemd-run",
       "--unit",
-      "remoteagent-bot-op",
-      "--replace",
+      unitName,
       "--collect",
       "--service-type=exec",
       this.restartHelperPath,

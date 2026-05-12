@@ -64,9 +64,23 @@ export class FileStore {
     return this.resolveChatSession(state, botId, chatId);
   }
 
-  async listSessions(): Promise<SessionRecord[]> {
+  async listSessions(botId?: string): Promise<SessionRecord[]> {
     const state = await this.readState();
-    return Object.values(state.sessions).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    const sessions = Object.values(state.sessions);
+
+    if (!botId) {
+      return sessions.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    }
+
+    const sessionIds = new Set(
+      Object.values(state.chats)
+        .filter((binding) => binding.botId === botId)
+        .map((binding) => binding.sessionId),
+    );
+
+    return sessions
+      .filter((session) => sessionIds.has(session.sessionId))
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 
   async getSession(sessionId: string): Promise<SessionRecord | undefined> {

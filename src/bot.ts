@@ -25,6 +25,8 @@ const HELP_TEXT = [
   "/batch start|send|cancel|status",
   "/attach codex <thread_id>",
   "/attach claude <session_id>",
+  "/model [name]",
+  "/stop",
   "/sandbox codex <read-only|workspace-write|danger-full-access>",
   "/status",
   "/bots",
@@ -39,8 +41,70 @@ const HELP_TEXT = [
   "/!bash <command>",
 ].join("\n");
 
+const REPORT_PREFIX = "REPORT:";
+const REPORT_PROTOCOL_PROMPT = [
+  "RemoteAgent execution protocol:",
+  "Start the first line of every reply with exactly one of:",
+  "REPORT:progress",
+  "REPORT:result",
+  "REPORT:blocked",
+  "Use REPORT:progress only after you completed a real chunk of work and will continue automatically.",
+  "Use REPORT:result only when the requested work for this turn is actually finished.",
+  "Use REPORT:blocked only when you cannot continue without user input or an external fix.",
+  "After the first line, write only the user-facing report.",
+  "Do not stop at intent like 'I will' or 'I am going to'. Do the work first, then report progress/result, or report blocked.",
+  "Do not claim that a Telegram message or file was sent unless RemoteAgent explicitly confirmed that delivery step.",
+  "Do not call Telegram APIs directly or use bot credentials even if they appear to exist in the environment.",
+].join("\n");
+const RECOGNIZED_COMMANDS = new Set([
+  "start",
+  "help",
+  "list",
+  "new",
+  "switch",
+  "batch",
+  "attach",
+  "model",
+  "stop",
+  "sandbox",
+  "status",
+  "bots",
+  "bot",
+  "install",
+  "login",
+  "reset",
+]);
+
+const REPORT_CONTINUE_PROMPT = [
+  "Continue the same task now.",
+  "Do more concrete work before replying again.",
+  "Do not restate the plan unless it changed because of a real finding.",
+  "Reply again with exactly one first line: REPORT:progress or REPORT:result or REPORT:blocked.",
+].join("\n");
+
+class AutoContinueController {
+  private readonly stops = new Set<string>();
+
+  requestStop(botId: string, chatId: string): void {
+    this.stops.add(this.key(botId, chatId));
+  }
+
+  clear(botId: string, chatId: string): void {
+    this.stops.delete(this.key(botId, chatId));
+  }
+
+  isStopRequested(botId: string, chatId: string): boolean {
+    return this.stops.has(this.key(botId, chatId));
+  }
+
+  private key(botId: string, chatId: string): string {
+    return `${botId}:${chatId}`;
+  }
+}
+
 export function createBot(token: string, bridge: BridgeService, botManagement: BotManagementService, botInfo: UserFromGetMe): Bot {
   const bot = new Bot(token, { botInfo });
+  const autoContinue = new AutoContinueController();
   const shellService = new RemoteShellService(config.commandTimeoutMs);
   const sourceBotToken = token;
   const setupService = new ProviderSetupService(
@@ -57,10 +121,17 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
     config.telegramMessageBatchMs,
     async (target, botId, chatId, text) => {
       await bridge.logSystem(botId, chatId, `Telegram text dispatch (${text.length} chars).`);
-      await runWithPendingAnimation(target.botToken, target.telegramChatId, async () => {
-        const responses = await bridge.routeMessage(botId, chatId, text);
+      await runWithPendingAnimation(target.botToken, target.telegramChatId, async (helpers) => {
         return {
-          chunks: flattenChunks(bridge.formatResponses(responses), 3900),
+          chunks: await routeTelegramWorkLoop(
+            bridge,
+            botId,
+            chatId,
+            text,
+            "Telegram text request",
+            helpers,
+            autoContinue,
+          ),
         };
       });
     },
@@ -124,7 +195,7 @@ ${bridge.formatStatus(mapping)}`);
     const chatId = String(ctx.chat.id);
     const [mapping, sessions] = await Promise.all([
       bridge.status(botId, chatId),
-      bridge.listSessions(),
+      bridge.listSessions(botId),
     ]);
     await reply(ctx, bridge.formatSessionList(sessions, mapping?.session.sessionId));
   };
@@ -219,6 +290,44 @@ ${bridge.formatStatus(mapping)}`);
     await reply(ctx, `Attached this chat to existing ${provider} session ${sessionId}.
 
 ${bridge.formatStatus(mapping)}`);
+  });
+
+  bot.command("model", async (ctx) => {
+    const botId = getBotId();
+    const chatId = String(ctx.chat.id);
+    const { args, rest } = parseCommand(ctx.message?.text, 1);
+    const model = args[0]?.trim();
+
+    if (rest?.trim()) {
+      await reply(ctx, "Usage: `/model` or `/model <name|number>`", {
+        parse_mode: "Markdown",
+      });
+      return;
+    }
+
+    if (!model) {
+      await reply(ctx, await bridge.formatModelSelection(botId, chatId), {
+        parse_mode: "Markdown",
+      });
+      return;
+    }
+
+    const mapping = await bridge.setModel(botId, chatId, model);
+    await reply(ctx, `Set ${mapping.session.mode} model to ${model}.\n\n${bridge.formatStatus(mapping)}`);
+  });
+
+  bot.command("stop", async (ctx) => {
+    const botId = getBotId();
+    const chatId = String(ctx.chat.id);
+    autoContinue.requestStop(botId, chatId);
+    const result = await bridge.stopActiveRun(botId, chatId);
+    await bridge.logSystem(botId, chatId, "Stop requested for auto-continue.");
+    await reply(
+      ctx,
+      result.stopped
+        ? `Stop requested. Active work for ${result.sessionPublicId ?? "this session"} was interrupted, and further automatic continuation will stop.`
+        : "Stop requested. No active provider process was running, but further automatic continuation will stop.",
+    );
   });
 
   bot.command("status", async (ctx) => {
@@ -339,10 +448,18 @@ ${bridge.formatStatus(mapping)}`);
       const message = await formatTelegramAttachmentPrompt("image", downloaded.path, ctx.message.caption?.trim());
 
       await bridge.logSystem(botId, chatId, `Telegram image received: ${downloaded.path}`);
-      await runWithPendingAnimation(token, ctx.chat.id, async () => {
-        const responses = await bridge.routeMessage(botId, chatId, message);
+      await runWithPendingAnimation(token, ctx.chat.id, async (helpers) => {
         return {
-          chunks: flattenChunks(sanitizeAttachmentResponseBlocks(bridge.formatResponses(responses)), 3900),
+          chunks: await routeTelegramWorkLoop(
+            bridge,
+            botId,
+            chatId,
+            message,
+            "Telegram image request",
+            helpers,
+            autoContinue,
+            sanitizeAttachmentResponseBlocks,
+          ),
         };
       });
       return;
@@ -355,10 +472,18 @@ ${bridge.formatStatus(mapping)}`);
         const message = await formatTelegramAttachmentPrompt(attachmentKind, downloaded.path, ctx.message.caption?.trim());
 
         await bridge.logSystem(botId, chatId, `Telegram ${attachmentKind} received: ${downloaded.path}`);
-        await runWithPendingAnimation(token, ctx.chat.id, async () => {
-          const responses = await bridge.routeMessage(botId, chatId, message);
+        await runWithPendingAnimation(token, ctx.chat.id, async (helpers) => {
           return {
-            chunks: flattenChunks(sanitizeAttachmentResponseBlocks(bridge.formatResponses(responses)), 3900),
+            chunks: await routeTelegramWorkLoop(
+              bridge,
+              botId,
+              chatId,
+              message,
+              `Telegram ${attachmentKind} request`,
+              helpers,
+              autoContinue,
+              sanitizeAttachmentResponseBlocks,
+            ),
           };
         });
         return;
@@ -377,10 +502,18 @@ ${bridge.formatStatus(mapping)}`);
       const message = await formatTelegramAttachmentPrompt(attachmentKind, downloaded.path, ctx.message.caption?.trim());
 
       await bridge.logSystem(botId, chatId, `Telegram ${attachmentKind} received: ${downloaded.path}`);
-      await runWithPendingAnimation(token, ctx.chat.id, async () => {
-        const responses = await bridge.routeMessage(botId, chatId, message);
+      await runWithPendingAnimation(token, ctx.chat.id, async (helpers) => {
         return {
-          chunks: flattenChunks(sanitizeAttachmentResponseBlocks(bridge.formatResponses(responses)), 3900),
+          chunks: await routeTelegramWorkLoop(
+            bridge,
+            botId,
+            chatId,
+            message,
+            `Telegram ${attachmentKind} request`,
+            helpers,
+            autoContinue,
+            sanitizeAttachmentResponseBlocks,
+          ),
         };
       });
       return;
@@ -414,7 +547,7 @@ ${bridge.formatStatus(mapping)}`);
       return;
     }
 
-    if (text.startsWith("/")) {
+    if (isRecognizedSlashCommand(text, botId)) {
       return;
     }
 
@@ -566,6 +699,7 @@ class TelegramMessageBatcher {
       await this.onBatch(target, botId, chatId, text);
     } catch (error) {
       const message = error instanceof Error ? error.message : "An unexpected error occurred.";
+      console.error(`[telegram-batch] bot=${botId} chat=${chatId} failed: ${message}`, error);
       await sendTelegramMessage(target.botToken, target.telegramChatId, message).catch(() => undefined);
     }
   }
@@ -589,9 +723,9 @@ function sanitizeLoggedTelegramText(text: string): string {
 async function runWithPendingAnimation(
   botToken: string,
   chatId: number,
-  task: () => Promise<{ chunks: string[]; parseMode?: "HTML" | "MarkdownV2" }>,
+  task: (helpers: PendingAnimationHelpers) => Promise<{ chunks: string[]; parseMode?: "HTML" | "MarkdownV2" }>,
 ): Promise<void> {
-  const pending = await sendTelegramMessage(botToken, chatId, "Working.");
+  let pending = await sendTelegramMessage(botToken, chatId, "Working.");
   const pendingFrames = ["Working.", "Working..", "Working...", "Working...."];
   let pendingIndex = 0;
   const pendingLoop = setInterval(() => {
@@ -600,11 +734,32 @@ async function runWithPendingAnimation(
   }, 3000);
 
   try {
-    const result = await task();
-    const chunks = result.chunks;
+    const helpers: PendingAnimationHelpers = {
+      reportProgress: async (chunks, parseMode) => {
+        const normalized = await normalizeTelegramDelivery(chunks);
+        const progressChunks = flattenChunks(normalized.chunks, 3900);
+        if (progressChunks.length === 0 && normalized.documents.length === 0) {
+          return;
+        }
+
+        const extra = parseMode ? { parse_mode: parseMode } : undefined;
+        await deleteTelegramMessage(botToken, chatId, pending.message_id).catch(() => undefined);
+        for (const chunk of progressChunks) {
+          await sendTelegramMessage(botToken, chatId, chunk, extra);
+        }
+        if (normalized.documents.length > 0) {
+          await sendTelegramDocuments(botToken, chatId, normalized.documents);
+        }
+        pending = await sendTelegramMessage(botToken, chatId, "Working.");
+      },
+    };
+
+    const result = await task(helpers);
+    const normalized = await normalizeTelegramDelivery(result.chunks);
+    const chunks = normalized.chunks;
     const extra = result.parseMode ? { parse_mode: result.parseMode } : undefined;
 
-    if (chunks.length === 0) {
+    if (chunks.length === 0 && normalized.documents.length === 0) {
       await editTelegramMessageText(botToken, chatId, pending.message_id, "Response was empty.");
       return;
     }
@@ -613,14 +768,148 @@ async function runWithPendingAnimation(
     for (const chunk of chunks) {
       await sendTelegramMessage(botToken, chatId, chunk, extra);
     }
+    if (normalized.documents.length > 0) {
+      await sendTelegramDocuments(botToken, chatId, normalized.documents);
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : "An unexpected error occurred.";
+    console.error(`[telegram-pending] chat=${chatId} failed: ${message}`, error);
     await editTelegramMessageText(botToken, chatId, pending.message_id, message).catch(async () => {
       await sendTelegramMessage(botToken, chatId, message);
     });
   } finally {
     clearInterval(pendingLoop);
   }
+}
+
+async function routeTelegramWorkLoop(
+  bridge: BridgeService,
+  botId: string,
+  chatId: string,
+  message: string,
+  label: string,
+  helpers: PendingAnimationHelpers,
+  autoContinue: AutoContinueController,
+  transform: (blocks: string[]) => string[] = (blocks) => blocks,
+): Promise<string[]> {
+  autoContinue.clear(botId, chatId);
+  let prompt = appendReportProtocol(message);
+  const maxTurns = config.telegramAutoProgressMaxTurns;
+  const emptyResponseRetries = config.telegramEmptyResponseRetries;
+  let emptyResponseRetryCount = 0;
+  let deliveredProgressCount = 0;
+
+  for (let turn = 1; ; turn += 1) {
+    if (typeof maxTurns === "number" && maxTurns > 0 && turn > maxTurns) {
+      const limitMessage = `Automatic continue limit (${maxTurns}) reached before a final result.`;
+      await bridge.logSystem(botId, chatId, limitMessage);
+      autoContinue.clear(botId, chatId);
+      return [limitMessage];
+    }
+
+    if (autoContinue.isStopRequested(botId, chatId)) {
+      const stopMessage = "Automatic continuation stopped.";
+      await bridge.logSystem(botId, chatId, stopMessage);
+      autoContinue.clear(botId, chatId);
+      return [stopMessage];
+    }
+
+    const turnLabel = `${label} turn ${turn}`;
+    await bridge.logSystem(botId, chatId, `${turnLabel} started.`);
+
+    try {
+      const responses = await bridge.routeMessage(botId, chatId, prompt);
+      const parsed = parseReportResponses(bridge.formatResponses(responses), transform);
+      await bridge.logSystem(botId, chatId, `${turnLabel} returned ${parsed.kind}.`);
+      emptyResponseRetryCount = 0;
+
+      if (parsed.kind === "progress") {
+        deliveredProgressCount += 1;
+        await helpers.reportProgress(parsed.chunks);
+        if (autoContinue.isStopRequested(botId, chatId)) {
+          const stopMessage = "Automatic continuation stopped after the latest progress report.";
+          await bridge.logSystem(botId, chatId, stopMessage);
+          autoContinue.clear(botId, chatId);
+          return [stopMessage];
+        }
+        prompt = REPORT_CONTINUE_PROMPT;
+        continue;
+      }
+
+      if (parsed.kind === "result" || parsed.kind === "blocked") {
+        autoContinue.clear(botId, chatId);
+        return parsed.chunks;
+      }
+
+      await bridge.logSystem(botId, chatId, `${turnLabel} returned an untagged response; treating it as final output.`);
+      autoContinue.clear(botId, chatId);
+      return parsed.chunks;
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : "An unexpected error occurred.";
+
+      if (isEmptyResponseError(messageText) && emptyResponseRetryCount < emptyResponseRetries) {
+        emptyResponseRetryCount += 1;
+        const retryMessage = `${turnLabel} returned an empty response; retrying automatic continuation (${emptyResponseRetryCount}/${emptyResponseRetries}).`;
+        console.warn(`[telegram-route] bot=${botId} chat=${chatId} ${retryMessage}`);
+        await bridge.logSystem(botId, chatId, retryMessage);
+        prompt = REPORT_CONTINUE_PROMPT;
+        continue;
+      }
+
+      console.error(`[telegram-route] bot=${botId} chat=${chatId} ${turnLabel} failed: ${messageText}`, error);
+      await bridge.logSystem(botId, chatId, `${turnLabel} failed: ${messageText}`);
+      autoContinue.clear(botId, chatId);
+
+      if (isEmptyResponseError(messageText) && deliveredProgressCount > 0) {
+        return [
+          "The last progress report was delivered, but the follow-up provider response came back empty. Automatic continuation stopped here.",
+          "Send a new message such as `continue` to resume the same session from the latest state.",
+        ];
+      }
+
+      throw error;
+    }
+  }
+}
+
+type PendingAnimationHelpers = {
+  reportProgress: (chunks: string[], parseMode?: "HTML" | "MarkdownV2") => Promise<void>;
+};
+
+type ReportKind = "progress" | "result" | "blocked" | "unknown";
+
+function appendReportProtocol(message: string): string {
+  return `${message}\n\n${REPORT_PROTOCOL_PROMPT}`;
+}
+
+function parseReportResponses(
+  formattedBlocks: string[],
+  transform: (blocks: string[]) => string[],
+): { kind: ReportKind; chunks: string[] } {
+  if (formattedBlocks.length === 0) {
+    return { kind: "unknown", chunks: [] };
+  }
+
+  const parsedBlocks = formattedBlocks.map((block) => {
+    const lines = block.split(/\r?\n/);
+    const header = lines.shift() ?? "";
+    const first = (lines.shift() ?? "").trim();
+    const match = /^REPORT:(progress|result|blocked)$/i.exec(first);
+    const kind = (match?.[1]?.toLowerCase() as ReportKind | undefined) ?? "unknown";
+    const body = lines.join("\n").trim();
+    return {
+      kind,
+      text: body ? `${header}\n${body}` : header,
+    };
+  });
+
+  const kind = parsedBlocks[0]?.kind ?? "unknown";
+  const chunks = transform(parsedBlocks.map((item) => item.text));
+  return { kind, chunks };
+}
+
+function isEmptyResponseError(message: string): boolean {
+  return /empty response/i.test(message);
 }
 
 async function ensureOwnerControlAccess(ctx: Context): Promise<void> {
@@ -737,6 +1026,32 @@ function isCodexSandboxMode(value: string): value is CodexSandboxMode {
 
 function isRemoteShellMessage(text: string): boolean {
   return text.startsWith("/!");
+}
+
+function isRecognizedSlashCommand(text: string, botId: string): boolean {
+  if (!text.startsWith("/")) {
+    return false;
+  }
+
+  const token = text.slice(1).split(/\s+/, 1)[0]?.trim();
+  if (!token) {
+    return false;
+  }
+
+  if (token.includes("/")) {
+    return false;
+  }
+
+  const [name, mention] = token.split("@", 2);
+  if (!name) {
+    return false;
+  }
+
+  if (mention && mention.toLowerCase() !== botId.toLowerCase()) {
+    return false;
+  }
+
+  return RECOGNIZED_COMMANDS.has(name.toLowerCase());
 }
 
 function parseRemoteShellRequest(text: string): { kind: "native" | "cmd" | "bash"; command: string } | undefined {
@@ -941,6 +1256,11 @@ type TelegramMessageOptions = {
   parse_mode?: "Markdown" | "MarkdownV2" | "HTML";
 };
 
+type TelegramOutgoingDocument = {
+  path: string;
+  caption?: string;
+};
+
 type TelegramMessageResult = {
   message_id: number;
 };
@@ -993,6 +1313,106 @@ async function downloadTelegramFile(
 function safePathSegment(value: string): string {
   const safe = value.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
   return safe || "file";
+}
+
+async function normalizeTelegramDelivery(chunks: string[]): Promise<{ chunks: string[]; documents: TelegramOutgoingDocument[] }> {
+  const documents = new Map<string, TelegramOutgoingDocument>();
+  const normalizedChunks = await Promise.all(chunks.map(async (chunk) => {
+    const lines = chunk.split("\n").map((line) => line.endsWith("\r") ? line.slice(0, -1) : line);
+    const kept: string[] = [];
+
+    for (const line of lines) {
+      const match = /^TELEGRAM_FILE:\s*(.+?)\s*$/i.exec(line.trim());
+      if (!match) {
+        kept.push(line);
+        continue;
+      }
+
+      const candidatePath = match[1];
+      if (await isReadableTelegramDocument(candidatePath)) {
+        documents.set(candidatePath, { path: candidatePath });
+      } else {
+        kept.push(`Telegram file was requested but is missing: ${candidatePath}`);
+      }
+    }
+
+    return kept.join("\n").trim();
+  }));
+
+  const nonEmptyChunks = normalizedChunks.filter(Boolean);
+  if (documents.size === 0 && nonEmptyChunks.some((chunk) => mentionsTelegramDeliveryClaim(chunk))) {
+    throw new Error("Provider claimed Telegram delivery without a confirmed RemoteAgent file transfer.");
+  }
+
+  return {
+    chunks: nonEmptyChunks,
+    documents: [...documents.values()],
+  };
+}
+
+async function isReadableTelegramDocument(filePath: string): Promise<boolean> {
+  if (!path.isAbsolute(filePath)) {
+    return false;
+  }
+
+  try {
+    const stat = await fs.stat(filePath);
+    return stat.isFile();
+  } catch {
+    return false;
+  }
+}
+
+function mentionsTelegramDeliveryClaim(text: string): boolean {
+  return /(telegram).*(sent|delivered|delivery)|((sent|delivered|delivery).*(telegram))/i.test(text);
+}
+
+async function sendTelegramDocuments(
+  botToken: string,
+  chatId: number,
+  documents: TelegramOutgoingDocument[],
+): Promise<void> {
+  for (const document of documents) {
+    await sendTelegramDocument(botToken, chatId, document);
+  }
+}
+
+async function sendTelegramDocument(
+  botToken: string,
+  chatId: number,
+  document: TelegramOutgoingDocument,
+): Promise<TelegramMessageResult> {
+  const resolvedPath = path.resolve(document.path);
+  if (!(await isReadableTelegramDocument(resolvedPath))) {
+    throw new Error(`Telegram document is missing or unreadable: ${resolvedPath}`);
+  }
+
+  const args = [
+    "-sS",
+    "--max-time",
+    "120",
+    "-F",
+    `chat_id=${chatId}`,
+    "-F",
+    `document=@${resolvedPath}`,
+    `https://api.telegram.org/bot${botToken}/sendDocument`,
+  ];
+
+  if (document.caption?.trim()) {
+    args.splice(args.length - 1, 0, "-F", `caption=${document.caption.trim()}`);
+  }
+
+  const { stdout, stderr } = await execFileAsync("curl", args);
+  if (stderr?.trim()) {
+    console.error(`curl stderr for sendDocument: ${stderr.trim()}`);
+  }
+
+  const payload = JSON.parse(stdout) as { ok?: boolean; result?: TelegramMessageResult; description?: string };
+  if (!payload.ok || !payload.result) {
+    throw new Error(payload.description || "Telegram API sendDocument failed.");
+  }
+
+  return payload.result;
 }
 
 async function sendTelegramMessage(

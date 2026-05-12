@@ -99,15 +99,23 @@ cat /home/au2223/.remoteagent/remoteagent.lock
 The intended workflow is:
 
 1. edit on server 30
-2. run `npm run check`
-3. run `npm run build`
-4. restart `remoteagent.service`
-5. verify logs or a Telegram/local UI path
-6. commit on `main`
-7. push `main` to `origin/main`
+2. choose `patch`, `minor`, or `major` for the current deployment
+3. bump the package version before deployment
+4. run `npm run check`
+5. run `npm run build`
+6. restart `remoteagent.service` when runtime code changed
+7. verify logs or a Telegram/local UI path
+8. commit on `main`
+9. push `main` to `origin/main`
+10. update machine 21's npm-installed RemoteAgent runtime
 
 Avoid side branches and extra worktrees unless there is a strong reason.
 If a temporary branch is unavoidable, merge it back on server 30 and return production work to `main` immediately.
+
+A task is not done until commit and push both happened.
+A deployment is not done until machine 21 has also been updated.
+
+See `docs/RELEASING.md` for the detailed versioning rules.
 
 ## GitHub authentication
 

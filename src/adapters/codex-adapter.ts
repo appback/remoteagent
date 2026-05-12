@@ -20,7 +20,7 @@ export class CodexAdapter implements ProviderAdapter {
       ? this.buildResumeArgs(request, outputPath, sandboxMode)
       : this.buildExecArgs(request, outputPath, sandboxMode);
 
-    const { stdout, stderr, code } = await this.runCodex(args, request.cwd, request.message);
+    const { stdout, stderr, code, timedOut } = await this.runCodex(args, request.cwd, request.remoteSessionId, request.message);
 
     try {
       const sessionId = this.extractThreadId(stdout) ?? request.sessionId;
@@ -36,7 +36,11 @@ export class CodexAdapter implements ProviderAdapter {
       }
 
       if (code !== 0) {
-        throw new Error(this.formatProcessError(stdout, stderr));
+        throw new Error(this.formatProcessError(stdout, stderr, timedOut));
+      }
+
+      if (timedOut) {
+        throw new Error(this.formatTimeoutError());
       }
 
       if (!sessionId) {
@@ -97,6 +101,10 @@ export class CodexAdapter implements ProviderAdapter {
       "--skip-git-repo-check",
     ];
 
+    if (request.model) {
+      args.push("-m", request.model);
+    }
+
     this.appendSandboxArgs(args, sandboxMode);
 
     args.push(
@@ -132,9 +140,10 @@ export class CodexAdapter implements ProviderAdapter {
   private runCodex(
     args: string[],
     cwd: string,
+    remoteSessionId: string,
     input?: string,
-  ): Promise<{ stdout: string; stderr: string; code: number | null }> {
-    return spawnWithPlatformShell(this.codexBin, args, cwd, this.timeoutMs, input);
+  ): Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean }> {
+    return spawnWithPlatformShell(this.codexBin, args, cwd, this.timeoutMs, input, remoteSessionId);
   }
 
   private extractThreadId(stdout: string): string | undefined {
@@ -187,13 +196,23 @@ export class CodexAdapter implements ProviderAdapter {
     return (await fs.readFile(outputPath, "utf8").catch(() => "")).trim();
   }
 
-  private formatProcessError(stdout: string, stderr: string): string {
+  private formatProcessError(stdout: string, stderr: string, timedOut = false): string {
     const text = [stderr, stdout]
       .map((value) => value.trim())
       .filter(Boolean)
       .join("\n")
       .trim();
 
-    return text || "Codex execution failed without any output.";
+    if (text) {
+      return text;
+    }
+
+    return timedOut
+      ? this.formatTimeoutError()
+      : "Codex execution failed without any output.";
+  }
+
+  private formatTimeoutError(): string {
+    return `Codex timed out after ${Math.round(this.timeoutMs / 1000)}s without returning a final reply.`;
   }
 }
