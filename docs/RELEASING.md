@@ -73,3 +73,4 @@ Server 30 is the source of truth.
 After a deployment on server 30, machine 21 must refresh its npm-installed runtime before the release can be treated as finished.
 
 At minimum, the operator should run the local install/update flow again and verify the process comes back up cleanly.
+For GitHub-based npm installs, the package now builds `dist/` during `prepare`, so a clean reinstall on machine 21 should produce a runnable package without a separate manual build step.
