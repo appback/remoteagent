@@ -1,6 +1,6 @@
 {
   "name": "remoteagent",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "description": "Personal installable session server for continuing local AI work across PC and Telegram",
   "license": "MIT",
@@ -23,5 +23,15 @@
     "@types/node": "^24.6.1",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
-  }
+  },
+  "files": [
+    "dist",
+    "scripts",
+    "docs",
+    "README.md",
+    "LICENSE",
+    ".env.example",
+    "package.json",
+    "tsconfig.json"
+  ]
 }
