@@ -965,22 +965,22 @@ function formatRetryableProviderRetryMessage(issue: RetryableProviderIssue, atte
 
   switch (issue.kind) {
     case "capacity":
-      return `Temporary provider congestion detected. Retrying in ${waitSeconds}s. (${attempt}/${maxAttempts})`;
+      return `일시적인 장애로 인해 ${waitSeconds}초 후 다시 시도합니다. (${attempt}/${maxAttempts})`;
     case "timeout":
-      return `Provider response is delayed. Retrying in ${waitSeconds}s. (${attempt}/${maxAttempts})`;
+      return `응답이 지연되어 ${waitSeconds}초 후 다시 시도합니다. (${attempt}/${maxAttempts})`;
     case "empty-response":
-      return `The follow-up reply came back empty. Retrying in ${waitSeconds}s. (${attempt}/${maxAttempts})`;
+      return `후속 응답이 비어 있어 ${waitSeconds}초 후 다시 시도합니다. (${attempt}/${maxAttempts})`;
   }
 }
 
 function formatRetryableProviderFinalMessage(issue: RetryableProviderIssue): string {
   switch (issue.kind) {
     case "capacity":
-      return "The selected model is currently at capacity. Please try again shortly or switch to a different model.";
+      return "일시적인 장애가 반복되어 자동 재시도를 중단했습니다. 잠시 후 다시 시도하거나 다른 모델로 변경해 주세요.";
     case "timeout":
-      return "Repeated response delays stopped automatic continuation. Please try again shortly.";
+      return "응답 지연이 반복되어 자동 재시도를 중단했습니다. 잠시 후 다시 시도해 주세요.";
     case "empty-response":
-      return "Repeated empty follow-up replies stopped automatic continuation. Please retry in the same session.";
+      return "후속 응답이 반복해서 비어 자동 재시도를 중단했습니다. 같은 세션에서 다시 시도해 주세요.";
   }
 }
 

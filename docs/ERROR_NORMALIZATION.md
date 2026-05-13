@@ -8,6 +8,7 @@ RemoteAgent should never leak raw provider event payloads directly to Telegram u
 - classify retryable vs non-retryable failures
 - keep internal details in logs, not in Telegram replies
 - make retry behavior predictable for long-running Telegram sessions
+- tell users when a retryable issue is being retried and when automatic retries stop
 
 ## Current retryable classes
 
