@@ -796,7 +796,10 @@ async function routeTelegramWorkLoop(
   let prompt = appendReportProtocol(message);
   const maxTurns = config.telegramAutoProgressMaxTurns;
   const emptyResponseRetries = config.telegramEmptyResponseRetries;
+  const retryableErrorRetries = config.telegramRetryableErrorRetries;
+  const retryableErrorDelayMs = config.telegramRetryableErrorDelayMs;
   let emptyResponseRetryCount = 0;
+  let retryableErrorCount = 0;
   let deliveredProgressCount = 0;
 
   for (let turn = 1; ; turn += 1) {
@@ -822,6 +825,7 @@ async function routeTelegramWorkLoop(
       const parsed = parseReportResponses(bridge.formatResponses(responses), transform);
       await bridge.logSystem(botId, chatId, `${turnLabel} returned ${parsed.kind}.`);
       emptyResponseRetryCount = 0;
+      retryableErrorCount = 0;
 
       if (parsed.kind === "progress") {
         deliveredProgressCount += 1;
@@ -846,6 +850,7 @@ async function routeTelegramWorkLoop(
       return parsed.chunks;
     } catch (error) {
       const messageText = error instanceof Error ? error.message : "An unexpected error occurred.";
+      const retryable = classifyRetryableProviderIssue(messageText, retryableErrorDelayMs);
 
       if (isEmptyResponseError(messageText) && emptyResponseRetryCount < emptyResponseRetries) {
         emptyResponseRetryCount += 1;
@@ -856,9 +861,30 @@ async function routeTelegramWorkLoop(
         continue;
       }
 
+      if (retryable && retryableErrorCount < retryableErrorRetries) {
+        retryableErrorCount += 1;
+        const retryMessage = formatRetryableProviderRetryMessage(retryable, retryableErrorCount, retryableErrorRetries);
+        console.warn(`[telegram-route] bot=${botId} chat=${chatId} ${turnLabel} retrying: ${messageText}`);
+        await bridge.logSystem(botId, chatId, `${turnLabel} retrying after temporary provider issue: ${messageText}`);
+        await helpers.reportProgress([retryMessage]);
+        if (autoContinue.isStopRequested(botId, chatId)) {
+          const stopMessage = "Automatic continuation stopped after the latest retry notice.";
+          await bridge.logSystem(botId, chatId, stopMessage);
+          autoContinue.clear(botId, chatId);
+          return [stopMessage];
+        }
+        await sleep(retryable.retryAfterMs);
+        prompt = REPORT_CONTINUE_PROMPT;
+        continue;
+      }
+
       console.error(`[telegram-route] bot=${botId} chat=${chatId} ${turnLabel} failed: ${messageText}`, error);
       await bridge.logSystem(botId, chatId, `${turnLabel} failed: ${messageText}`);
       autoContinue.clear(botId, chatId);
+
+      if (retryable) {
+        return [formatRetryableProviderFinalMessage(retryable)];
+      }
 
       if (isEmptyResponseError(messageText) && deliveredProgressCount > 0) {
         return [
@@ -877,6 +903,12 @@ type PendingAnimationHelpers = {
 };
 
 type ReportKind = "progress" | "result" | "blocked" | "unknown";
+type RetryableProviderIssueKind = "capacity" | "timeout" | "empty-response";
+
+type RetryableProviderIssue = {
+  kind: RetryableProviderIssueKind;
+  retryAfterMs: number;
+};
 
 function appendReportProtocol(message: string): string {
   return `${message}\n\n${REPORT_PROTOCOL_PROMPT}`;
@@ -910,6 +942,50 @@ function parseReportResponses(
 
 function isEmptyResponseError(message: string): boolean {
   return /empty response/i.test(message);
+}
+
+function classifyRetryableProviderIssue(message: string, retryAfterMs: number): RetryableProviderIssue | undefined {
+  if (/selected model is at capacity/i.test(message)) {
+    return { kind: "capacity", retryAfterMs };
+  }
+
+  if (/timed out after/i.test(message)) {
+    return { kind: "timeout", retryAfterMs };
+  }
+
+  if (isEmptyResponseError(message)) {
+    return { kind: "empty-response", retryAfterMs };
+  }
+
+  return undefined;
+}
+
+function formatRetryableProviderRetryMessage(issue: RetryableProviderIssue, attempt: number, maxAttempts: number): string {
+  const waitSeconds = Math.max(1, Math.round(issue.retryAfterMs / 1000));
+
+  switch (issue.kind) {
+    case "capacity":
+      return `Temporary provider congestion detected. Retrying in ${waitSeconds}s. (${attempt}/${maxAttempts})`;
+    case "timeout":
+      return `Provider response is delayed. Retrying in ${waitSeconds}s. (${attempt}/${maxAttempts})`;
+    case "empty-response":
+      return `The follow-up reply came back empty. Retrying in ${waitSeconds}s. (${attempt}/${maxAttempts})`;
+  }
+}
+
+function formatRetryableProviderFinalMessage(issue: RetryableProviderIssue): string {
+  switch (issue.kind) {
+    case "capacity":
+      return "The selected model is currently at capacity. Please try again shortly or switch to a different model.";
+    case "timeout":
+      return "Repeated response delays stopped automatic continuation. Please try again shortly.";
+    case "empty-response":
+      return "Repeated empty follow-up replies stopped automatic continuation. Please retry in the same session.";
+  }
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function ensureOwnerControlAccess(ctx: Context): Promise<void> {

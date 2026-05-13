@@ -153,6 +153,8 @@ export const config = {
   telegramMessageBatchMs: readNonNegativeTimeout("TELEGRAM_MESSAGE_BATCH_MS", 1500),
   telegramAutoProgressMaxTurns: readOptionalNonNegativeInteger("TELEGRAM_AUTO_PROGRESS_MAX_TURNS"),
   telegramEmptyResponseRetries: readOptionalNonNegativeInteger("TELEGRAM_EMPTY_RESPONSE_RETRIES") ?? 1,
+  telegramRetryableErrorRetries: readOptionalNonNegativeInteger("TELEGRAM_RETRYABLE_ERROR_RETRIES") ?? 2,
+  telegramRetryableErrorDelayMs: readNonNegativeTimeout("TELEGRAM_RETRYABLE_ERROR_DELAY_MS", 5_000),
   dataDir: defaultDataDir,
   defaultMode: readMode("DEFAULT_MODE", "codex"),
   defaultWorkspace: path.resolve(process.env.DEFAULT_WORKSPACE?.trim() || os.homedir()),

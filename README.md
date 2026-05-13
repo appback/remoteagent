@@ -176,6 +176,7 @@ A change is not considered finished until it is committed and pushed.
 A deployment on server 30 is not considered complete until machine 21's npm-installed runtime is updated as well.
 
 See [docs/RELEASING.md](docs/RELEASING.md) for the release checklist and version bump commands.
+See [docs/ERROR_NORMALIZATION.md](docs/ERROR_NORMALIZATION.md) for provider error classification and retry behavior.
 
 ## Runtime layout
 
