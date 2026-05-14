@@ -1261,6 +1261,10 @@ function classifyTelegramDocument(mimeType: string | undefined, fileName: string
     return "PDF document";
   }
 
+  if (isWordDocument(mimeType, lowerName)) {
+    return "Word document";
+  }
+
   if (
     mimeType?.startsWith("text/")
     || mimeType === "application/markdown"
@@ -1278,6 +1282,17 @@ function classifyTelegramDocument(mimeType: string | undefined, fileName: string
   }
 
   return undefined;
+}
+
+function isWordDocument(mimeType: string | undefined, lowerName: string): boolean {
+  if (
+    mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    || mimeType === "application/msword"
+  ) {
+    return true;
+  }
+
+  return lowerName.endsWith(".docx") || lowerName.endsWith(".doc");
 }
 
 function isArchiveDocument(mimeType: string | undefined, lowerName: string): boolean {
@@ -1311,6 +1326,10 @@ function isArchiveDocument(mimeType: string | undefined, lowerName: string): boo
 }
 
 async function readInlineTextPreview(kind: string, filePath: string): Promise<string | undefined> {
+  if (kind === "Word document") {
+    return readWordDocumentPreview(filePath);
+  }
+
   if (!["text document", "Markdown document"].includes(kind)) {
     return undefined;
   }
@@ -1328,6 +1347,33 @@ async function readInlineTextPreview(kind: string, filePath: string): Promise<st
   return `${text.slice(0, maxChars)}\n\n[truncated: ${text.length - maxChars} more chars in local file]`;
 }
 
+async function readWordDocumentPreview(filePath: string): Promise<string | undefined> {
+  if (!filePath.toLowerCase().endsWith(".docx")) {
+    return undefined;
+  }
+
+  const python = `
+import re
+import sys
+import zipfile
+import xml.etree.ElementTree as ET
+
+MAX_CHARS = 20000
+path = sys.argv[1]
+with zipfile.ZipFile(path) as archive:
+    xml_bytes = archive.read("word/document.xml")
+root = ET.fromstring(xml_bytes)
+text = "".join(node.text or "" for node in root.iter() if node.tag.endswith("}t"))
+text = re.sub(r"\\s+", " ", text).strip()
+if len(text) > MAX_CHARS:
+    text = text[:MAX_CHARS] + f"\\n\\n[truncated: {len(text) - MAX_CHARS} more chars in local file]"
+print(text)
+`.trim();
+
+  const { stdout } = await execFileAsync("python3", ["-c", python, filePath], { maxBuffer: 1024 * 1024 });
+  const preview = stdout.trim();
+  return preview || undefined;
+}
 type TelegramMessageOptions = {
   parse_mode?: "Markdown" | "MarkdownV2" | "HTML";
 };

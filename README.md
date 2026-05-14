@@ -14,7 +14,7 @@ RemoteAgent is currently organized around five core capabilities.
 | Terminal control | The owner can run restricted remote shell commands from Telegram | Supported with restrictions |
 | Telegram <-> Codex | A Telegram chat can start or attach to a Codex session and continue it | Supported |
 | Telegram <-> Claude Code | A Telegram chat can start or attach to a Claude Code session and continue it | Supported |
-| Telegram attachments | Telegram can send images, text, Markdown, PDF, archives, and audio/voice inputs into the runtime | Supported |
+| Telegram attachments | Telegram can send images, text, Markdown, PDF, Word documents, archives, and audio/voice inputs into the runtime | Supported |
 
 ## Product direction
 
@@ -143,6 +143,7 @@ Current supported attachment classes:
 - text files
 - Markdown files
 - PDF documents
+- Word documents (.docx, basic .doc intake)
 - archive files
 - voice messages
 - audio files
