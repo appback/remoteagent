@@ -54,6 +54,7 @@ const REPORT_PROTOCOL_PROMPT = [
   "After the first line, write only the user-facing report.",
   "Do not stop at intent like 'I will' or 'I am going to'. Do the work first, then report progress/result, or report blocked.",
   "Do not claim that a Telegram message or file was sent unless RemoteAgent explicitly confirmed that delivery step.",
+  "If you want RemoteAgent to send a file, include a separate line exactly like: TELEGRAM_FILE: /absolute/path/to/file",
   "Do not call Telegram APIs directly or use bot credentials even if they appear to exist in the environment.",
 ].join("\n");
 const RECOGNIZED_COMMANDS = new Set([
@@ -1561,7 +1562,7 @@ async function normalizeTelegramDelivery(chunks: string[]): Promise<{ chunks: st
 
   const nonEmptyChunks = normalizedChunks.filter(Boolean);
   if (documents.size === 0 && nonEmptyChunks.some((chunk) => mentionsTelegramDeliveryClaim(chunk))) {
-    throw new Error("Provider claimed Telegram delivery without a confirmed RemoteAgent file transfer.");
+    throw new Error("\ubaa8\ub378\uc774 \ud154\ub808\uadf8\ub7a8 \uc804\uc1a1 \uc644\ub8cc\ub97c \uc8fc\uc7a5\ud588\uc9c0\ub9cc, RemoteAgent\uac00 \ud655\uc778\ud55c \ud30c\uc77c \uc804\uc1a1 \uc9c0\uc2dc(`TELEGRAM_FILE: /absolute/path/to/file`)\ub294 \ud3ec\ud568\ub418\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4. \ud30c\uc77c\uc744 \ubcf4\ub0b4\ub824\uba74 \ud574\ub2f9 \ud615\uc2dd\uc73c\ub85c \uc808\ub300 \uacbd\ub85c\ub97c \uba85\uc2dc\ud574\uc57c \ud569\ub2c8\ub2e4.");
   }
 
   return {
