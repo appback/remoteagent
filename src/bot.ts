@@ -1462,7 +1462,7 @@ with zipfile.ZipFile(path) as archive:
         if len(rows) >= MAX_ROWS or cell_count >= MAX_CELLS:
             break
 
-text = "\n".join(rows).strip()
+text = "\\n".join(rows).strip()
 if len(text) > MAX_CHARS:
     text = text[:MAX_CHARS] + f"\\n\\n[truncated: {len(text) - MAX_CHARS} more chars in local file]"
 print(text)
