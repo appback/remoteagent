@@ -1265,6 +1265,10 @@ function classifyTelegramDocument(mimeType: string | undefined, fileName: string
     return "Word document";
   }
 
+  if (isSpreadsheetDocument(mimeType, lowerName)) {
+    return "Spreadsheet document";
+  }
+
   if (
     mimeType?.startsWith("text/")
     || mimeType === "application/markdown"
@@ -1293,6 +1297,18 @@ function isWordDocument(mimeType: string | undefined, lowerName: string): boolea
   }
 
   return lowerName.endsWith(".docx") || lowerName.endsWith(".doc");
+}
+
+function isSpreadsheetDocument(mimeType: string | undefined, lowerName: string): boolean {
+  if (
+    mimeType === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    || mimeType === "application/vnd.ms-excel"
+    || mimeType === "application/vnd.ms-excel.sheet.macroenabled.12"
+  ) {
+    return true;
+  }
+
+  return lowerName.endsWith(".xlsx") || lowerName.endsWith(".xls") || lowerName.endsWith(".xlsm");
 }
 
 function isArchiveDocument(mimeType: string | undefined, lowerName: string): boolean {
@@ -1330,6 +1346,10 @@ async function readInlineTextPreview(kind: string, filePath: string): Promise<st
     return readWordDocumentPreview(filePath);
   }
 
+  if (kind === "Spreadsheet document") {
+    return readSpreadsheetDocumentPreview(filePath);
+  }
+
   if (!["text document", "Markdown document"].includes(kind)) {
     return undefined;
   }
@@ -1365,6 +1385,84 @@ with zipfile.ZipFile(path) as archive:
 root = ET.fromstring(xml_bytes)
 text = "".join(node.text or "" for node in root.iter() if node.tag.endswith("}t"))
 text = re.sub(r"\\s+", " ", text).strip()
+if len(text) > MAX_CHARS:
+    text = text[:MAX_CHARS] + f"\\n\\n[truncated: {len(text) - MAX_CHARS} more chars in local file]"
+print(text)
+`.trim();
+
+  const { stdout } = await execFileAsync("python3", ["-c", python, filePath], { maxBuffer: 1024 * 1024 });
+  const preview = stdout.trim();
+  return preview || undefined;
+}
+
+async function readSpreadsheetDocumentPreview(filePath: string): Promise<string | undefined> {
+  const lowerPath = filePath.toLowerCase();
+  if (!lowerPath.endsWith(".xlsx") && !lowerPath.endsWith(".xlsm")) {
+    return undefined;
+  }
+
+  const python = `
+import re
+import sys
+import zipfile
+import xml.etree.ElementTree as ET
+
+MAX_CHARS = 20000
+MAX_ROWS = 120
+MAX_CELLS = 500
+path = sys.argv[1]
+ns = {"a": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+shared_strings = []
+rows = []
+cell_count = 0
+
+with zipfile.ZipFile(path) as archive:
+    if "xl/sharedStrings.xml" in archive.namelist():
+        shared_root = ET.fromstring(archive.read("xl/sharedStrings.xml"))
+        for si in shared_root.findall("a:si", ns):
+            parts = [node.text or "" for node in si.iter() if node.tag.endswith("}t")]
+            shared_strings.append("".join(parts))
+
+    worksheet_names = sorted(
+        name for name in archive.namelist()
+        if name.startswith("xl/worksheets/") and name.endswith(".xml")
+    )
+
+    for worksheet_name in worksheet_names:
+        sheet_root = ET.fromstring(archive.read(worksheet_name))
+        for row in sheet_root.findall(".//a:sheetData/a:row", ns):
+            values = []
+            for cell in row.findall("a:c", ns):
+                cell_type = cell.get("t")
+                if cell_type == "inlineStr":
+                    value = "".join(node.text or "" for node in cell.iter() if node.tag.endswith("}t"))
+                else:
+                    value_node = cell.find("a:v", ns)
+                    if value_node is None or value_node.text is None:
+                        continue
+                    raw_value = value_node.text
+                    if cell_type == "s":
+                        try:
+                            value = shared_strings[int(raw_value)]
+                        except Exception:
+                            value = raw_value
+                    else:
+                        value = raw_value
+                value = re.sub(r"\\s+", " ", value).strip()
+                if not value:
+                    continue
+                values.append(value)
+                cell_count += 1
+                if cell_count >= MAX_CELLS:
+                    break
+            if values:
+                rows.append("\t".join(values))
+                if len(rows) >= MAX_ROWS or cell_count >= MAX_CELLS:
+                    break
+        if len(rows) >= MAX_ROWS or cell_count >= MAX_CELLS:
+            break
+
+text = "\n".join(rows).strip()
 if len(text) > MAX_CHARS:
     text = text[:MAX_CHARS] + f"\\n\\n[truncated: {len(text) - MAX_CHARS} more chars in local file]"
 print(text)
