@@ -19,24 +19,24 @@ export class ProviderSetupService {
 
   async install(provider: Provider): Promise<{ provider: Provider; before: boolean; after: boolean; output: string }> {
     const before = this.isProviderAvailable(provider);
-    if (before) {
-      return {
-        provider,
-        before,
-        after: true,
-        output: `${provider} is already installed on this machine.`,
-      };
-    }
-
     const command = this.installCommands[provider]?.trim();
     if (!command) {
+      if (before) {
+        return {
+          provider,
+          before,
+          after: true,
+          output: `${provider} is already installed on this machine, but no install or update command is configured.`,
+        };
+      }
+
       throw new Error(this.installGuidance(provider));
     }
 
     const result = await this.execute(command, {});
     const after = this.isProviderAvailable(provider);
     if (result.code !== 0) {
-      throw new Error(this.formatFailure(`${provider} install failed.`, result));
+      throw new Error(this.formatFailure(`${provider} ${before ? "update" : "install"} failed.`, result));
     }
 
     return {
@@ -44,9 +44,11 @@ export class ProviderSetupService {
       before,
       after,
       output: this.formatSuccess(
-        `${provider} install finished.`,
+        `${provider} ${before ? "update" : "install"} finished.`,
         result,
-        after ? `${provider} is now available.` : `${provider} install command finished, but the CLI is still not detected.`,
+        before
+          ? (after ? `${provider} remains available after the update check.` : `${provider} update command finished, but the CLI is no longer detected.`)
+          : (after ? `${provider} is now available.` : `${provider} install command finished, but the CLI is still not detected.`),
       ),
     };
   }

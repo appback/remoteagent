@@ -73,7 +73,7 @@ Current command surface implemented in `src/bot.ts`:
 | `/bot add <token>` | Adds a Telegram bot token, restarts the runtime, and confirms the result after restart |
 | `/bot remove <username\|id>` | Removes a configured Telegram bot, restarts the runtime, and confirms the result after restart |
 | `/bot reload` | Restarts the runtime and confirms the result after restart |
-| `/install codex\|claude` | Runs the configured provider install command for the bot owner |
+| `/install codex\|claude` | Runs the configured provider install or update command for the bot owner |
 | `/login claude [token]` | Starts or finishes the configured Claude Code login flow for the bot owner |
 | `/reset` | Clears the current chat binding |
 | `/batch start` | Starts manual batching of multiple text messages |
