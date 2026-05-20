@@ -107,6 +107,7 @@ Current command surface implemented in `src/bot.ts`:
 | `/bot remove <username\|id>` | Removes a configured Telegram bot, restarts the runtime, and confirms the result after restart |
 | `/bot reload` | Restarts the runtime and confirms the result after restart |
 | `/install codex\|claude` | Runs the configured provider install or update command for the bot owner |
+| `/login codex` | Starts the Codex device-auth login flow and returns a browser URL when available |
 | `/login claude [token]` | Starts or finishes the configured Claude Code login flow for the bot owner |
 | `/reset` | Clears the current chat binding |
 | `/batch start` | Starts manual batching of multiple text messages |
@@ -310,6 +311,7 @@ Then open Telegram and start with one of these common flows. `/start` without a 
 /start claude
 /install codex
 /install claude
+/login codex
 /login claude
 /login claude <token>
 /attach codex <thread_id>

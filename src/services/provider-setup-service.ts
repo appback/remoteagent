@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import process from "node:process";
 import { spawn } from "node:child_process";
 import type { Provider } from "../types.js";
@@ -58,6 +61,73 @@ export class ProviderSetupService {
     };
   }
 
+  async startCodexLogin(): Promise<string> {
+    if (!this.isProviderAvailable("codex")) {
+      throw new Error("Codex is not installed yet. Run /install codex first.");
+    }
+
+    try {
+      const status = await this.execute("codex login status", {});
+      const statusText = [status.stdout, status.stderr].filter(Boolean).join("\n");
+      if (statusText && !/not logged in/i.test(statusText)) {
+        return this.formatSuccess("Codex is already logged in on this machine.", status);
+      }
+    } catch {
+      // Ignore status check failures and continue with device auth.
+    }
+
+    if (process.platform === "win32") {
+      return [
+        "Codex login requires local browser/device authentication on this machine.",
+        "Run `codex login` or `codex login --device-auth` on the machine.",
+      ].join("\n");
+    }
+
+    const logPath = path.join(os.tmpdir(), `remoteagent-codex-login-${Date.now()}.log`);
+    await fs.writeFile(logPath, "", "utf8");
+    await this.launchDetached("codex login --device-auth", logPath);
+
+    const timeoutAt = Date.now() + 20_000;
+    let lastText = "";
+    while (Date.now() < timeoutAt) {
+      try {
+        lastText = await fs.readFile(logPath, "utf8");
+      } catch {
+        lastText = "";
+      }
+
+      const urls = this.extractUrls(lastText);
+      if (urls.length > 0) {
+        return [
+          "Codex login flow started.",
+          "Open this URL and finish the login flow:",
+          ...urls,
+          "",
+          "After the browser flow finishes, use `/start` in this chat.",
+        ].join("\n");
+      }
+
+      if (/already logged in/i.test(lastText)) {
+        return [
+          "Codex is already logged in on this machine.",
+          lastText.trim(),
+        ].filter(Boolean).join("\n\n");
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+
+    if (lastText.trim()) {
+      return this.formatSuccess(
+        "Codex login started, but no browser URL was captured yet.",
+        { code: 0, stdout: lastText.trim(), stderr: "" },
+        "If the login URL is not shown above, run `/login codex` again or use `codex login --device-auth` directly on the machine.",
+      );
+    }
+
+    throw new Error("Codex login start timed out before a browser URL was captured.");
+  }
+
   async startClaudeLogin(): Promise<string> {
     if (!this.isProviderAvailable("claude")) {
       throw new Error("Claude Code is not installed yet. Run /install claude first.");
@@ -100,12 +170,12 @@ export class ProviderSetupService {
         if (/not logged in/i.test(statusText)) {
           return [
             "Codex is installed but not logged in yet.",
-            "Next step: run `codex login` on the machine.",
-            "For a headless machine, you can use `codex login --device-auth` and complete the login in your browser.",
+            "Next step: run `/login codex` in this chat.",
+            "If you prefer machine-side auth, you can use `codex login --device-auth` and complete the login in your browser.",
           ].join("\n");
         }
       } catch {
-        return "Codex is installed. If this machine is not authenticated yet, run `codex login` (or `codex login --device-auth` on a headless machine).";
+        return "Codex is installed. If this machine is not authenticated yet, run `/login codex` or use `codex login --device-auth` on the machine.";
       }
     }
 
@@ -171,6 +241,15 @@ export class ProviderSetupService {
       `No install command is configured for ${provider}.`,
       `Set ${commandName} in ~/.remoteagent/.env, then run /install ${provider}.`,
     ].join("\n");
+  }
+
+  private async launchDetached(command: string, logPath: string): Promise<void> {
+    if (process.platform === "win32") {
+      throw new Error("Detached Codex login is not implemented on Windows.");
+    }
+
+    await fs.mkdir(path.dirname(logPath), { recursive: true });
+    await this.execute(`nohup ${command} > ${this.shellEscape(logPath)} 2>&1 </dev/null &`, {});
   }
 
   private async execute(command: string, extraEnv: Record<string, string>): Promise<SetupExecutionResult> {

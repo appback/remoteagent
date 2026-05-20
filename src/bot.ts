@@ -34,6 +34,7 @@ const HELP_TEXT = [
   "/bot remove <username|id>",
   "/bot reload",
   "/install codex|claude",
+  "/login codex",
   "/login claude [token]",
   "/reset",
   "/! <command>",
@@ -396,8 +397,17 @@ ${bridge.formatStatus(mapping)}`);
     const { args, rest } = parseCommand(ctx.message?.text, 1);
     const provider = args[0]?.toLowerCase();
 
+    if (provider === "codex") {
+      await runWithPendingAnimation(token, ctx.chat.id, async () => {
+        const output = await setupService.startCodexLogin();
+        await bridge.rememberDefaultStartMode("codex");
+        return { chunks: flattenChunks([output], 3900) };
+      });
+      return;
+    }
+
     if (provider !== "claude") {
-      await reply(ctx, "Usage: `/login claude` or `/login claude <token>`", { parse_mode: "Markdown" });
+      await reply(ctx, "Usage: `/login codex` or `/login claude` or `/login claude <token>`", { parse_mode: "Markdown" });
       return;
     }
 
