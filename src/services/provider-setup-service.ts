@@ -96,21 +96,25 @@ export class ProviderSetupService {
         lastText = "";
       }
 
-      const urls = this.extractUrls(lastText);
+      const cleaned = this.stripAnsi(lastText).trim();
+      const urls = this.extractUrls(cleaned);
+      const deviceCode = this.extractCodexDeviceCode(cleaned);
       if (urls.length > 0) {
         return [
           "Codex login flow started.",
           "Open this URL and finish the login flow:",
           ...urls,
+          deviceCode ? "" : undefined,
+          deviceCode ? `One-time code: ${deviceCode}` : undefined,
           "",
           "After the browser flow finishes, use `/start` in this chat.",
-        ].join("\n");
+        ].filter((line): line is string => typeof line === "string").join("\n");
       }
 
-      if (/already logged in/i.test(lastText)) {
+      if (/already logged in/i.test(cleaned)) {
         return [
           "Codex is already logged in on this machine.",
-          lastText.trim(),
+          cleaned,
         ].filter(Boolean).join("\n\n");
       }
 
@@ -118,9 +122,10 @@ export class ProviderSetupService {
     }
 
     if (lastText.trim()) {
+      const cleaned = this.stripAnsi(lastText).trim();
       return this.formatSuccess(
         "Codex login started, but no browser URL was captured yet.",
-        { code: 0, stdout: lastText.trim(), stderr: "" },
+        { code: 0, stdout: cleaned, stderr: "" },
         "If the login URL is not shown above, run `/login codex` again or use `codex login --device-auth` directly on the machine.",
       );
     }
@@ -230,9 +235,19 @@ export class ProviderSetupService {
     return this.formatSuccess("Claude login succeeded.", result);
   }
 
+  private stripAnsi(text: string): string {
+    return text.replace(/\[[0-9;]*m/g, "");
+  }
+
   private extractUrls(text: string): string[] {
     const matches = text.match(/https?:\/\/[^\s)]+/g) ?? [];
     return [...new Set(matches)];
+  }
+
+  private extractCodexDeviceCode(text: string): string | undefined {
+    const codeMatch = text.match(/Enter this one-time code(?:\s*\(expires in .*?\))?\s*([A-Z0-9]{4}-[A-Z0-9]{4})/is)
+      ?? text.match(/([A-Z0-9]{4}-[A-Z0-9]{4})/);
+    return codeMatch?.[1];
   }
 
   private installGuidance(provider: Provider): string {
