@@ -289,12 +289,16 @@ Recommended Linux hooks in this repo:
 ./scripts/start.sh
 ```
 
+`./scripts/install.sh` now seeds provider install/login hook paths into `~/.remoteagent/.env` automatically, so `/install codex` and `/install claude` work on a fresh machine without manual hook wiring.
+
 ### Windows PowerShell
 
 ```powershell
 .\scripts\install.ps1
 .\scripts\start.ps1
 ```
+
+The installer also writes default provider install/login hook paths into `%USERPROFILE%\.remoteagent\.env`.
 
 Then open Telegram and start with one of these common flows. `/start` without a mode uses the saved default mode once a provider has been started or attached at least once.
 
