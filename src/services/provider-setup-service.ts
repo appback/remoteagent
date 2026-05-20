@@ -245,8 +245,8 @@ export class ProviderSetupService {
   }
 
   private extractCodexDeviceCode(text: string): string | undefined {
-    const codeMatch = text.match(/Enter this one-time code(?:\s*\(expires in .*?\))?\s*([A-Z0-9]{4}-[A-Z0-9]{4})/is)
-      ?? text.match(/([A-Z0-9]{4}-[A-Z0-9]{4})/);
+    const codeMatch = text.match(/Enter this one-time code(?:\s*\(expires in .*?\))?\s*([A-Z0-9]{4}-[A-Z0-9]{5})/is)
+      ?? text.match(/([A-Z0-9]{4}-[A-Z0-9]{5})/);
     return codeMatch?.[1];
   }
 
