@@ -1,12 +1,24 @@
 # RemoteAgent
 
-RemoteAgent is a personal installable runtime for controlling coding sessions from Telegram and the terminal.
+RemoteAgent is a personal installable runtime for controlling coding sessions from Telegram, a terminal, and an optional Telegram Mini App.
 
 It is built for one owner running their own agents on their own machine, then continuing that work remotely without introducing a hosted multi-user backend.
 
+## What it is
+
+RemoteAgent is not a hosted SaaS and not a Telegram-only app.
+
+It has three layers:
+
+1. **Runtime server** - the installed machine that actually runs Codex, Claude Code, shell commands, and file operations.
+2. **Telegram bot** - the default remote messaging interface.
+3. **Telegram Mini App** - an optional richer UI that opens inside Telegram and controls the same runtime.
+
+The runtime machine is the source of truth. Telegram is the client.
+
 ## What it does
 
-RemoteAgent is currently organized around five core capabilities.
+RemoteAgent is currently organized around six core capabilities.
 
 | Capability | What it means today | Status |
 | --- | --- | --- |
@@ -15,24 +27,43 @@ RemoteAgent is currently organized around five core capabilities.
 | Telegram <-> Codex | A Telegram chat can start or attach to a Codex session and continue it | Supported |
 | Telegram <-> Claude Code | A Telegram chat can start or attach to a Claude Code session and continue it | Supported |
 | Telegram attachments | Telegram can send images, text, Markdown, PDF, Word documents, spreadsheet files, archives, and audio/voice inputs into the runtime | Supported |
+| Telegram Mini App UI | A richer Telegram-native UI can sit on top of the same runtime and session model | Planned next |
 
 ## Product direction
 
-RemoteAgent is an installable personal runtime, not a hosted SaaS.
+RemoteAgent is a self-hosted personal runtime, not a hosted SaaS.
 
 The intended shape is:
 
 1. the machine running RemoteAgent is the source of truth
-2. Telegram is a remote client for that runtime
-3. Codex and Claude Code are provider adapters behind one local session model
-4. terminal control is an owner-only extension of that same runtime
-5. files sent from Telegram are materialized locally and then routed through the active session
+2. Telegram chat is the baseline remote client for that runtime
+3. a Telegram Mini App is an optional UI layer over the same runtime
+4. Codex and Claude Code are provider adapters behind one local session model
+5. terminal control is an owner-only extension of that same runtime
+6. files sent from Telegram are materialized locally and then routed through the active session
 
 This repository is optimized for continuity:
 
 - start work on the machine
 - continue from Telegram
+- optionally open a Mini App for richer session controls
 - come back and keep going from the same runtime-owned session state
+
+## Why a Mini App fits
+
+A Telegram Mini App does **not** replace the runtime server.
+It gives RemoteAgent a better control surface inside Telegram.
+
+That means a Mini App can expose:
+
+- session list and switching
+- current provider and model
+- recent logs and progress states
+- stop and continue actions
+- attachment history
+- safer structured controls than raw slash commands
+
+But the Mini App still depends on the installed RemoteAgent runtime and the local provider CLIs.
 
 ## Current scope
 
@@ -45,6 +76,7 @@ In scope:
 - Codex and Claude Code adapters
 - restricted terminal control
 - Telegram attachment intake
+- future Telegram Mini App control UI for the same runtime
 
 Out of scope:
 
@@ -52,6 +84,7 @@ Out of scope:
 - account resale
 - team-facing SaaS control plane
 - pretending to mirror official desktop apps exactly
+- making Telegram the actual execution backend
 
 ## Current capabilities
 
@@ -152,7 +185,20 @@ Current supported attachment classes:
 Attachment handling is triggered from ordinary Telegram messages.
 If the message contains a supported file or media payload, RemoteAgent downloads it, stores it locally, builds an attachment prompt, and sends that into the active provider session.
 
-The transport/runtime layer for attachments is implemented. User-facing attachment response policy is still being improved.
+### 6. Telegram Mini App
+
+The Mini App is the next UI layer, not a second execution engine.
+
+The Mini App should talk to the same runtime state used by the bot, including:
+
+- session ids
+- session bindings
+- provider metadata
+- event logs
+- attachment history
+- stop and continue controls
+
+See [docs/MINI_APP.md](docs/MINI_APP.md) for the planned Mini App shape.
 
 ## Provider support matrix
 
@@ -164,6 +210,7 @@ The transport/runtime layer for attachments is implemented. User-facing attachme
 | Telegram-based remote shell participation | Yes | No | Planned |
 | Per-session sandbox control from Telegram | Yes | No | Planned |
 | Attachment routing through active session | Yes | Yes | Planned |
+| Telegram Mini App control surface | Planned | Planned | Planned |
 | Production adapter in this repo | Yes | Yes | No |
 
 ## Release policy
@@ -268,6 +315,8 @@ Once a chat is bound, ordinary text messages continue the active session. Suppor
 ## Architecture and operations
 
 High-level architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+
+Mini App plan: [docs/MINI_APP.md](docs/MINI_APP.md)
 
 MVP scope: [docs/MVP.md](docs/MVP.md)
 

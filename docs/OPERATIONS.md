@@ -11,17 +11,28 @@ RemoteAgent is currently operated from one canonical checkout only:
 Do not use local WSL worktrees or duplicate checkouts as an editing source for this project.
 If code must change, change it in the server 30 checkout, build it there, and push from there.
 
+## Product shape in operations
+
+Operationally, RemoteAgent is a self-hosted runtime with multiple client surfaces.
+
+Current and planned client layers:
+
+- Telegram bot chat: primary production client
+- Telegram Mini App: planned richer control UI
+- local terminal / shell: operator maintenance path
+
+The runtime server is always the execution engine.
+Neither Telegram chat nor the Mini App is the source of truth for sessions.
+
 ## Current bot split
 
 Current production bot ownership is intentionally split:
 
-- server 30: `codex_remoteagent_bot`
-- local machine 21: `sqream_bot`
+- server 30: RemoteAgent production bots
+- local machine 21: local-only bot runtime
 
-Server 30 should not run `sqream_bot`.
-Local machine 21 should not run `codex_remoteagent_bot`.
-
-## Runtime model
+Do not run the same Telegram bot token from multiple runtimes at the same time.
+Bot polling conflicts are treated as incidents, not harmless warnings.
 
 ## Workspace policy
 
@@ -35,6 +46,7 @@ Current policy:
 - the managed subdirectory name is a random 8-character uid
 - display ids like `S001` remain user-facing session labels only and are not reused as folder names
 
+## Runtime model
 
 Server 30 runs RemoteAgent as a `systemd` service.
 
@@ -107,13 +119,13 @@ The intended workflow is:
 7. verify logs or a Telegram/local UI path
 8. commit on `main`
 9. push `main` to `origin/main`
-10. update machine 21's npm-installed RemoteAgent runtime
+10. update machine 21's npm-installed RemoteAgent runtime when the runtime package changed
 
 Avoid side branches and extra worktrees unless there is a strong reason.
 If a temporary branch is unavoidable, merge it back on server 30 and return production work to `main` immediately.
 
 A task is not done until commit and push both happened.
-A deployment is not done until machine 21 has also been updated.
+A deployment is not done until machine 21 has also been updated when the package/runtime changed.
 
 See `docs/RELEASING.md` for the detailed versioning rules.
 
@@ -130,26 +142,39 @@ ssh -T git@github.com
 
 At the time of writing, `origin/main` pushes are performed successfully from server 30.
 
+## Mini App operational rule
+
+A Telegram Mini App must be treated as another client surface for the same runtime.
+
+That means:
+
+- it must read and act on the same session model
+- it must not invent a second session store
+- it must not bypass runtime authorization or ownership checks
+- it should prefer structured actions that map cleanly onto existing runtime commands and APIs
+
 ## Attachment handling status
 
 As of the latest stabilization work:
 
-- Telegram image download on server 30 works
+- Telegram image download works
 - files are saved under `/home/au2223/.remoteagent/uploads/telegram/...`
 - duplicate runtime startup has been blocked
-- image sends no longer rely on mixed old/new processes
+- cross-bot direct Telegram token leakage to provider subprocesses has been blocked
+- official runtime-mediated file sending is available only through confirmed RemoteAgent transfer paths
 
-Remaining work is still needed on attachment response policy.
-The transport/runtime stability issue and the user-facing attachment response quality issue are now separate concerns.
+Remaining work is still needed on attachment response policy and richer file UX.
+The transport/runtime stability issue and the user-facing attachment response quality issue are separate concerns.
 
 ## Incident summary
 
-The main production problem around April 2026 was not just image support itself.
-The deeper issue was runtime ownership:
+The main production problem around April and May 2026 was not just attachment support itself.
+The deeper issues were runtime ownership and transport discipline:
 
 - old processes survived restarts
 - service-managed and manually-started processes overlapped
 - PID state and actual live processes diverged
 - Telegram responses could come from an unexpected process generation
+- provider subprocesses had to be prevented from directly using Telegram bot tokens
 
-The single-instance lock and `systemd`-first lifecycle were added specifically to stop that class of bug from recurring.
+The single-instance lock, `systemd`-first lifecycle, and runtime-mediated file transfer rules were added specifically to stop that class of bug from recurring.
