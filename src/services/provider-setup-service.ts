@@ -39,6 +39,8 @@ export class ProviderSetupService {
       throw new Error(this.formatFailure(`${provider} ${before ? "update" : "install"} failed.`, result));
     }
 
+    const authGuidance = await this.postInstallGuidance(provider, after);
+
     return {
       provider,
       before,
@@ -46,9 +48,12 @@ export class ProviderSetupService {
       output: this.formatSuccess(
         `${provider} ${before ? "update" : "install"} finished.`,
         result,
-        before
-          ? (after ? `${provider} remains available after the update check.` : `${provider} update command finished, but the CLI is no longer detected.`)
-          : (after ? `${provider} is now available.` : `${provider} install command finished, but the CLI is still not detected.`),
+        [
+          before
+            ? (after ? `${provider} remains available after the update check.` : `${provider} update command finished, but the CLI is no longer detected.`)
+            : (after ? `${provider} is now available.` : `${provider} install command finished, but the CLI is still not detected.`),
+          authGuidance,
+        ].filter(Boolean).join("\n\n"),
       ),
     };
   }
@@ -81,6 +86,45 @@ export class ProviderSetupService {
       result,
       urlBlock ? `${urlBlock}\n\nAfter login, send /login claude <token>.` : "After login, send /login claude <token>.",
     );
+  }
+
+  private async postInstallGuidance(provider: Provider, available: boolean): Promise<string | undefined> {
+    if (!available) {
+      return undefined;
+    }
+
+    if (provider === "codex") {
+      try {
+        const result = await this.execute("codex login status", {});
+        const statusText = [result.stdout, result.stderr].filter(Boolean).join("\n");
+        if (/not logged in/i.test(statusText)) {
+          return [
+            "Codex is installed but not logged in yet.",
+            "Next step: run `codex login` on the machine.",
+            "For a headless machine, you can use `codex login --device-auth` and complete the login in your browser.",
+          ].join("\n");
+        }
+      } catch {
+        return "Codex is installed. If this machine is not authenticated yet, run `codex login` (or `codex login --device-auth` on a headless machine).";
+      }
+    }
+
+    if (provider === "claude") {
+      try {
+        const result = await this.execute("claude auth status", {});
+        const statusText = [result.stdout, result.stderr].filter(Boolean).join("\n");
+        if (/not logged in|loggedIn:\s*false/i.test(statusText)) {
+          return [
+            "Claude Code is installed but not logged in yet.",
+            "Next step: run `/login claude` or complete the configured Claude login flow on this machine.",
+          ].join("\n");
+        }
+      } catch {
+        return "Claude Code is installed. If this machine is not authenticated yet, run `/login claude` or complete the configured login flow.";
+      }
+    }
+
+    return undefined;
   }
 
   async finishClaudeLogin(token: string): Promise<string> {

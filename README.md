@@ -300,6 +300,8 @@ Recommended Linux hooks in this repo:
 
 The installer also writes default provider install/login hook paths into `%USERPROFILE%\.remoteagent\.env`.
 
+After `/install codex` or `/install claude`, RemoteAgent now also checks whether the provider still needs authentication and tells the operator the next login step.
+
 Then open Telegram and start with one of these common flows. `/start` without a mode uses the saved default mode once a provider has been started or attached at least once.
 
 ```text
