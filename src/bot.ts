@@ -477,28 +477,35 @@ ${bridge.formatStatus(mapping)}`);
     }
 
     if (document) {
-      const attachmentKind = classifyTelegramDocument(document.mime_type, document.file_name);
-      if (attachmentKind) {
-        const downloaded = await downloadTelegramFile(token, botId, chatId, document.file_id, document.file_name);
-        const message = await formatTelegramAttachmentPrompt(attachmentKind, downloaded.path, ctx.message.caption?.trim());
+      const attachment = classifyTelegramDocument(document.mime_type, document.file_name);
+      const downloaded = await downloadTelegramFile(token, botId, chatId, document.file_id, document.file_name);
+      const message = await formatTelegramAttachmentPrompt(
+        attachment.kind,
+        downloaded.path,
+        ctx.message.caption?.trim(),
+        {
+          fileName: document.file_name,
+          mimeType: document.mime_type,
+          isFallback: attachment.isFallback,
+        },
+      );
 
-        await bridge.logSystem(botId, chatId, `Telegram ${attachmentKind} received: ${downloaded.path}`);
-        await runWithPendingAnimation(token, ctx.chat.id, async (helpers) => {
-          return {
-            chunks: await routeTelegramWorkLoop(
-              bridge,
-              botId,
-              chatId,
-              message,
-              `Telegram ${attachmentKind} request`,
-              helpers,
-              autoContinue,
-              sanitizeAttachmentResponseBlocks,
-            ),
-          };
-        });
-        return;
-      }
+      await bridge.logSystem(botId, chatId, `Telegram ${attachment.kind} received: ${downloaded.path}`);
+      await runWithPendingAnimation(token, ctx.chat.id, async (helpers) => {
+        return {
+          chunks: await routeTelegramWorkLoop(
+            bridge,
+            botId,
+            chatId,
+            message,
+            `Telegram ${attachment.kind} request`,
+            helpers,
+            autoContinue,
+            sanitizeAttachmentResponseBlocks,
+          ),
+        };
+      });
+      return;
     }
 
     if (voice || audio) {
@@ -1242,10 +1249,22 @@ function sanitizeAttachmentResponseText(text: string): string {
   return filtered.join("\n").trim();
 }
 
-async function formatTelegramAttachmentPrompt(kind: string, filePath: string, caption: string | undefined): Promise<string> {
+async function formatTelegramAttachmentPrompt(
+  kind: string,
+  filePath: string,
+  caption: string | undefined,
+  metadata?: {
+    fileName?: string;
+    mimeType?: string;
+    isFallback?: boolean;
+  },
+): Promise<string> {
   const parts = [
     `A Telegram ${kind} was saved locally.`,
     "Do not repeat internal metadata such as local file paths unless it is strictly necessary.",
+    metadata?.fileName ? `Original filename: ${metadata.fileName}` : undefined,
+    metadata?.mimeType ? `Telegram MIME type: ${metadata.mimeType}` : undefined,
+    metadata?.isFallback ? "This attachment was accepted through the generic fallback path. Inspect it from the saved file path and decide the right handling." : undefined,
     caption
       ? `Treat this caption as the user's instruction: ${caption}`
       : "If the user gave no caption, inspect the attachment and respond briefly with the useful result.",
@@ -1261,23 +1280,26 @@ async function formatTelegramAttachmentPrompt(kind: string, filePath: string, ca
   return parts.join("\n");
 }
 
-function classifyTelegramDocument(mimeType: string | undefined, fileName: string | undefined): string | undefined {
+function classifyTelegramDocument(
+  mimeType: string | undefined,
+  fileName: string | undefined,
+): { kind: string; isFallback: boolean } {
   const lowerName = fileName?.toLowerCase() ?? "";
 
   if (mimeType?.startsWith("image/")) {
-    return "image document";
+    return { kind: "image document", isFallback: false };
   }
 
   if (mimeType === "application/pdf" || lowerName.endsWith(".pdf")) {
-    return "PDF document";
+    return { kind: "PDF document", isFallback: false };
   }
 
   if (isWordDocument(mimeType, lowerName)) {
-    return "Word document";
+    return { kind: "Word document", isFallback: false };
   }
 
   if (isSpreadsheetDocument(mimeType, lowerName)) {
-    return "Spreadsheet document";
+    return { kind: "Spreadsheet document", isFallback: false };
   }
 
   if (
@@ -1287,16 +1309,19 @@ function classifyTelegramDocument(mimeType: string | undefined, fileName: string
     || lowerName.endsWith(".md")
     || lowerName.endsWith(".markdown")
   ) {
-    return lowerName.endsWith(".md") || lowerName.endsWith(".markdown") || mimeType === "text/markdown" || mimeType === "application/markdown"
-      ? "Markdown document"
-      : "text document";
+    return {
+      kind: lowerName.endsWith(".md") || lowerName.endsWith(".markdown") || mimeType === "text/markdown" || mimeType === "application/markdown"
+        ? "Markdown document"
+        : "text document",
+      isFallback: false,
+    };
   }
 
   if (isArchiveDocument(mimeType, lowerName)) {
-    return "archive document";
+    return { kind: "archive document", isFallback: false };
   }
 
-  return undefined;
+  return { kind: "generic file", isFallback: true };
 }
 
 function isWordDocument(mimeType: string | undefined, lowerName: string): boolean {
