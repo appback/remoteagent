@@ -52,6 +52,8 @@ const REPORT_PROTOCOL_PROMPT = [
   "Use REPORT:progress only after you completed a real chunk of work and will continue automatically.",
   "Use REPORT:result only when the requested work for this turn is actually finished.",
   "Use REPORT:blocked only when you cannot continue without user input or an external fix.",
+  "If you are waiting on sudo, login, permission changes, API keys, SSH access, or any manual user/admin step, you must use REPORT:blocked.",
+  "Do not say 'I will continue' or 'I can continue after you do X' unless the first line is REPORT:blocked.",
   "After the first line, write only the user-facing report.",
   "Do not stop at intent like 'I will' or 'I am going to'. Do the work first, then report progress/result, or report blocked.",
   "Do not claim that a Telegram message or file was sent unless RemoteAgent explicitly confirmed that delivery step.",
@@ -945,8 +947,11 @@ function parseReportResponses(
     const header = lines.shift() ?? "";
     const first = (lines.shift() ?? "").trim();
     const match = /^REPORT:(progress|result|blocked)$/i.exec(first);
-    const kind = (match?.[1]?.toLowerCase() as ReportKind | undefined) ?? "unknown";
+    let kind = (match?.[1]?.toLowerCase() as ReportKind | undefined) ?? "unknown";
     const body = lines.join("\n").trim();
+    if ((kind === "progress" || kind === "result") && looksLikeBlockedBody(body)) {
+      kind = "blocked";
+    }
     return {
       kind,
       text: body ? `${header}\n${body}` : "",
@@ -960,6 +965,25 @@ function parseReportResponses(
 
 function isEmptyResponseError(message: string): boolean {
   return /empty response/i.test(message);
+}
+
+function looksLikeBlockedBody(text: string): boolean {
+  if (!text.trim()) {
+    return false;
+  }
+
+  const blockedPatterns = [
+    /\b(sudo|usermod|setfacl|chmod|chown|relogin|re-login|new login session)\b/i,
+    /\b(waiting on|need you to|you need to|please run|please do|manual step|admin step|external fix)\b/i,
+    /\b(permission denied|permission change|ssh access|api key|login required|authentication required)\b/i,
+    /적용되면.*(다시|이어서|계속)/i,
+    /해주시면.*(다시|이어서|계속)/i,
+    /권한.*(필요|없)/i,
+    /로그인 세션.*필요/i,
+    /관리자.*조치/i,
+  ];
+
+  return blockedPatterns.some((pattern) => pattern.test(text));
 }
 
 function classifyRetryableProviderIssue(message: string, retryAfterMs: number): RetryableProviderIssue | undefined {
