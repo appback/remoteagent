@@ -109,10 +109,30 @@ async function startManualPolling(bot: Bot): Promise<never> {
     botInfo: { username?: string };
   };
   let offset = 0;
+  let consecutiveFailures = 0;
+  let firstFailureAt: number | undefined;
+  let lastFailureAt: number | undefined;
+  let lastIssue = "unknown error";
+  let lastAlertAttemptAt = 0;
 
   while (true) {
     try {
       const payload = await getUpdatesViaCurl(pollingBot.token, offset);
+      if (consecutiveFailures > 0) {
+        await notifyPollingRecoveryIfNeeded(
+          pollingBot.token,
+          pollingBot.botInfo.username,
+          consecutiveFailures,
+          firstFailureAt,
+          lastFailureAt,
+          lastIssue,
+        ).catch(() => undefined);
+        consecutiveFailures = 0;
+        firstFailureAt = undefined;
+        lastFailureAt = undefined;
+        lastIssue = "unknown error";
+        lastAlertAttemptAt = 0;
+      }
 
       if (payload.result.length === 0) {
         continue;
@@ -121,8 +141,30 @@ async function startManualPolling(bot: Bot): Promise<never> {
       await pollingBot.handleUpdates(payload.result);
       offset = payload.result[payload.result.length - 1]!.update_id + 1;
     } catch (error) {
+      const issue = classifyTelegramPollingError(error);
+      consecutiveFailures += 1;
+      const now = Date.now();
+      firstFailureAt ??= now;
+      lastFailureAt = now;
+      lastIssue = issue.summary;
       console.error(`Polling failed for @${pollingBot.botInfo.username}:`, error);
-      await sleep(2000);
+
+      if (
+        config.telegramOwnerId
+        && consecutiveFailures >= 3
+        && now - lastAlertAttemptAt >= 60_000
+      ) {
+        lastAlertAttemptAt = now;
+        await notifyPollingFailure(
+          pollingBot.token,
+          pollingBot.botInfo.username,
+          consecutiveFailures,
+          firstFailureAt,
+          issue.summary,
+        ).catch(() => undefined);
+      }
+
+      await sleep(nextPollingRetryDelayMs(consecutiveFailures, issue.kind));
     }
   }
 }
@@ -171,6 +213,135 @@ async function getUpdatesViaCurl(token: string, offset: number): Promise<{
     result: payload.result,
     description: payload.description,
   };
+}
+
+type TelegramPollingIssueKind = "dns" | "timeout" | "ssl" | "http" | "unknown";
+
+function classifyTelegramPollingError(error: unknown): {
+  kind: TelegramPollingIssueKind;
+  summary: string;
+} {
+  const message = error instanceof Error ? error.message : String(error);
+  const stderr = typeof error === "object" && error !== null && "stderr" in error
+    ? String((error as { stderr?: unknown }).stderr ?? "")
+    : "";
+  const combined = `${message}\n${stderr}`;
+
+  if (/Could not resolve host|Name or service not known|Temporary failure in name resolution/i.test(combined)) {
+    return {
+      kind: "dns",
+      summary: "DNS lookup failed for api.telegram.org.",
+    };
+  }
+
+  if (/timed out|Operation timed out|Connection timed out/i.test(combined)) {
+    return {
+      kind: "timeout",
+      summary: "Telegram polling timed out while waiting for api.telegram.org.",
+    };
+  }
+
+  if (/SSL_ERROR_SYSCALL|SSL_read|tls/i.test(combined)) {
+    return {
+      kind: "ssl",
+      summary: "Telegram polling hit an SSL/TLS read error.",
+    };
+  }
+
+  if (/HTTP|status/i.test(combined)) {
+    return {
+      kind: "http",
+      summary: "Telegram polling failed with an HTTP/API error.",
+    };
+  }
+
+  return {
+    kind: "unknown",
+    summary: "Telegram polling failed with an unknown transport error.",
+  };
+}
+
+function nextPollingRetryDelayMs(failureCount: number, kind: TelegramPollingIssueKind): number {
+  const base = kind === "dns" ? 5_000 : 2_000;
+  return Math.min(30_000, base * Math.max(1, Math.min(failureCount, 6)));
+}
+
+async function notifyPollingFailure(
+  token: string,
+  username: string | undefined,
+  consecutiveFailures: number,
+  firstFailureAt: number | undefined,
+  issue: string,
+): Promise<void> {
+  if (!config.telegramOwnerId) {
+    return;
+  }
+
+  const lines = [
+    `RemoteAgent polling warning for @${username ?? "unknown_bot"}`,
+    issue,
+    `consecutiveFailures: ${consecutiveFailures}`,
+    firstFailureAt ? `since: ${new Date(firstFailureAt).toISOString()}` : undefined,
+    "Automatic retries are still running in the background.",
+  ].filter(Boolean);
+
+  await sendTelegramControlMessage(token, config.telegramOwnerId, lines.join("\n"));
+}
+
+async function notifyPollingRecoveryIfNeeded(
+  token: string,
+  username: string | undefined,
+  consecutiveFailures: number,
+  firstFailureAt: number | undefined,
+  lastFailureAt: number | undefined,
+  issue: string,
+): Promise<void> {
+  if (!config.telegramOwnerId || consecutiveFailures < 3) {
+    return;
+  }
+
+  const durationMs = firstFailureAt && lastFailureAt
+    ? Math.max(0, lastFailureAt - firstFailureAt)
+    : undefined;
+
+  const lines = [
+    `RemoteAgent polling recovered for @${username ?? "unknown_bot"}`,
+    `lastIssue: ${issue}`,
+    `consecutiveFailures: ${consecutiveFailures}`,
+    durationMs !== undefined ? `downtime: ${formatDuration(durationMs)}` : undefined,
+  ].filter(Boolean);
+
+  await sendTelegramControlMessage(token, config.telegramOwnerId, lines.join("\n"));
+}
+
+async function sendTelegramControlMessage(token: string, chatId: string, text: string): Promise<void> {
+  const url = `https://api.telegram.org/bot${token}/sendMessage`;
+  const { stdout, stderr } = await execFileAsync("curl", [
+    "-sS",
+    "--max-time",
+    "20",
+    url,
+    "--data-urlencode",
+    `chat_id=${chatId}`,
+    "--data-urlencode",
+    `text=${text}`,
+  ]);
+
+  if (stderr?.trim()) {
+    console.error(`curl stderr for polling alert sendMessage: ${stderr.trim()}`);
+  }
+
+  const payload = JSON.parse(stdout) as { ok?: boolean; description?: string };
+  if (!payload.ok) {
+    throw new Error(payload.description || "Polling alert sendMessage failed.");
+  }
+}
+
+function formatDuration(durationMs: number): string {
+  const totalSeconds = Math.max(1, Math.round(durationMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
 }
 
 function buildBotInfo(token: string, index: number): UserFromGetMe {
