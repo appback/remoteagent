@@ -31,6 +31,7 @@ export class BridgeService {
     private readonly workspaceRoot: string,
     private readonly isProviderInstalled: (provider: Provider) => boolean,
     private readonly preferredStartMode: BridgeMode,
+    private readonly defaultCodexSandboxMode?: CodexSandboxMode,
   ) {}
 
   async createSession(botId: string, chatId: string, cwd?: string): Promise<ChatSession> {
@@ -70,7 +71,8 @@ export class BridgeService {
       cwd: workspace,
       pairedAt: new Date().toISOString(),
       sessionId: undefined,
-      model: provider === "codex" ? "gpt-5.4" : "sonnet",
+      model: provider === "codex" ? "gpt-5.5" : "sonnet",
+      sandboxMode: provider === "codex" ? this.defaultCodexSandboxMode : undefined,
       lastUsedAt: undefined,
     }, workspace);
     await this.store.ensureDefaultStartMode(provider);
@@ -118,7 +120,10 @@ export class BridgeService {
       cwd: workspace,
       pairedAt: new Date().toISOString(),
       sessionId: normalizedSessionId,
-      model: existing?.session[provider]?.model ?? (provider === "codex" ? "gpt-5.4" : "sonnet"),
+      model: existing?.session[provider]?.model ?? (provider === "codex" ? "gpt-5.5" : "sonnet"),
+      sandboxMode: provider === "codex"
+        ? (existing?.session[provider]?.sandboxMode ?? this.defaultCodexSandboxMode)
+        : undefined,
       lastUsedAt: undefined,
     }, workspace);
     await this.store.ensureDefaultStartMode(provider);
@@ -362,6 +367,7 @@ export class BridgeService {
       `chat: ${chatSession.chatId}`,
       `mode: ${session.mode}`,
       `workspace: ${session.workspace}`,
+      ...this.describeEffectiveAccess(session),
       codex,
       claude,
       `createdAt: ${session.createdAt}`,
@@ -389,6 +395,7 @@ export class BridgeService {
       `chat: ${chatSession.chatId}`,
       `mode: ${session.mode}`,
       `workspace: ${session.workspace}`,
+      ...this.describeEffectiveAccess(session),
       `updatedAt: ${session.updatedAt}`,
     ].join("\n");
   }
@@ -724,8 +731,8 @@ export class BridgeService {
 
     details.push(`  model: ${session.model ?? this.defaultModelFor(session.provider)}`);
 
-    if (session.provider === "codex" && session.sandboxMode) {
-      details.push(`  sandbox: ${session.sandboxMode}`);
+    if (session.provider === "codex") {
+      details.push(`  sandbox: ${this.effectiveCodexSandboxMode(session)}`);
     }
 
     if (session.lastUsedAt) {
@@ -740,7 +747,35 @@ export class BridgeService {
   }
 
   private defaultModelFor(provider: Provider): string {
-    return provider === "codex" ? "gpt-5.4" : "sonnet";
+    return provider === "codex" ? "gpt-5.5" : "sonnet";
+  }
+
+  private describeEffectiveAccess(session: SessionRecord): string[] {
+    if (!session.codex) {
+      return [];
+    }
+
+    const sandboxMode = this.effectiveCodexSandboxMode(session.codex);
+    return [
+      `effectiveSandbox: ${sandboxMode}`,
+      `writableRoots: ${this.describeWritableRoots(session.workspace, sandboxMode)}`,
+    ];
+  }
+
+  private effectiveCodexSandboxMode(session: ProviderSession): CodexSandboxMode {
+    return session.sandboxMode ?? this.defaultCodexSandboxMode ?? "read-only";
+  }
+
+  private describeWritableRoots(workspace: string, sandboxMode: CodexSandboxMode): string {
+    if (sandboxMode === "danger-full-access") {
+      return `unrestricted (session workspace: ${workspace})`;
+    }
+
+    if (sandboxMode === "workspace-write") {
+      return `${workspace}, /tmp`;
+    }
+
+    return "/tmp only";
   }
 
   private resolveSelectableModel(provider: Provider, input: string): string {

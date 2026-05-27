@@ -949,7 +949,7 @@ function parseReportResponses(
     const body = lines.join("\n").trim();
     return {
       kind,
-      text: body ? `${header}\n${body}` : header,
+      text: body ? `${header}\n${body}` : "",
     };
   });
 

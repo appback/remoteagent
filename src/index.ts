@@ -63,6 +63,7 @@ async function main(): Promise<void> {
     config.workspaceRoot,
     isProviderInstalled,
     config.defaultMode,
+    config.codexSandboxMode,
   );
   const botManagement = new BotManagementService(
     config.dataDir,
