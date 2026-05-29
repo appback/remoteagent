@@ -776,7 +776,7 @@ async function runWithPendingAnimation(
 
     const result = await task(helpers);
     const normalized = await normalizeTelegramDelivery(result.chunks);
-    const chunks = normalized.chunks;
+    const chunks = flattenChunks(normalized.chunks, 3900);
     const extra = result.parseMode ? { parse_mode: result.parseMode } : undefined;
 
     if (chunks.length === 0 && normalized.documents.length === 0) {
