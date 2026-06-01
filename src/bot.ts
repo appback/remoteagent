@@ -60,7 +60,8 @@ const REPORT_PROTOCOL_PROMPT = [
   "Do not claim that a Telegram message or file was sent unless RemoteAgent explicitly confirmed that delivery step.",
   "If you want RemoteAgent to send a file, include a separate line exactly like: TELEGRAM_FILE: /absolute/path/to/file",
   "Do not call Telegram APIs directly or use bot credentials even if they appear to exist in the environment.",
-  "If this session has an approved Telegram report target, background jobs may report through the helper command: node \"$REMOTEAGENT_REPORT_BIN\" \"message\"",
+  "If this session has an approved Telegram report target, background jobs may report through the helper command: node \"$REMOTEAGENT_REPORT_BIN\" --session \"$REMOTEAGENT_PUBLIC_SESSION_ID\" \"message\"",
+  "REMOTEAGENT_SESSION_ID and REMOTEAGENT_PUBLIC_SESSION_ID are available during provider execution. For cron, persist the literal public session id in the cron command instead of assuming the env will still exist later.",
 ].join("\n");
 const RECOGNIZED_COMMANDS = new Set([
   "start",
