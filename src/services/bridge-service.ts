@@ -12,6 +12,7 @@ import type {
   ProviderResponse,
   ProviderSession,
   SessionRecord,
+  TelegramReportTarget,
 } from "../types.js";
 import { FileStore } from "../store/file-store.js";
 import { stopSpawnedExecution } from "../adapters/windows-shell.js";
@@ -201,6 +202,28 @@ export class BridgeService {
     }, chatSession.session.workspace);
   }
 
+  async setTelegramReportTarget(
+    botId: string,
+    chatId: string,
+    targetBotId: string,
+    targetUsername?: string,
+  ): Promise<ChatSession> {
+    await this.requireChat(botId, chatId);
+    const reportTarget: TelegramReportTarget = {
+      transport: "telegram",
+      botId: targetBotId,
+      chatId,
+      username: targetUsername,
+      setAt: new Date().toISOString(),
+    };
+    return this.store.setReportTargetForChat(botId, chatId, reportTarget);
+  }
+
+  async clearTelegramReportTarget(botId: string, chatId: string): Promise<ChatSession> {
+    await this.requireChat(botId, chatId);
+    return this.store.setReportTargetForChat(botId, chatId, undefined);
+  }
+
   async setModel(botId: string, chatId: string, model: string): Promise<ChatSession> {
     const chatSession = await this.requireChat(botId, chatId);
     const provider = chatSession.session.mode;
@@ -367,6 +390,7 @@ export class BridgeService {
       `chat: ${chatSession.chatId}`,
       `mode: ${session.mode}`,
       `workspace: ${session.workspace}`,
+      `reportTarget: ${this.describeReportTarget(session)}`,
       ...this.describeEffectiveAccess(session),
       codex,
       claude,
@@ -395,6 +419,7 @@ export class BridgeService {
       `chat: ${chatSession.chatId}`,
       `mode: ${session.mode}`,
       `workspace: ${session.workspace}`,
+      `reportTarget: ${this.describeReportTarget(session)}`,
       ...this.describeEffectiveAccess(session),
       `updatedAt: ${session.updatedAt}`,
     ].join("\n");
@@ -516,6 +541,7 @@ export class BridgeService {
         botId,
         chatId: chatId ?? requestSource,
         remoteSessionId: session.sessionId,
+        publicSessionId: session.publicId,
         cwd: providerSession.cwd,
         sessionId: providerSession.sessionId,
         message,
@@ -776,6 +802,16 @@ export class BridgeService {
     }
 
     return "/tmp only";
+  }
+
+  private describeReportTarget(session: SessionRecord): string {
+    if (!session.reportTarget) {
+      return "not configured";
+    }
+
+    const target = session.reportTarget;
+    const label = target.username ? `@${target.username}` : target.botId;
+    return `${label} -> chat ${target.chatId}`;
   }
 
   private resolveSelectableModel(provider: Provider, input: string): string {

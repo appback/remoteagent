@@ -29,6 +29,7 @@ const HELP_TEXT = [
   "/stop",
   "/sandbox codex <read-only|workspace-write|danger-full-access>",
   "/status",
+  "/reportbot use current|status|clear",
   "/bots",
   "/bot add <token>",
   "/bot remove <username|id>",
@@ -59,6 +60,7 @@ const REPORT_PROTOCOL_PROMPT = [
   "Do not claim that a Telegram message or file was sent unless RemoteAgent explicitly confirmed that delivery step.",
   "If you want RemoteAgent to send a file, include a separate line exactly like: TELEGRAM_FILE: /absolute/path/to/file",
   "Do not call Telegram APIs directly or use bot credentials even if they appear to exist in the environment.",
+  "If this session has an approved Telegram report target, background jobs may report through the helper command: node \"$REMOTEAGENT_REPORT_BIN\" \"message\"",
 ].join("\n");
 const RECOGNIZED_COMMANDS = new Set([
   "start",
@@ -72,6 +74,7 @@ const RECOGNIZED_COMMANDS = new Set([
   "stop",
   "sandbox",
   "status",
+  "reportbot",
   "bots",
   "bot",
   "install",
@@ -339,6 +342,51 @@ ${bridge.formatStatus(mapping)}`);
     const chatId = String(ctx.chat.id);
     const mapping = await bridge.status(botId, chatId);
     await reply(ctx, bridge.formatStatus(mapping));
+  });
+
+  bot.command("reportbot", async (ctx) => {
+    const botId = getBotId();
+    const chatId = String(ctx.chat.id);
+    const { args } = parseCommand(ctx.message?.text, 2);
+    const action = args[0]?.toLowerCase();
+    const target = args[1]?.toLowerCase();
+
+    if (!action || !["use", "status", "clear"].includes(action)) {
+      await reply(ctx, "Usage: `/reportbot use current`, `/reportbot status`, or `/reportbot clear`", {
+        parse_mode: "Markdown",
+      });
+      return;
+    }
+
+    if (action === "status") {
+      const mapping = await bridge.status(botId, chatId);
+      await reply(ctx, mapping ? bridge.formatCurrentSession(mapping) : "No paired session for this chat yet.");
+      return;
+    }
+
+    if (action === "clear") {
+      const mapping = await bridge.clearTelegramReportTarget(botId, chatId);
+      await reply(ctx, `Cleared the Telegram report target for ${mapping.session.publicId}.\n\n${bridge.formatCurrentSession(mapping)}`);
+      return;
+    }
+
+    if (target !== "current") {
+      await reply(ctx, "Usage: `/reportbot use current`", {
+        parse_mode: "Markdown",
+      });
+      return;
+    }
+
+    const mapping = await bridge.setTelegramReportTarget(
+      botId,
+      chatId,
+      bot.botInfo?.username ?? String(bot.botInfo?.id ?? botId),
+      bot.botInfo?.username,
+    );
+    await reply(
+      ctx,
+      `Saved the current bot/chat as the report target for ${mapping.session.publicId}.\n\n${bridge.formatCurrentSession(mapping)}`,
+    );
   });
 
   bot.command("bots", async (ctx) => {

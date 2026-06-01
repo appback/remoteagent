@@ -20,6 +20,7 @@ export class ShellAdapter implements ProviderAdapter {
       BRIDGE_BOT_ID: request.botId ?? "",
       BRIDGE_CHAT_ID: request.chatId,
       BRIDGE_SESSION_ID: request.sessionId ?? "",
+      BRIDGE_PUBLIC_SESSION_ID: request.publicSessionId ?? "",
       BRIDGE_CWD: request.cwd,
       BRIDGE_MESSAGE: request.message,
     };

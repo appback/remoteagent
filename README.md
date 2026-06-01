@@ -102,6 +102,9 @@ Current command surface implemented in `src/bot.ts`:
 | `/new` | Creates and binds a new session using the saved default mode in a new managed workspace |
 | `/switch <session>` | Rebinds this chat to an existing RemoteAgent session |
 | `/status` | Shows current session, workspace, provider, and sandbox state |
+| `/reportbot use current` | Approves the current Telegram bot/chat as the report target for this session |
+| `/reportbot status` | Shows whether this session has a Telegram report target |
+| `/reportbot clear` | Removes the saved Telegram report target from this session |
 | `/bots` | Lists the currently configured Telegram bots |
 | `/bot add <token>` | Adds a Telegram bot token, restarts the runtime, and confirms the result after restart |
 | `/bot remove <username\|id>` | Removes a configured Telegram bot, restarts the runtime, and confirms the result after restart |
@@ -149,6 +152,7 @@ Current Codex behavior:
 - attach to existing `thread_id`
 - continue the same Codex session across turns
 - per-session sandbox selection
+- optional background reporting through `node "$REMOTEAGENT_REPORT_BIN" "message"` after `/reportbot use current`
 
 ### 4. Telegram and Claude Code
 

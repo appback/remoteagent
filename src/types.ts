@@ -13,12 +13,21 @@ export type ProviderSession = {
   sandboxMode?: CodexSandboxMode;
 };
 
+export type TelegramReportTarget = {
+  transport: "telegram";
+  botId: string;
+  chatId: string;
+  username?: string;
+  setAt: string;
+};
+
 export type SessionRecord = {
   sessionId: string;
   publicId: string;
   mode: BridgeMode;
   workspace: string;
   workspaceUid?: string;
+  reportTarget?: TelegramReportTarget;
   codex?: ProviderSession;
   claude?: ProviderSession;
   createdAt: string;
@@ -54,6 +63,7 @@ export type ProviderRequest = {
   botId?: string;
   chatId: string;
   remoteSessionId: string;
+  publicSessionId?: string;
   message: string;
   cwd: string;
   sessionId?: string;

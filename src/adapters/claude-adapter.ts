@@ -14,7 +14,12 @@ export class ClaudeAdapter implements ProviderAdapter {
   async send(request: ProviderRequest): Promise<ProviderResponse> {
     const sessionId = request.sessionId ?? randomUUID();
     const args = this.buildArgs(request, sessionId);
-    const { stdout, stderr, code, timedOut } = await this.runClaude(args, request.cwd, request.remoteSessionId);
+    const { stdout, stderr, code, timedOut } = await this.runClaude(
+      args,
+      request.cwd,
+      request.remoteSessionId,
+      request.publicSessionId,
+    );
 
     if (code !== 0) {
       throw new Error(this.formatProcessError(stdout, stderr, timedOut));
@@ -59,8 +64,17 @@ export class ClaudeAdapter implements ProviderAdapter {
     return args;
   }
 
-  private runClaude(args: string[], cwd: string, remoteSessionId: string): Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean }> {
-    return spawnWithPlatformShell(this.claudeBin, args, cwd, this.timeoutMs, undefined, remoteSessionId);
+  private runClaude(
+    args: string[],
+    cwd: string,
+    remoteSessionId: string,
+    publicSessionId?: string,
+  ): Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean }> {
+    return spawnWithPlatformShell(this.claudeBin, args, cwd, this.timeoutMs, undefined, remoteSessionId, {
+      REMOTEAGENT_SESSION_ID: remoteSessionId,
+      REMOTEAGENT_PUBLIC_SESSION_ID: publicSessionId ?? "",
+      REMOTEAGENT_WORKSPACE: cwd,
+    });
   }
 
   private formatProcessError(stdout: string, stderr: string, timedOut = false): string {

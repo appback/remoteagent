@@ -10,6 +10,7 @@ import type {
   Provider,
   ProviderSession,
   SessionRecord,
+  TelegramReportTarget,
 } from "../types.js";
 
 type LegacyChatMapping = {
@@ -226,6 +227,19 @@ export class FileStore {
     delete state.chats[chatId];
     await this.writeState(state);
     await fs.rm(this.channelFilePath(botId, chatId), { force: true }).catch(() => undefined);
+  }
+
+  async setReportTargetForChat(
+    botId: string,
+    chatId: string,
+    reportTarget?: TelegramReportTarget,
+  ): Promise<ChatSession> {
+    const state = await this.readState();
+    const exact = this.mustResolveChatSession(state, botId, chatId);
+    exact.session.reportTarget = reportTarget;
+    exact.session.updatedAt = new Date().toISOString();
+    await this.writeState(state);
+    return this.mustResolveChatSession(state, botId, chatId);
   }
 
   async appendLog(remoteSessionId: string, line: string): Promise<void> {
@@ -533,6 +547,9 @@ export class FileStore {
     session.publicId = session.publicId || "";
     session.workspace = session.workspace || session.codex?.cwd || session.claude?.cwd || this.dataDir;
     session.workspaceUid = typeof session.workspaceUid === "string" && session.workspaceUid.trim() ? session.workspaceUid.trim() : undefined;
+    if (session.reportTarget?.transport !== "telegram" || !session.reportTarget.botId || !session.reportTarget.chatId) {
+      delete session.reportTarget;
+    }
     session.createdAt = session.createdAt || session.updatedAt || new Date().toISOString();
     session.updatedAt = session.updatedAt || session.createdAt;
 

@@ -20,7 +20,13 @@ export class CodexAdapter implements ProviderAdapter {
       ? this.buildResumeArgs(request, outputPath, sandboxMode)
       : this.buildExecArgs(request, outputPath, sandboxMode);
 
-    const { stdout, stderr, code, timedOut } = await this.runCodex(args, request.cwd, request.remoteSessionId, request.message);
+    const { stdout, stderr, code, timedOut } = await this.runCodex(
+      args,
+      request.cwd,
+      request.remoteSessionId,
+      request.publicSessionId,
+      request.message,
+    );
 
     try {
       const sessionId = this.extractThreadId(stdout) ?? request.sessionId;
@@ -141,9 +147,14 @@ export class CodexAdapter implements ProviderAdapter {
     args: string[],
     cwd: string,
     remoteSessionId: string,
+    publicSessionId: string | undefined,
     input?: string,
   ): Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean }> {
-    return spawnWithPlatformShell(this.codexBin, args, cwd, this.timeoutMs, input, remoteSessionId);
+    return spawnWithPlatformShell(this.codexBin, args, cwd, this.timeoutMs, input, remoteSessionId, {
+      REMOTEAGENT_SESSION_ID: remoteSessionId,
+      REMOTEAGENT_PUBLIC_SESSION_ID: publicSessionId ?? "",
+      REMOTEAGENT_WORKSPACE: cwd,
+    });
   }
 
   private extractThreadId(stdout: string): string | undefined {
