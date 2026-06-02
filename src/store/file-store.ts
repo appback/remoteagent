@@ -10,6 +10,7 @@ import type {
   Provider,
   ProviderSession,
   SessionRecord,
+  TelegramContact,
   TelegramReportTarget,
 } from "../types.js";
 
@@ -26,7 +27,7 @@ type LegacyBridgeState = {
   chats: Record<string, LegacyChatMapping>;
 };
 
-const EMPTY_STATE: BridgeState = { chats: {}, sessions: {}, settings: {} };
+const EMPTY_STATE: BridgeState = { chats: {}, sessions: {}, telegramContacts: {}, settings: {} };
 
 export class FileStore {
   private readonly stateFile: string;
@@ -229,6 +230,24 @@ export class FileStore {
     await fs.rm(this.channelFilePath(botId, chatId), { force: true }).catch(() => undefined);
   }
 
+  async rememberTelegramContact(contact: TelegramContact): Promise<void> {
+    const state = await this.readState();
+    const key = this.chatKey(contact.botId, contact.chatId);
+    const existing = state.telegramContacts[key];
+    state.telegramContacts[key] = {
+      ...existing,
+      ...contact,
+      transport: "telegram",
+      lastSeenAt: contact.lastSeenAt,
+    };
+    await this.writeState(state);
+  }
+
+  async listTelegramContacts(): Promise<TelegramContact[]> {
+    const state = await this.readState();
+    return Object.values(state.telegramContacts).sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt));
+  }
+
   async setReportTargetForChat(
     botId: string,
     chatId: string,
@@ -281,7 +300,7 @@ export class FileStore {
   }
 
   private async readStateFromDirectories(): Promise<BridgeState> {
-    const state: BridgeState = { chats: {}, sessions: {}, settings: {} };
+    const state: BridgeState = { chats: {}, sessions: {}, telegramContacts: {}, settings: {} };
 
     const sessionDirs = await fs.readdir(this.sessionsDir, { withFileTypes: true }).catch(() => []);
     for (const entry of sessionDirs) {
@@ -441,17 +460,27 @@ export class FileStore {
   private normalizeState(rawState: BridgeState | LegacyBridgeState): { state: BridgeState; migrated: boolean } {
     if ("sessions" in rawState) {
       const state = rawState as BridgeState;
+      state.telegramContacts = state.telegramContacts ?? {};
       state.settings = this.normalizeSettings(state.settings);
 
       for (const session of Object.values(state.sessions)) {
         this.normalizeSession(session);
       }
 
+      for (const [key, contact] of Object.entries(state.telegramContacts)) {
+        const normalized = this.normalizeTelegramContact(contact);
+        if (normalized) {
+          state.telegramContacts[key] = normalized;
+        } else {
+          delete state.telegramContacts[key];
+        }
+      }
+
       return { state, migrated: false };
     }
 
     const legacy = rawState as LegacyBridgeState;
-    const migrated: BridgeState = { chats: {}, sessions: {}, settings: {} };
+    const migrated: BridgeState = { chats: {}, sessions: {}, telegramContacts: {}, settings: {} };
 
     for (const [chatId, mapping] of Object.entries(legacy.chats || {})) {
       const sessionId = randomUUID();
@@ -484,11 +513,21 @@ export class FileStore {
     const state: BridgeState = {
       chats: { ...fallback.chats, ...primary.chats },
       sessions: { ...fallback.sessions, ...primary.sessions },
+      telegramContacts: { ...fallback.telegramContacts, ...primary.telegramContacts },
       settings: this.normalizeSettings({ ...fallback.settings, ...primary.settings }),
     };
 
     for (const session of Object.values(state.sessions)) {
       this.normalizeSession(session);
+    }
+
+    for (const [key, contact] of Object.entries(state.telegramContacts)) {
+      const normalized = this.normalizeTelegramContact(contact);
+      if (normalized) {
+        state.telegramContacts[key] = normalized;
+      } else {
+        delete state.telegramContacts[key];
+      }
     }
 
     return state;
@@ -565,6 +604,19 @@ export class FileStore {
     }
 
     return session;
+  }
+
+  private normalizeTelegramContact(contact: TelegramContact): TelegramContact | undefined {
+    if (contact.transport !== "telegram" || !contact.botId || !contact.chatId) {
+      return undefined;
+    }
+
+    return {
+      ...contact,
+      transport: "telegram",
+      chatType: contact.chatType || "private",
+      lastSeenAt: contact.lastSeenAt || new Date().toISOString(),
+    };
   }
 
   private resolveChatSession(state: BridgeState, botId: string, chatId: string): ChatSession | undefined {

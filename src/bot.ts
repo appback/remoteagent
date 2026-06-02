@@ -29,7 +29,7 @@ const HELP_TEXT = [
   "/stop",
   "/sandbox codex <read-only|workspace-write|danger-full-access>",
   "/status",
-  "/reportbot use current|status|clear",
+  "/reportbot list|set <target>|status|clear",
   "/bots",
   "/bot add <token>",
   "/bot remove <username|id>",
@@ -159,6 +159,21 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
     console.log(
       `[tg-update] bot=${getBotId()} kind=${updateKind} chat=${ctx.chat?.id ?? "?"} text=${JSON.stringify(safeText).slice(0, 240)}`,
     );
+    if (ctx.chat) {
+      await bridge.rememberTelegramContact({
+        transport: "telegram",
+        botId: getBotId(),
+        botUsername: bot.botInfo?.username,
+        chatId: String(ctx.chat.id),
+        chatType: ctx.chat.type,
+        ownerUserId: ctx.from ? String(ctx.from.id) : undefined,
+        username: "username" in ctx.chat && typeof ctx.chat.username === "string" ? ctx.chat.username : undefined,
+        firstName: "first_name" in ctx.chat && typeof ctx.chat.first_name === "string" ? ctx.chat.first_name : undefined,
+        lastName: "last_name" in ctx.chat && typeof ctx.chat.last_name === "string" ? ctx.chat.last_name : undefined,
+        title: "title" in ctx.chat && typeof ctx.chat.title === "string" ? ctx.chat.title : undefined,
+        lastSeenAt: new Date().toISOString(),
+      });
+    }
     await next();
   });
 
@@ -346,16 +361,23 @@ ${bridge.formatStatus(mapping)}`);
   });
 
   bot.command("reportbot", async (ctx) => {
+    await ensureOwnerControlAccess(ctx);
     const botId = getBotId();
     const chatId = String(ctx.chat.id);
     const { args } = parseCommand(ctx.message?.text, 2);
     const action = args[0]?.toLowerCase();
-    const target = args[1]?.toLowerCase();
+    const target = args[1]?.trim();
 
-    if (!action || !["use", "status", "clear"].includes(action)) {
-      await reply(ctx, "Usage: `/reportbot use current`, `/reportbot status`, or `/reportbot clear`", {
+    if (!action || !["list", "set", "status", "clear"].includes(action)) {
+      await reply(ctx, "Usage: `/reportbot list`, `/reportbot set <number|@bot_username>`, `/reportbot status`, or `/reportbot clear`", {
         parse_mode: "Markdown",
       });
+      return;
+    }
+
+    if (action === "list") {
+      const contacts = await bridge.listTelegramReportTargets(config.telegramOwnerId);
+      await reply(ctx, bridge.formatTelegramReportTargets(contacts));
       return;
     }
 
@@ -371,22 +393,22 @@ ${bridge.formatStatus(mapping)}`);
       return;
     }
 
-    if (target !== "current") {
-      await reply(ctx, "Usage: `/reportbot use current`", {
+    if (!target) {
+      await reply(ctx, "Usage: `/reportbot set <number|@bot_username>`", {
         parse_mode: "Markdown",
       });
       return;
     }
 
-    const mapping = await bridge.setTelegramReportTarget(
+    const mapping = await bridge.setTelegramReportTargetBySelector(
       botId,
       chatId,
-      bot.botInfo?.username ?? String(bot.botInfo?.id ?? botId),
-      bot.botInfo?.username,
+      target,
+      config.telegramOwnerId,
     );
     await reply(
       ctx,
-      `Saved the current bot/chat as the report target for ${mapping.session.publicId}.\n\n${bridge.formatCurrentSession(mapping)}`,
+      `Saved the report target for ${mapping.session.publicId}.\n\n${bridge.formatCurrentSession(mapping)}`,
     );
   });
 

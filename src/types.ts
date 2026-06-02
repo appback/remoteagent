@@ -21,6 +21,20 @@ export type TelegramReportTarget = {
   setAt: string;
 };
 
+export type TelegramContact = {
+  transport: "telegram";
+  botId: string;
+  botUsername?: string;
+  chatId: string;
+  chatType: string;
+  ownerUserId?: string;
+  username?: string;
+  firstName?: string;
+  lastName?: string;
+  title?: string;
+  lastSeenAt: string;
+};
+
 export type SessionRecord = {
   sessionId: string;
   publicId: string;
@@ -56,6 +70,7 @@ export type BridgeSettings = {
 export type BridgeState = {
   chats: Record<string, ChatBinding>;
   sessions: Record<string, SessionRecord>;
+  telegramContacts: Record<string, TelegramContact>;
   settings: BridgeSettings;
 };
 
