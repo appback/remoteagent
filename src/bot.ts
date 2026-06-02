@@ -31,7 +31,7 @@ const HELP_TEXT = [
   "/status",
   "/reportbot list|set <target>|status|clear",
   "/bots",
-  "/bot add <token>",
+  "/bot add general|report <token>",
   "/bot remove <username|id>",
   "/bot reload",
   "/install codex|claude",
@@ -367,6 +367,10 @@ ${bridge.formatStatus(mapping)}`);
     const { args } = parseCommand(ctx.message?.text, 2);
     const action = args[0]?.toLowerCase();
     const target = args[1]?.trim();
+    const reportBotIds = config.telegramBotTokens
+      .map((token, index) => ({ token, role: config.telegramBotRoles[index] }))
+      .filter((entry) => entry.role === "report")
+      .map((entry) => entry.token.split(":", 1)[0] ?? "");
 
     if (!action || !["list", "set", "status", "clear"].includes(action)) {
       await reply(ctx, "Usage: `/reportbot list`, `/reportbot set <number|@bot_username>`, `/reportbot status`, or `/reportbot clear`", {
@@ -376,7 +380,7 @@ ${bridge.formatStatus(mapping)}`);
     }
 
     if (action === "list") {
-      const contacts = await bridge.listTelegramReportTargets(config.telegramOwnerId);
+      const contacts = await bridge.listTelegramReportTargets(config.telegramOwnerId, reportBotIds);
       await reply(ctx, bridge.formatTelegramReportTargets(contacts));
       return;
     }
@@ -405,6 +409,7 @@ ${bridge.formatStatus(mapping)}`);
       chatId,
       target,
       config.telegramOwnerId,
+      reportBotIds,
     );
     await reply(
       ctx,
@@ -420,18 +425,25 @@ ${bridge.formatStatus(mapping)}`);
   bot.command("bot", async (ctx) => {
     await ensureOwnerControlAccess(ctx);
     const sourceBotId = getBotId();
-    const { args, rest } = parseCommand(ctx.message?.text, 1);
+    const { args, rest } = parseCommand(ctx.message?.text, 2);
     const action = args[0]?.toLowerCase();
 
     if (!action || !["add", "remove", "reload"].includes(action)) {
-      await reply(ctx, "Usage: `/bot add <token>`, `/bot remove <username|id>`, or `/bot reload`", {
+      await reply(ctx, "Usage: `/bot add general <token>`, `/bot add report <token>`, `/bot remove <username|id>`, or `/bot reload`", {
         parse_mode: "Markdown",
       });
       return;
     }
 
     if (action === "add") {
-      const result = await botManagement.addBot(rest?.trim() ?? "", sourceBotId, sourceBotToken, ctx.chat.id);
+      const role = args[1]?.toLowerCase();
+      if (role !== "general" && role !== "report") {
+        await reply(ctx, "Usage: `/bot add general <token>` or `/bot add report <token>`", {
+          parse_mode: "Markdown",
+        });
+        return;
+      }
+      const result = await botManagement.addBot(role, rest?.trim() ?? "", sourceBotId, sourceBotToken, ctx.chat.id);
       await reply(ctx, result.message);
       return;
     }
@@ -803,7 +815,7 @@ class TelegramMessageBatcher {
 function sanitizeLoggedTelegramText(text: string): string {
   const trimmed = text.trim();
   if (/^\/bot\s+add\s+/i.test(trimmed)) {
-    return "/bot add [redacted]";
+    return trimmed.replace(/^(\/bot\s+add\s+\S+)\s+.+$/i, "$1 [redacted]");
   }
   if (/^\/login\s+claude\s+/i.test(trimmed)) {
     return "/login claude [redacted]";

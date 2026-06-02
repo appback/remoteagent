@@ -212,13 +212,16 @@ export class BridgeService {
     await this.store.rememberTelegramContact(contact);
   }
 
-  async listTelegramReportTargets(ownerUserId?: string): Promise<TelegramContact[]> {
+  async listTelegramReportTargets(ownerUserId?: string, allowedBotIds?: string[]): Promise<TelegramContact[]> {
     const contacts = await this.store.listTelegramContacts();
-    return contacts.filter((contact) =>
+    const allowed = allowedBotIds ? new Set(allowedBotIds.map((value) => value.toLowerCase())) : undefined;
+    return contacts
+      .filter((contact) =>
       contact.transport === "telegram"
       && contact.chatType === "private"
       && (!ownerUserId || contact.ownerUserId === ownerUserId),
-    );
+      )
+      .filter((contact) => !allowed || allowed.has(contact.botId.toLowerCase()) || (contact.botUsername && allowed.has(contact.botUsername.toLowerCase())));
   }
 
   async setTelegramReportTargetBySelector(
@@ -226,9 +229,10 @@ export class BridgeService {
     chatId: string,
     selector: string,
     ownerUserId?: string,
+    allowedBotIds?: string[],
   ): Promise<ChatSession> {
     await this.requireChat(botId, chatId);
-    const contacts = await this.listTelegramReportTargets(ownerUserId);
+    const contacts = await this.listTelegramReportTargets(ownerUserId, allowedBotIds);
     const target = this.resolveTelegramReportSelector(contacts, selector);
     if (!target) {
       throw new Error(this.formatUnknownReportTarget(selector, contacts));
@@ -797,7 +801,7 @@ export class BridgeService {
     if (contacts.length === 0) {
       return [
         "No report targets are available yet.",
-        "1. Add the report bot with `/bot add <token>`.",
+        "1. Add the report bot with `/bot add report <token>`.",
         "2. Open a private chat with that bot and send any message once.",
         "3. Run `/reportbot set <number|@bot_username>` from the work session chat.",
       ].join("\n");

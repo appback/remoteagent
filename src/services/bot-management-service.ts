@@ -4,12 +4,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { promisify } from "node:util";
+import type { TelegramBotRole } from "../types.js";
 
 type ManagedBot = {
   index: number;
   token: string;
   id: number;
   username: string;
+  role: TelegramBotRole;
 };
 
 type PendingBotOperationAction = "add" | "remove" | "reload";
@@ -36,6 +38,7 @@ type EnvConfig = {
   lines: string[];
   tokens: string[];
   usernames: string[];
+  roles: TelegramBotRole[];
 };
 
 type BotCommandResult = {
@@ -76,16 +79,16 @@ export class BotManagementService {
 
     return [
       `Configured bots (${bots.length})`,
-      ...bots.map((bot, index) => `${index + 1}. @${bot.username} (${bot.id})`),
+      ...bots.map((bot, index) => `${index + 1}. @${bot.username} (${bot.id}) [${bot.role}]`),
     ].join("\n");
   }
 
-  async addBot(token: string, sourceBotId: string, sourceBotToken: string, chatId: number): Promise<BotCommandResult> {
+  async addBot(role: TelegramBotRole, token: string, sourceBotId: string, sourceBotToken: string, chatId: number): Promise<BotCommandResult> {
     await this.ensureSupported();
 
     const trimmed = token.trim();
     if (!trimmed) {
-      throw new Error("Usage: /bot add <token>");
+      throw new Error("Usage: /bot add general <token> or /bot add report <token>");
     }
 
     const target = await this.fetchBotIdentity(trimmed);
@@ -102,6 +105,7 @@ export class BotManagementService {
 
     const tokens = [...env.tokens, trimmed];
     const usernames = [...env.usernames, target.username];
+    const roles = [...env.roles, role];
     const backupEnvPath = await this.backupEnv();
     const pending: PendingBotOperation = {
       version: 1,
@@ -121,7 +125,7 @@ export class BotManagementService {
 
     try {
       await this.writePendingOperation(pending);
-      await this.writeEnvConfig(env.lines, tokens, usernames);
+      await this.writeEnvConfig(env.lines, tokens, usernames, roles);
       await this.launchRestartJob();
     } catch (error) {
       await this.restoreBackup(backupEnvPath).catch(() => undefined);
@@ -131,7 +135,7 @@ export class BotManagementService {
 
     return {
       message: [
-        `Applying bot add for @${target.username} (${target.id}).`,
+        `Applying bot add for @${target.username} (${target.id}) as [${role}].`,
         "The runtime will restart once and then report the result here.",
       ].join("\n\n"),
     };
@@ -146,7 +150,7 @@ export class BotManagementService {
     }
 
     const env = await this.readEnvConfig();
-    const bots = this.zipBots(env.tokens, env.usernames);
+    const bots = this.zipBots(env.tokens, env.usernames, env.roles);
     const target = this.resolveBotSelector(bots, trimmed);
     if (!target) {
       throw new Error(`Bot was not found: ${trimmed}`);
@@ -158,6 +162,7 @@ export class BotManagementService {
     const remainingBots = bots.filter((value) => value.token !== target.token);
     const tokens = remainingBots.map((value) => value.token);
     const usernames = remainingBots.map((value) => value.username);
+    const roles = remainingBots.map((value) => value.role);
     const replyToken = tokens.includes(sourceBotToken) ? sourceBotToken : tokens[0]!;
     const notifyViaUsername = remainingBots.find((bot) => bot.token === replyToken)?.username;
     const backupEnvPath = await this.backupEnv();
@@ -179,7 +184,7 @@ export class BotManagementService {
 
     try {
       await this.writePendingOperation(pending);
-      await this.writeEnvConfig(env.lines, tokens, usernames);
+      await this.writeEnvConfig(env.lines, tokens, usernames, roles);
       await this.launchRestartJob();
     } catch (error) {
       await this.restoreBackup(backupEnvPath).catch(() => undefined);
@@ -193,7 +198,7 @@ export class BotManagementService {
 
     return {
       message: [
-        `Applying bot removal for @${target.username} (${target.id}).`,
+        `Applying bot removal for @${target.username} (${target.id}) [${target.role}].`,
         notifyLine,
       ].join("\n\n"),
     };
@@ -331,6 +336,7 @@ export class BotManagementService {
       token,
       id: payload.result.id,
       username: payload.result.username,
+      role: "general",
     };
   }
 
@@ -340,6 +346,7 @@ export class BotManagementService {
     const tokenLine = lines.find((line) => line.startsWith("TELEGRAM_BOT_TOKENS="));
     const singleTokenLine = lines.find((line) => line.startsWith("TELEGRAM_BOT_TOKEN="));
     const usernameLine = lines.find((line) => line.startsWith("TELEGRAM_BOT_USERNAMES="));
+    const roleLine = lines.find((line) => line.startsWith("TELEGRAM_BOT_ROLES="));
 
     const tokens = tokenLine
       ? this.parseCsv(tokenLine.slice("TELEGRAM_BOT_TOKENS=".length))
@@ -347,20 +354,24 @@ export class BotManagementService {
         ? [singleTokenLine.slice("TELEGRAM_BOT_TOKEN=".length).trim()].filter(Boolean)
         : [];
     const usernames = usernameLine ? this.parseCsv(usernameLine.slice("TELEGRAM_BOT_USERNAMES=".length)) : [];
+    const roles = this.normalizeRoles(tokens, roleLine ? this.parseCsv(roleLine.slice("TELEGRAM_BOT_ROLES=".length)) : []);
 
     return {
       lines,
       tokens,
       usernames,
+      roles,
     };
   }
 
-  private async writeEnvConfig(originalLines: string[], tokens: string[], usernames: string[]): Promise<void> {
+  private async writeEnvConfig(originalLines: string[], tokens: string[], usernames: string[], roles: TelegramBotRole[]): Promise<void> {
     const normalizedUsernames = this.normalizeUsernames(tokens, usernames);
+    const normalizedRoles = this.normalizeRoles(tokens, roles);
     const nextLines: string[] = [];
     let hasMulti = false;
     let hasSingle = false;
     let hasUsernames = false;
+    let hasRoles = false;
 
     for (const line of originalLines) {
       if (line.startsWith("TELEGRAM_BOT_TOKENS=")) {
@@ -378,6 +389,11 @@ export class BotManagementService {
         hasUsernames = true;
         continue;
       }
+      if (line.startsWith("TELEGRAM_BOT_ROLES=")) {
+        nextLines.push(`TELEGRAM_BOT_ROLES=${normalizedRoles.join(",")}`);
+        hasRoles = true;
+        continue;
+      }
       nextLines.push(line);
     }
 
@@ -390,6 +406,9 @@ export class BotManagementService {
     if (!hasUsernames) {
       nextLines.unshift(`TELEGRAM_BOT_USERNAMES=${normalizedUsernames.join(",")}`);
     }
+    if (!hasRoles) {
+      nextLines.unshift(`TELEGRAM_BOT_ROLES=${normalizedRoles.join(",")}`);
+    }
 
     const output = `${nextLines.filter((line, index, all) => !(index === all.length - 1 && line === "")).join("\n")}\n`;
     await fs.writeFile(this.envPath, output, "utf8");
@@ -399,13 +418,19 @@ export class BotManagementService {
     return tokens.map((token, index) => usernames[index]?.trim() || `bot_${this.tokenId(token)}`);
   }
 
-  private zipBots(tokens: string[], usernames: string[]): ManagedBot[] {
+  private normalizeRoles(tokens: string[], roles: string[]): TelegramBotRole[] {
+    return tokens.map((_, index) => roles[index]?.trim().toLowerCase() === "report" ? "report" : "general");
+  }
+
+  private zipBots(tokens: string[], usernames: string[], roles: TelegramBotRole[]): ManagedBot[] {
     const normalizedUsernames = this.normalizeUsernames(tokens, usernames);
+    const normalizedRoles = this.normalizeRoles(tokens, roles);
     return tokens.map((token, index) => ({
       index,
       token,
       id: this.tokenId(token),
       username: normalizedUsernames[index]!,
+      role: normalizedRoles[index]!,
     }));
   }
 
@@ -421,7 +446,7 @@ export class BotManagementService {
 
   private async listConfiguredBots(): Promise<ManagedBot[]> {
     const env = await this.readEnvConfig();
-    return this.zipBots(env.tokens, env.usernames);
+    return this.zipBots(env.tokens, env.usernames, env.roles);
   }
 
   private tokenId(token: string): number {

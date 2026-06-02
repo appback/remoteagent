@@ -106,8 +106,9 @@ Current command surface implemented in `src/bot.ts`:
 | `/reportbot set <number\|@bot_username>` | Assigns a separate Telegram bot/chat as the report target for this session |
 | `/reportbot status` | Shows whether this session has a Telegram report target |
 | `/reportbot clear` | Removes the saved Telegram report target from this session |
-| `/bots` | Lists the currently configured Telegram bots |
-| `/bot add <token>` | Adds a Telegram bot token, restarts the runtime, and confirms the result after restart |
+| `/bots` | Lists the currently configured Telegram bots with their roles |
+| `/bot add general <token>` | Adds a normal conversation bot, restarts the runtime, and confirms the result after restart |
+| `/bot add report <token>` | Adds a report-only candidate bot, restarts the runtime, and confirms the result after restart |
 | `/bot remove <username\|id>` | Removes a configured Telegram bot, restarts the runtime, and confirms the result after restart |
 | `/bot reload` | Restarts the runtime and confirms the result after restart |
 | `/install codex\|claude` | Runs the configured provider install or update command for the bot owner |

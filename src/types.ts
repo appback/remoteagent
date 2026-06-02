@@ -1,5 +1,6 @@
 export type Provider = "codex" | "claude";
 export type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
+export type TelegramBotRole = "general" | "report";
 
 export type BridgeMode = Provider;
 
