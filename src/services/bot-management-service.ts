@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
@@ -275,22 +276,42 @@ export class BotManagementService {
 
   private async launchRestartJob(): Promise<void> {
     const unitName = `remoteagent-bot-op-${Date.now()}`;
-    const { stderr } = await execFileAsync("sudo", [
-      "-n",
-      "systemd-run",
-      "--unit",
-      unitName,
-      "--collect",
-      "--service-type=exec",
-      this.restartHelperPath,
-      this.serviceName,
-      this.dataDir,
-    ]);
+    try {
+      const { stderr } = await execFileAsync("sudo", [
+        "-n",
+        "systemd-run",
+        "--unit",
+        unitName,
+        "--collect",
+        "--service-type=exec",
+        this.restartHelperPath,
+        this.serviceName,
+        this.dataDir,
+      ]);
 
-    const output = stderr?.trim();
-    if (output) {
-      console.error("bot restart helper stderr:", output);
+      const output = stderr?.trim();
+      if (output) {
+        console.error("bot restart helper stderr:", output);
+      }
+      return;
+    } catch (error) {
+      if (!this.shouldFallbackToUserRestart(error)) {
+        throw error;
+      }
     }
+
+    const child = spawn(this.restartHelperPath, [this.serviceName, this.dataDir], {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.unref();
+  }
+
+  private shouldFallbackToUserRestart(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return /sudo: a password is required/i.test(message)
+      || /command not found/i.test(message)
+      || /systemd-run/i.test(message);
   }
 
   private async fetchBotIdentity(token: string): Promise<ManagedBot> {
