@@ -31,7 +31,8 @@ const HELP_TEXT = [
   "/status",
   "/reportbot list|set <target>|status|clear",
   "/bots",
-  "/bot add general|report <token>",
+  "/bot add <token>",
+  "/bot addreport <token>",
   "/bot remove <username|id>",
   "/bot reload",
   "/install codex|claude",
@@ -428,22 +429,33 @@ ${bridge.formatStatus(mapping)}`);
     const { args, rest } = parseCommand(ctx.message?.text, 2);
     const action = args[0]?.toLowerCase();
 
-    if (!action || !["add", "remove", "reload"].includes(action)) {
-      await reply(ctx, "Usage: `/bot add general <token>`, `/bot add report <token>`, `/bot remove <username|id>`, or `/bot reload`", {
+    if (!action || !["add", "addreport", "remove", "reload"].includes(action)) {
+      await reply(ctx, "Usage: `/bot add <token>`, `/bot addreport <token>`, `/bot remove <username|id>`, or `/bot reload`", {
         parse_mode: "Markdown",
       });
       return;
     }
 
-    if (action === "add") {
-      const role = args[1]?.toLowerCase();
-      if (role !== "general" && role !== "report") {
-        await reply(ctx, "Usage: `/bot add general <token>` or `/bot add report <token>`", {
+    if (action === "add" || action === "addreport") {
+      const rawSecond = args[1]?.trim();
+      const hasLegacyRolePrefix = action === "add" && (rawSecond === "general" || rawSecond === "report");
+      const role = action === "addreport"
+        ? "report"
+        : hasLegacyRolePrefix
+          ? rawSecond as "general" | "report"
+          : "general";
+      const token = hasLegacyRolePrefix
+        ? (rest?.trim() ?? "")
+        : (rawSecond ?? rest?.trim() ?? "");
+
+      if (!token) {
+        await reply(ctx, action === "addreport" ? "Usage: `/bot addreport <token>`" : "Usage: `/bot add <token>`", {
           parse_mode: "Markdown",
         });
         return;
       }
-      const result = await botManagement.addBot(role, rest?.trim() ?? "", sourceBotId, sourceBotToken, ctx.chat.id);
+
+      const result = await botManagement.addBot(role, token, sourceBotId, sourceBotToken, ctx.chat.id);
       await reply(ctx, result.message);
       return;
     }
@@ -814,8 +826,11 @@ class TelegramMessageBatcher {
 
 function sanitizeLoggedTelegramText(text: string): string {
   const trimmed = text.trim();
+  if (/^\/bot\s+addreport\s+/i.test(trimmed)) {
+    return "/bot addreport [redacted]";
+  }
   if (/^\/bot\s+add\s+/i.test(trimmed)) {
-    return trimmed.replace(/^(\/bot\s+add\s+\S+)\s+.+$/i, "$1 [redacted]");
+    return "/bot add [redacted]";
   }
   if (/^\/login\s+claude\s+/i.test(trimmed)) {
     return "/login claude [redacted]";
