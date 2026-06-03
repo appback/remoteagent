@@ -797,13 +797,29 @@ export class BridgeService {
     return next?.trim() || current || this.defaultWorkspace;
   }
 
-  formatTelegramReportTargets(contacts: TelegramContact[]): string {
-    if (contacts.length === 0) {
+  formatTelegramReportTargets(
+    contacts: TelegramContact[],
+    configuredReportBots: Array<{ id: number; username: string }> = [],
+  ): string {
+    if (contacts.length === 0 && configuredReportBots.length === 0) {
       return [
         "No report targets are available yet.",
         "1. Add the report bot with `/bot addreport <token>`.",
         "2. Open a private chat with that bot and send any message once.",
         "3. Run `/reportbot set <number|@bot_username>` from the work session chat.",
+      ].join("\n");
+    }
+
+    if (contacts.length === 0) {
+      return [
+        `Configured report bots (${configuredReportBots.length})`,
+        ...configuredReportBots.map((bot, index) => `${index + 1}. @${bot.username} (${bot.id})`),
+        "",
+        "No report target chat has been seen yet.",
+        "1. Open a private chat with one of the bots above.",
+        "2. Send any message once to that bot.",
+        "3. Run `/reportbot list` again.",
+        "4. Then run `/reportbot set <number|@bot_username>` from the work session chat.",
       ].join("\n");
     }
 

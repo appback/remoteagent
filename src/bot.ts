@@ -386,8 +386,9 @@ ${bridge.formatStatus(mapping)}`);
         await reply(ctx, pendingNotice.message);
         return;
       }
+      const reportBots = await botManagement.listBotSummaries("report");
       const contacts = await bridge.listTelegramReportTargets(config.telegramOwnerId, reportBotIds);
-      await reply(ctx, bridge.formatTelegramReportTargets(contacts));
+      await reply(ctx, bridge.formatTelegramReportTargets(contacts, reportBots));
       return;
     }
 
@@ -407,6 +408,13 @@ ${bridge.formatStatus(mapping)}`);
       await reply(ctx, "Usage: `/reportbot set <number|@bot_username>`", {
         parse_mode: "Markdown",
       });
+      return;
+    }
+
+    const reportBots = await botManagement.listBotSummaries("report");
+    const contacts = await bridge.listTelegramReportTargets(config.telegramOwnerId, reportBotIds);
+    if (contacts.length === 0) {
+      await reply(ctx, bridge.formatTelegramReportTargets(contacts, reportBots));
       return;
     }
 

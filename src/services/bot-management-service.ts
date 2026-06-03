@@ -45,6 +45,12 @@ type BotCommandResult = {
   message: string;
 };
 
+type ManagedBotSummary = {
+  id: number;
+  username: string;
+  role: TelegramBotRole;
+};
+
 type PendingBotOperationNotice = {
   message: string;
   pending: boolean;
@@ -86,6 +92,17 @@ export class BotManagementService {
       `Configured bots (${bots.length})`,
       ...bots.map((bot, index) => `${index + 1}. @${bot.username} (${bot.id}) [${bot.role}]`),
     ].join("\n");
+  }
+
+  async listBotSummaries(role?: TelegramBotRole): Promise<ManagedBotSummary[]> {
+    const bots = await this.listConfiguredBots();
+    return bots
+      .filter((bot) => !role || bot.role === role)
+      .map((bot) => ({
+        id: bot.id,
+        username: bot.username,
+        role: bot.role,
+      }));
   }
 
   async getPendingOperationNotice(): Promise<PendingBotOperationNotice | undefined> {
