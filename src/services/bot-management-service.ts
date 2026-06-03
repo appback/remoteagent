@@ -88,19 +88,28 @@ export class BotManagementService {
 
     const trimmed = token.trim();
     if (!trimmed) {
-      throw new Error("Usage: /bot add general <token> or /bot add report <token>");
+      throw new Error("Usage: /bot add <token> or /bot addreport <token>");
     }
 
     const target = await this.fetchBotIdentity(trimmed);
     const env = await this.readEnvConfig();
-    if (env.tokens.includes(trimmed)) {
-      throw new Error(`@${target.username} is already configured.`);
-    }
-    if (env.tokens.some((existing) => this.tokenId(existing) === target.id)) {
-      throw new Error(`A bot with id ${target.id} is already configured.`);
-    }
-    if (env.usernames.some((username) => username.toLowerCase() === target.username.toLowerCase())) {
-      throw new Error(`@${target.username} is already configured.`);
+    const bots = this.zipBots(env.tokens, env.usernames, env.roles);
+    const existing = bots.find((bot) =>
+      bot.token === trimmed
+      || bot.id === target.id
+      || bot.username.toLowerCase() === target.username.toLowerCase(),
+    );
+
+    if (existing) {
+      if (existing.role === role) {
+        throw new Error(`@${target.username} is already configured as [${role}].`);
+      }
+
+      if (role === "report" && existing.role === "general") {
+        return this.updateBotRole(existing, "report", env, sourceBotId, sourceBotToken, chatId);
+      }
+
+      throw new Error(`@${target.username} is already configured as [${existing.role}].`);
     }
 
     const tokens = [...env.tokens, trimmed];
@@ -447,6 +456,51 @@ export class BotManagementService {
   private async listConfiguredBots(): Promise<ManagedBot[]> {
     const env = await this.readEnvConfig();
     return this.zipBots(env.tokens, env.usernames, env.roles);
+  }
+
+  private async updateBotRole(
+    bot: ManagedBot,
+    role: TelegramBotRole,
+    env: EnvConfig,
+    sourceBotId: string,
+    sourceBotToken: string,
+    chatId: number,
+  ): Promise<BotCommandResult> {
+    const roles = [...env.roles];
+    roles[bot.index] = role;
+    const backupEnvPath = await this.backupEnv();
+    const pending: PendingBotOperation = {
+      version: 1,
+      action: "add",
+      status: "pending",
+      requestedAt: new Date().toISOString(),
+      chatId,
+      replyToken: sourceBotToken,
+      notifyViaUsername: sourceBotId,
+      sourceBotId,
+      target: {
+        id: bot.id,
+        username: bot.username,
+      },
+      backupEnvPath,
+    };
+
+    try {
+      await this.writePendingOperation(pending);
+      await this.writeEnvConfig(env.lines, env.tokens, env.usernames, roles);
+      await this.launchRestartJob();
+    } catch (error) {
+      await this.restoreBackup(backupEnvPath).catch(() => undefined);
+      await this.clearPendingOperation().catch(() => undefined);
+      throw error;
+    }
+
+    return {
+      message: [
+        `Promoting @${bot.username} (${bot.id}) to [${role}].`,
+        "The runtime will restart once and then report the result here.",
+      ].join("\n\n"),
+    };
   }
 
   private tokenId(token: string): number {

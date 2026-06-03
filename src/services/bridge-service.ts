@@ -801,7 +801,7 @@ export class BridgeService {
     if (contacts.length === 0) {
       return [
         "No report targets are available yet.",
-        "1. Add the report bot with `/bot add report <token>`.",
+        "1. Add the report bot with `/bot addreport <token>`.",
         "2. Open a private chat with that bot and send any message once.",
         "3. Run `/reportbot set <number|@bot_username>` from the work session chat.",
       ].join("\n");
