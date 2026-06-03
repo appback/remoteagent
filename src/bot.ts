@@ -368,11 +368,6 @@ ${bridge.formatStatus(mapping)}`);
     const { args } = parseCommand(ctx.message?.text, 2);
     const action = args[0]?.toLowerCase();
     const target = args[1]?.trim();
-    const reportBotIds = config.telegramBotTokens
-      .map((token, index) => ({ token, role: config.telegramBotRoles[index] }))
-      .filter((entry) => entry.role === "report")
-      .map((entry) => entry.token.split(":", 1)[0] ?? "");
-
     if (!action || !["list", "set", "status", "clear"].includes(action)) {
       await reply(ctx, "Usage: `/reportbot list`, `/reportbot set <number|@bot_username>`, `/reportbot status`, or `/reportbot clear`", {
         parse_mode: "Markdown",
@@ -387,8 +382,7 @@ ${bridge.formatStatus(mapping)}`);
         return;
       }
       const reportBots = await botManagement.listBotSummaries("report");
-      const contacts = await bridge.listTelegramReportTargets(config.telegramOwnerId, reportBotIds);
-      await reply(ctx, bridge.formatTelegramReportTargets(contacts, reportBots));
+      await reply(ctx, bridge.formatTelegramReportBots(reportBots));
       return;
     }
 
@@ -412,22 +406,15 @@ ${bridge.formatStatus(mapping)}`);
     }
 
     const reportBots = await botManagement.listBotSummaries("report");
-    const contacts = await bridge.listTelegramReportTargets(config.telegramOwnerId, reportBotIds);
-    if (contacts.length === 0) {
-      await reply(ctx, bridge.formatTelegramReportTargets(contacts, reportBots));
-      return;
-    }
-
-    const mapping = await bridge.setTelegramReportTargetBySelector(
+    const mapping = await bridge.setTelegramReportBotForChat(
       botId,
       chatId,
       target,
-      config.telegramOwnerId,
-      reportBotIds,
+      reportBots,
     );
     await reply(
       ctx,
-      `Saved the report target for ${mapping.session.publicId}.\n\n${bridge.formatCurrentSession(mapping)}`,
+      `Saved the report delivery bot for ${mapping.session.publicId}.\n\n${bridge.formatCurrentSession(mapping)}`,
     );
   });
 
