@@ -381,6 +381,11 @@ ${bridge.formatStatus(mapping)}`);
     }
 
     if (action === "list") {
+      const pendingNotice = await botManagement.getPendingOperationNotice();
+      if (pendingNotice?.pending) {
+        await reply(ctx, pendingNotice.message);
+        return;
+      }
       const contacts = await bridge.listTelegramReportTargets(config.telegramOwnerId, reportBotIds);
       await reply(ctx, bridge.formatTelegramReportTargets(contacts));
       return;
@@ -420,6 +425,11 @@ ${bridge.formatStatus(mapping)}`);
 
   bot.command("bots", async (ctx) => {
     await ensureOwnerControlAccess(ctx);
+    const pendingNotice = await botManagement.getPendingOperationNotice();
+    if (pendingNotice?.pending) {
+      await reply(ctx, `${pendingNotice.message}\n\n${await botManagement.listBots()}`);
+      return;
+    }
     await reply(ctx, await botManagement.listBots());
   });
 

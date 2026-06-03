@@ -45,6 +45,11 @@ type BotCommandResult = {
   message: string;
 };
 
+type PendingBotOperationNotice = {
+  message: string;
+  pending: boolean;
+};
+
 type TelegramGetMeResponse = {
   ok?: boolean;
   description?: string;
@@ -83,8 +88,21 @@ export class BotManagementService {
     ].join("\n");
   }
 
+  async getPendingOperationNotice(): Promise<PendingBotOperationNotice | undefined> {
+    const pending = await this.readPendingOperation();
+    if (!pending) {
+      return undefined;
+    }
+
+    return {
+      pending: pending.status === "pending",
+      message: this.formatPendingOperationMessage(pending),
+    };
+  }
+
   async addBot(role: TelegramBotRole, token: string, sourceBotId: string, sourceBotToken: string, chatId: number): Promise<BotCommandResult> {
     await this.ensureSupported();
+    await this.assertNoPendingOperation();
 
     const trimmed = token.trim();
     if (!trimmed) {
@@ -152,6 +170,7 @@ export class BotManagementService {
 
   async removeBot(selector: string, sourceBotId: string, sourceBotToken: string, chatId: number): Promise<BotCommandResult> {
     await this.ensureSupported();
+    await this.assertNoPendingOperation();
 
     const trimmed = selector.trim();
     if (!trimmed) {
@@ -215,6 +234,7 @@ export class BotManagementService {
 
   async reloadBots(sourceBotId: string, sourceBotToken: string, chatId: number): Promise<BotCommandResult> {
     await this.ensureSupported();
+    await this.assertNoPendingOperation();
     const backupEnvPath = await this.backupEnv();
     const pending: PendingBotOperation = {
       version: 1,
@@ -276,6 +296,38 @@ export class BotManagementService {
     } catch (error) {
       console.error("Failed to report pending bot operation result:", error);
     }
+  }
+
+  private async assertNoPendingOperation(): Promise<void> {
+    const pending = await this.readPendingOperation();
+    if (!pending || pending.status !== "pending") {
+      return;
+    }
+
+    throw new Error(this.formatPendingOperationMessage(pending));
+  }
+
+  private formatPendingOperationMessage(pending: PendingBotOperation): string {
+    const actionLine = `Action: ${pending.action}`;
+    const targetLine = pending.target
+      ? `Target: @${pending.target.username} (${pending.target.id})`
+      : undefined;
+
+    if (pending.status === "rolled_back") {
+      return [
+        "The last bot configuration change failed and was rolled back.",
+        actionLine,
+        targetLine,
+        pending.reason ? `Reason: ${pending.reason}` : undefined,
+      ].filter(Boolean).join("\n");
+    }
+
+    return [
+      "A bot configuration change is still being applied.",
+      actionLine,
+      targetLine,
+      "Wait for the \"Bot configuration applied successfully.\" message, then try again.",
+    ].filter(Boolean).join("\n");
   }
 
   private async ensureSupported(): Promise<void> {
