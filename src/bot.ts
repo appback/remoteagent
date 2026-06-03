@@ -219,7 +219,7 @@ ${bridge.formatStatus(mapping)}`);
     const chatId = String(ctx.chat.id);
     const [mapping, sessions] = await Promise.all([
       bridge.status(botId, chatId),
-      bridge.listSessions(botId),
+      bridge.listSessions(),
     ]);
     await reply(ctx, bridge.formatSessionList(sessions, mapping?.session.sessionId));
   };

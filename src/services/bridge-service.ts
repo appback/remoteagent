@@ -47,7 +47,7 @@ export class BridgeService {
       throw new Error("Session selector is required.");
     }
 
-    const session = await this.resolveSessionSelector(selector, botId);
+    const session = await this.resolveSessionSelector(selector);
     if (!session) {
       throw new Error(`Session was not found: ${selector}`);
     }
