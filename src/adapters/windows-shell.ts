@@ -1,7 +1,7 @@
 import process from "node:process";
 import path from "node:path";
 import os from "node:os";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 
 const activeCommands = new Map<string, ChildProcess>();
@@ -41,6 +41,7 @@ export function spawnWithPlatformShell(
       : spawn(bin, args, {
           cwd,
           env: buildChildEnv(extraEnv),
+          detached: true,
         });
 
     if (executionKey) {
@@ -52,7 +53,7 @@ export function spawnWithPlatformShell(
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      command.kill("SIGTERM");
+      terminateProcessTree(command);
     }, timeoutMs);
 
     command.stdout.on("data", (chunk) => {
@@ -92,13 +93,27 @@ export function stopSpawnedExecution(executionKey: string): boolean {
     return false;
   }
 
+  return terminateProcessTree(command);
+}
+
+function terminateProcessTree(command: ChildProcess): boolean {
+  if (!command.pid) {
+    return false;
+  }
+
   try {
-    command.kill("SIGTERM");
-    setTimeout(() => {
-      if (!command.killed) {
-        command.kill("SIGKILL");
-      }
-    }, 3000).unref();
+    if (process.platform === "win32") {
+      execFile("taskkill", ["/pid", String(command.pid), "/t", "/f"], () => undefined);
+    } else {
+      process.kill(-command.pid, "SIGTERM");
+      setTimeout(() => {
+        try {
+          process.kill(-command.pid!, "SIGKILL");
+        } catch {
+          // Process group already exited.
+        }
+      }, 3000).unref();
+    }
     return true;
   } catch {
     return false;
