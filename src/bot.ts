@@ -83,6 +83,8 @@ const RECOGNIZED_COMMANDS = new Set([
   "login",
   "reset",
 ]);
+const TELEGRAM_STALE_UPDATE_GRACE_SECONDS = 10;
+const TELEGRAM_PROCESS_STARTED_AT_SECONDS = Math.floor(Date.now() / 1000);
 
 const REPORT_CONTINUE_PROMPT = [
   "Continue the same task now.",
@@ -201,6 +203,14 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
     const updateKind = Object.keys(ctx.update).join(",");
     const text = ctx.message?.text ?? ctx.editedMessage?.text ?? ctx.channelPost?.text ?? "";
     const safeText = sanitizeLoggedTelegramText(text);
+    const messageDate = ctx.message?.date ?? ctx.editedMessage?.date ?? ctx.channelPost?.date;
+    if (messageDate && messageDate < TELEGRAM_PROCESS_STARTED_AT_SECONDS - TELEGRAM_STALE_UPDATE_GRACE_SECONDS) {
+      console.log(
+        `[tg-update-stale] bot=${getBotId()} kind=${updateKind} chat=${ctx.chat?.id ?? "?"} date=${messageDate} text=${JSON.stringify(safeText).slice(0, 240)}`,
+      );
+      return;
+    }
+
     console.log(
       `[tg-update] bot=${getBotId()} kind=${updateKind} chat=${ctx.chat?.id ?? "?"} text=${JSON.stringify(safeText).slice(0, 240)}`,
     );
