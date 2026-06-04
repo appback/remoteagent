@@ -230,7 +230,15 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
     if (!ctx.chat) {
       throw new Error("Telegram chat context is missing.");
     }
-    return sendTelegramMessage(token, ctx.chat.id, text, extra);
+    try {
+      return await sendTelegramMessage(token, ctx.chat.id, text, extra);
+    } catch (error) {
+      if (isTelegramForbiddenError(error)) {
+        console.warn(`[telegram-delivery] bot=${getBotId()} chat=${ctx.chat.id} skipped: ${error instanceof Error ? error.message : String(error)}`);
+        return { message_id: 0 };
+      }
+      throw error;
+    }
   };
 
   bot.use(async (ctx, next) => {
@@ -788,6 +796,11 @@ ${bridge.formatStatus(mapping)}`);
     const ctx = error.ctx;
     console.error(`Telegram update ${ctx.update.update_id} failed`);
 
+    if (isTelegramForbiddenError(error.error)) {
+      console.warn(`[telegram-delivery] bot=${getBotId()} chat=${ctx.chat?.id ?? "?"} skipped: ${error.error instanceof Error ? error.error.message : String(error.error)}`);
+      return;
+    }
+
     if (error.error instanceof GrammyError) {
       console.error("Telegram API error:", error.error.description);
       return;
@@ -969,7 +982,16 @@ async function runWithPendingAnimation(
   chatId: number,
   task: (helpers: PendingAnimationHelpers) => Promise<{ chunks: string[]; parseMode?: "HTML" | "MarkdownV2" }>,
 ): Promise<void> {
-  let pending = await sendTelegramMessage(botToken, chatId, "Working.");
+  let pending: TelegramMessageResult;
+  try {
+    pending = await sendTelegramMessage(botToken, chatId, "Working.");
+  } catch (error) {
+    if (isTelegramForbiddenError(error)) {
+      console.warn(`[telegram-delivery] chat=${chatId} skipped pending animation: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+    throw error;
+  }
   const pendingFrames = ["Working.", "Working..", "Working...", "Working...."];
   let pendingIndex = 0;
   const pendingLoop = setInterval(() => {
@@ -1979,8 +2001,28 @@ async function callTelegramApi<T>(
 
   const payload = JSON.parse(stdout) as { ok?: boolean; result?: T; description?: string };
   if (!payload.ok) {
-    throw new Error(payload.description || `Telegram API ${method} failed.`);
+    throw new TelegramApiError(method, payload.description || `Telegram API ${method} failed.`);
   }
 
   return payload.result as T;
+}
+
+class TelegramApiError extends Error {
+  constructor(
+    readonly method: string,
+    readonly description: string,
+  ) {
+    super(description);
+    this.name = "TelegramApiError";
+  }
+}
+
+function isTelegramForbiddenError(error: unknown): boolean {
+  if (error instanceof GrammyError) {
+    return error.error_code === 403 || /^Forbidden:/i.test(error.description);
+  }
+  if (error instanceof TelegramApiError) {
+    return /^Forbidden:/i.test(error.description);
+  }
+  return error instanceof Error && /^Forbidden:/i.test(error.message);
 }
