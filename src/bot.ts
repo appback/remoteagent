@@ -93,9 +93,40 @@ const REPORT_CONTINUE_PROMPT = [
 
 class AutoContinueController {
   private readonly stops = new Set<string>();
+  private readonly stopInProgress = new Set<string>();
+  private readonly stopDedupUntil = new Map<string, number>();
+  private readonly stopDedupMs = 10_000;
+  private readonly suppressUntil = new Map<string, number>();
+  private readonly suppressMs = 60_000;
 
   requestStop(botId: string, chatId: string): void {
-    this.stops.add(this.key(botId, chatId));
+    const key = this.key(botId, chatId);
+    this.stops.add(key);
+    this.suppressUntil.set(key, Date.now() + this.suppressMs);
+  }
+
+  beginStop(botId: string, chatId: string): boolean {
+    const key = this.key(botId, chatId);
+    const dedupUntil = this.stopDedupUntil.get(key);
+    if (dedupUntil && Date.now() < dedupUntil) {
+      return false;
+    }
+    if (dedupUntil) {
+      this.stopDedupUntil.delete(key);
+    }
+    if (this.stopInProgress.has(key)) {
+      return false;
+    }
+
+    this.stopInProgress.add(key);
+    this.requestStop(botId, chatId);
+    return true;
+  }
+
+  finishStop(botId: string, chatId: string): void {
+    const key = this.key(botId, chatId);
+    this.stopInProgress.delete(key);
+    this.stopDedupUntil.set(key, Date.now() + this.stopDedupMs);
   }
 
   clear(botId: string, chatId: string): void {
@@ -104,6 +135,19 @@ class AutoContinueController {
 
   isStopRequested(botId: string, chatId: string): boolean {
     return this.stops.has(this.key(botId, chatId));
+  }
+
+  isSuppressingNewWork(botId: string, chatId: string): boolean {
+    const key = this.key(botId, chatId);
+    const until = this.suppressUntil.get(key);
+    if (!until) {
+      return false;
+    }
+    if (Date.now() > until) {
+      this.suppressUntil.delete(key);
+      return false;
+    }
+    return true;
   }
 
   private key(botId: string, chatId: string): string {
@@ -344,14 +388,29 @@ ${bridge.formatStatus(mapping)}`);
     const botId = getBotId();
     const chatId = String(ctx.chat.id);
     autoContinue.requestStop(botId, chatId);
-    const result = await bridge.stopActiveRun(botId, chatId);
-    await bridge.logSystem(botId, chatId, "Stop requested for auto-continue.");
-    await reply(
-      ctx,
-      result.stopped
-        ? `Stop requested. Active work for ${result.sessionPublicId ?? "this session"} was interrupted, and further automatic continuation will stop.`
-        : "Stop requested. No active provider process was running, but further automatic continuation will stop.",
-    );
+    const pendingBatch = messageBatcher.cancelPending(botId, chatId);
+    const manualBatch = messageBatcher.cancelManual(botId, chatId);
+    if (!autoContinue.beginStop(botId, chatId)) {
+      const batchCount = pendingBatch.count + manualBatch.count;
+      if (batchCount > 0) {
+        await bridge.logSystem(botId, chatId, `Duplicate stop discarded ${batchCount} queued message(s).`);
+      }
+      return;
+    }
+
+    try {
+      const result = await bridge.stopActiveRun(botId, chatId);
+      await bridge.logSystem(botId, chatId, "Stop requested for auto-continue.");
+      const batchCount = pendingBatch.count + manualBatch.count;
+      await reply(
+        ctx,
+        result.stopped
+          ? `Stop requested. Active work for ${result.sessionPublicId ?? "this session"} was interrupted, further automatic continuation will stop, and ${batchCount} queued message(s) were discarded.`
+          : `Stop requested. No active provider process was running, but further automatic continuation will stop, and ${batchCount} queued message(s) were discarded.`,
+      );
+    } finally {
+      autoContinue.finishStop(botId, chatId);
+    }
   });
 
   bot.command("status", async (ctx) => {
@@ -555,6 +614,17 @@ ${bridge.formatStatus(mapping)}`);
     const document = ctx.message.document;
     const voice = ctx.message.voice;
     const audio = ctx.message.audio;
+    const text = ctx.message.text?.trim();
+
+    if (text && isRecognizedSlashCommand(text, botId)) {
+      return;
+    }
+
+    if (autoContinue.isSuppressingNewWork(botId, chatId)) {
+      await bridge.logSystem(botId, chatId, "Telegram message ignored during stop cooldown.");
+      await reply(ctx, "Stopped. Ignored this message so the previous work does not restart. Send a new message again in a moment to start fresh.");
+      return;
+    }
 
     if (photo) {
       const downloaded = await downloadTelegramFile(token, botId, chatId, photo.file_id, "telegram-photo.jpg");
@@ -639,7 +709,6 @@ ${bridge.formatStatus(mapping)}`);
       return;
     }
 
-    const text = ctx.message.text?.trim();
     if (!text) {
       return;
     }
@@ -664,10 +733,6 @@ ${bridge.formatStatus(mapping)}`);
           parseMode: "HTML",
         };
       });
-      return;
-    }
-
-    if (isRecognizedSlashCommand(text, botId)) {
       return;
     }
 
@@ -794,6 +859,18 @@ class TelegramMessageBatcher {
     }
 
     this.manual.delete(key);
+    return { found: true, count: batch.messages.length };
+  }
+
+  cancelPending(botId: string, chatId: string): { found: boolean; count: number } {
+    const key = this.key(botId, chatId);
+    const batch = this.pending.get(key);
+    if (!batch) {
+      return { found: false, count: 0 };
+    }
+
+    clearTimeout(batch.timer);
+    this.pending.delete(key);
     return { found: true, count: batch.messages.length };
   }
 
