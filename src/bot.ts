@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -101,10 +102,15 @@ class AutoContinueController {
   private readonly suppressUntil = new Map<string, number>();
   private readonly suppressMs = 60_000;
 
+  constructor(private readonly stopGatePath: string) {
+    this.loadStopGates();
+  }
+
   requestStop(botId: string, chatId: string): void {
     const key = this.key(botId, chatId);
     this.stops.add(key);
     this.suppressUntil.set(key, Date.now() + this.suppressMs);
+    this.persistStopGates();
   }
 
   beginStop(botId: string, chatId: string): boolean {
@@ -147,6 +153,7 @@ class AutoContinueController {
     }
     if (Date.now() > until) {
       this.suppressUntil.delete(key);
+      this.persistStopGates();
       return false;
     }
     return true;
@@ -155,11 +162,38 @@ class AutoContinueController {
   private key(botId: string, chatId: string): string {
     return `${botId}:${chatId}`;
   }
+
+  private loadStopGates(): void {
+    try {
+      const raw = fsSync.readFileSync(this.stopGatePath, "utf8");
+      const parsed = JSON.parse(raw) as Record<string, number>;
+      const now = Date.now();
+      for (const [key, until] of Object.entries(parsed)) {
+        if (Number.isFinite(until) && until > now) {
+          this.suppressUntil.set(key, until);
+        }
+      }
+    } catch {
+      // Missing or invalid gate files should not prevent the bot from starting.
+    }
+  }
+
+  private persistStopGates(): void {
+    const entries = Object.fromEntries(this.suppressUntil.entries());
+    try {
+      fsSync.mkdirSync(path.dirname(this.stopGatePath), { recursive: true });
+      const tmpPath = `${this.stopGatePath}.tmp`;
+      fsSync.writeFileSync(tmpPath, JSON.stringify(entries, null, 2), "utf8");
+      fsSync.renameSync(tmpPath, this.stopGatePath);
+    } catch {
+      // Stop should still work in memory even if persisting the gate fails.
+    }
+  }
 }
 
 export function createBot(token: string, bridge: BridgeService, botManagement: BotManagementService, botInfo: UserFromGetMe): Bot {
   const bot = new Bot(token, { botInfo });
-  const autoContinue = new AutoContinueController();
+  const autoContinue = new AutoContinueController(path.join(config.dataDir, "stop-gates.json"));
   const shellService = new RemoteShellService(config.commandTimeoutMs);
   const sourceBotToken = token;
   const setupService = new ProviderSetupService(
