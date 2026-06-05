@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import process from "node:process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { Bot, GrammyError, HttpError } from "grammy";
@@ -30,7 +31,7 @@ const HELP_TEXT = [
   "/stop",
   "/sandbox codex <read-only|workspace-write|danger-full-access>",
   "/status",
-  "/reportbot list|set <target>|status|clear",
+  "/reportbot list|set <target>|status|test|send|clear",
   "/bots",
   "/bot add <token>",
   "/bot addreport <token>",
@@ -476,11 +477,11 @@ ${bridge.formatStatus(mapping)}`);
     await ensureOwnerControlAccess(ctx);
     const botId = getBotId();
     const chatId = String(ctx.chat.id);
-    const { args } = parseCommand(ctx.message?.text, 2);
+    const { args, rest } = parseCommand(ctx.message?.text, 1);
     const action = args[0]?.toLowerCase();
-    const target = args[1]?.trim();
-    if (!action || !["list", "set", "status", "clear"].includes(action)) {
-      await reply(ctx, "Usage: `/reportbot list`, `/reportbot set <number|@bot_username>`, `/reportbot status`, or `/reportbot clear`", {
+    const target = rest?.trim();
+    if (!action || !["list", "set", "status", "test", "send", "clear"].includes(action)) {
+      await reply(ctx, "Usage: `/reportbot list`, `/reportbot set <number|@bot_username>`, `/reportbot status`, `/reportbot test [message]`, `/reportbot send <message>`, or `/reportbot clear`", {
         parse_mode: "Markdown",
       });
       return;
@@ -506,6 +507,20 @@ ${bridge.formatStatus(mapping)}`);
     if (action === "clear") {
       const mapping = await bridge.clearTelegramReportTarget(botId, chatId);
       await reply(ctx, `Cleared the Telegram report target for ${mapping.session.publicId}.\n\n${bridge.formatCurrentSession(mapping)}`);
+      return;
+    }
+
+    if (action === "test" || action === "send") {
+      const message = target || `[RemoteAgent reportbot test] ${new Date().toISOString()}`;
+      if (action === "send" && !target) {
+        await reply(ctx, "Usage: `/reportbot send <message>`", {
+          parse_mode: "Markdown",
+        });
+        return;
+      }
+
+      const result = await sendTelegramReportForCurrentSession(bridge, botId, chatId, message);
+      await reply(ctx, result);
       return;
     }
 
@@ -1046,6 +1061,36 @@ async function runWithPendingAnimation(
   } finally {
     clearInterval(pendingLoop);
   }
+}
+
+async function sendTelegramReportForCurrentSession(
+  bridge: BridgeService,
+  botId: string,
+  chatId: string,
+  message: string,
+): Promise<string> {
+  const mapping = await bridge.status(botId, chatId);
+  if (!mapping) {
+    return "No paired session for this chat yet. Run `/start` first.";
+  }
+
+  if (!mapping.session.reportTarget) {
+    return `No report delivery bot is configured for ${mapping.session.publicId}. Run \`/reportbot set <number|@bot_username>\` first.`;
+  }
+
+  const helperPath = path.resolve(process.cwd(), "dist", "report-telegram.js");
+  const { stdout, stderr } = await execFileAsync(
+    process.execPath,
+    [helperPath, "--session", mapping.session.publicId, message],
+    { timeout: 30_000 },
+  );
+
+  if (stderr?.trim()) {
+    console.error(`reportbot helper stderr: ${stderr.trim()}`);
+  }
+
+  const delivered = stdout.trim() || `Delivered report message for ${mapping.session.publicId}.`;
+  return `${delivered}\n\n${bridge.formatCurrentSession(mapping)}`;
 }
 
 async function routeTelegramWorkLoop(
