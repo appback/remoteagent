@@ -140,11 +140,9 @@ export class BotManagementService {
         throw new Error(`@${target.username} is already configured as [${role}].`);
       }
 
-      if (role === "report" && existing.role === "general") {
-        return this.updateBotRole(existing, "report", env, sourceBotId, sourceBotToken, chatId);
-      }
-
-      throw new Error(`@${target.username} is already configured as [${existing.role}].`);
+      throw new Error(
+        `@${target.username} is already configured as [${existing.role}], so it cannot be registered as [${role}]. Remove it first with /bot remove ${target.id}, then add it again with the intended role.`,
+      );
     }
 
     const tokens = [...env.tokens, trimmed];
@@ -525,51 +523,6 @@ export class BotManagementService {
   private async listConfiguredBots(): Promise<ManagedBot[]> {
     const env = await this.readEnvConfig();
     return this.zipBots(env.tokens, env.usernames, env.roles);
-  }
-
-  private async updateBotRole(
-    bot: ManagedBot,
-    role: TelegramBotRole,
-    env: EnvConfig,
-    sourceBotId: string,
-    sourceBotToken: string,
-    chatId: number,
-  ): Promise<BotCommandResult> {
-    const roles = [...env.roles];
-    roles[bot.index] = role;
-    const backupEnvPath = await this.backupEnv();
-    const pending: PendingBotOperation = {
-      version: 1,
-      action: "add",
-      status: "pending",
-      requestedAt: new Date().toISOString(),
-      chatId,
-      replyToken: sourceBotToken,
-      notifyViaUsername: sourceBotId,
-      sourceBotId,
-      target: {
-        id: bot.id,
-        username: bot.username,
-      },
-      backupEnvPath,
-    };
-
-    try {
-      await this.writePendingOperation(pending);
-      await this.writeEnvConfig(env.lines, env.tokens, env.usernames, roles);
-      await this.launchRestartJob();
-    } catch (error) {
-      await this.restoreBackup(backupEnvPath).catch(() => undefined);
-      await this.clearPendingOperation().catch(() => undefined);
-      throw error;
-    }
-
-    return {
-      message: [
-        `Promoting @${bot.username} (${bot.id}) to [${role}].`,
-        "The runtime will restart once and then report the result here.",
-      ].join("\n\n"),
-    };
   }
 
   private tokenId(token: string): number {
