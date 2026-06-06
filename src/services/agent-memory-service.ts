@@ -529,7 +529,7 @@ export class AgentMemoryService {
     if (!normalized) {
       return false;
     }
-    if (/너는\s+.+담당|담당이야|역할은|프로젝트는/i.test(normalized) && !/수정|구현|추가|저장|기록|남겨|배포|테스트|검증|실패|에러|버그|문제|DB|database|api|postback|로그|히스토리/i.test(normalized)) {
+    if (/너는\s+.+담당|담당이야|역할은|프로젝트는/i.test(normalized) && !/수정|고쳐|구현|추가|저장|기록|남겨|배포|테스트|검증|실패|에러|버그|문제|postback|로그|히스토리|마이그레이션/i.test(normalized)) {
       return false;
     }
     return /수정|고쳐|구현|추가|저장|기록|남겨|배포|테스트|검증|확인해|찾아|분석|비교|실패|에러|버그|문제|DB|database|api|postback|로그|히스토리|마이그레이션|schema|table|endpoint/i.test(normalized);
