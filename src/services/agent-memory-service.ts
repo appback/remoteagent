@@ -491,7 +491,12 @@ export class AgentMemoryService {
   }
 
   private async readTodo(session: SessionRecord): Promise<TodoState> {
-    return this.readJson<TodoState>(this.todoPath(session), { createdAt: "", updatedAt: "", items: [] });
+    const todo = await this.readJson<TodoState>(this.todoPath(session), { createdAt: "", updatedAt: "", items: [] });
+    const normalized = this.normalizeTodoState(todo);
+    if (JSON.stringify(normalized) !== JSON.stringify(todo)) {
+      await this.writeJson(this.todoPath(session), normalized);
+    }
+    return normalized;
   }
 
   private async writeTodo(session: SessionRecord, todo: TodoState): Promise<void> {
@@ -553,6 +558,28 @@ export class AgentMemoryService {
       return items;
     }
     return items.map((item, index) => index === pendingIndex ? { ...item, status: "in_progress" } : item);
+  }
+
+  private normalizeTodoState(todo: TodoState): TodoState {
+    const now = new Date().toISOString();
+    let changed = false;
+    const items = (todo.items ?? []).map((item) => {
+      if (!this.isActiveTodo(item) || this.looksActionableInstruction(item.text)) {
+        return item;
+      }
+      changed = true;
+      return {
+        ...item,
+        status: "done" as TodoStatus,
+        updatedAt: now,
+        note: "Auto-cleared non-actionable context note.",
+      };
+    });
+    return {
+      createdAt: todo.createdAt || now,
+      updatedAt: changed ? now : (todo.updatedAt || now),
+      items: this.ensureActiveTodo(items),
+    };
   }
 
   private async touchActiveTodo(session: SessionRecord): Promise<void> {
