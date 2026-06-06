@@ -105,7 +105,7 @@ main().catch((error: unknown) => {
 async function startManualPolling(bot: Bot): Promise<never> {
   const pollingBot = bot as unknown as {
     token: string;
-    handleUpdates(updates: unknown[]): Promise<void>;
+    handleUpdates(updates: TelegramUpdate[]): Promise<void>;
     botInfo: { username?: string };
   };
   let offset = 0;
@@ -114,6 +114,7 @@ async function startManualPolling(bot: Bot): Promise<never> {
   let lastFailureAt: number | undefined;
   let lastIssue = "unknown error";
   let lastAlertAttemptAt = 0;
+  const activeHandlers = new Set<Promise<void>>();
 
   while (true) {
     try {
@@ -138,7 +139,14 @@ async function startManualPolling(bot: Bot): Promise<never> {
         continue;
       }
 
-      await pollingBot.handleUpdates(payload.result);
+      for (const update of orderUpdatesForDispatch(payload.result)) {
+        const handler = pollingBot.handleUpdates([update]).catch((error) => {
+          console.error(`Telegram update ${update.update_id} handler failed for @${pollingBot.botInfo.username}:`, error);
+        }).finally(() => {
+          activeHandlers.delete(handler);
+        });
+        activeHandlers.add(handler);
+      }
       offset = payload.result[payload.result.length - 1]!.update_id + 1;
     } catch (error) {
       const issue = classifyTelegramPollingError(error);
@@ -169,6 +177,26 @@ async function startManualPolling(bot: Bot): Promise<never> {
   }
 }
 
+type TelegramUpdate = {
+  update_id: number;
+  message?: { text?: string };
+  edited_message?: { text?: string };
+  channel_post?: { text?: string };
+};
+
+function orderUpdatesForDispatch(updates: TelegramUpdate[]): TelegramUpdate[] {
+  return [...updates].sort((left, right) => {
+    const leftStop = isStopCommandUpdate(left) ? 0 : 1;
+    const rightStop = isStopCommandUpdate(right) ? 0 : 1;
+    return leftStop - rightStop || left.update_id - right.update_id;
+  });
+}
+
+function isStopCommandUpdate(update: TelegramUpdate): boolean {
+  const text = update.message?.text ?? update.edited_message?.text ?? update.channel_post?.text ?? "";
+  return /^\/stop(?:@\w+)?(?:\s|$)/i.test(text.trim());
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -177,7 +205,7 @@ function sleep(ms: number): Promise<void> {
 
 async function getUpdatesViaCurl(token: string, offset: number): Promise<{
   ok?: boolean;
-  result: Array<{ update_id: number }>;
+  result: TelegramUpdate[];
   description?: string;
 }> {
   const url = new URL(`https://api.telegram.org/bot${token}/getUpdates`);
@@ -200,7 +228,7 @@ async function getUpdatesViaCurl(token: string, offset: number): Promise<{
 
   const payload = JSON.parse(stdout) as {
     ok?: boolean;
-    result?: Array<{ update_id: number }>;
+    result?: TelegramUpdate[];
     description?: string;
   };
 
