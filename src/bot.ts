@@ -107,15 +107,16 @@ class AutoContinueController {
     this.loadStopGates();
   }
 
-  requestStop(botId: string, chatId: string): void {
-    const key = this.key(botId, chatId);
-    this.stops.add(key);
-    this.suppressUntil.set(key, Date.now() + this.suppressMs);
+  requestStop(botId: string, chatId: string, sessionId?: string): void {
+    for (const key of this.keys(botId, chatId, sessionId)) {
+      this.stops.add(key);
+      this.suppressUntil.set(key, Date.now() + this.suppressMs);
+    }
     this.persistStopGates();
   }
 
-  beginStop(botId: string, chatId: string): boolean {
-    const key = this.key(botId, chatId);
+  beginStop(botId: string, chatId: string, sessionId?: string): boolean {
+    const key = this.primaryKey(botId, chatId, sessionId);
     const dedupUntil = this.stopDedupUntil.get(key);
     if (dedupUntil && Date.now() < dedupUntil) {
       return false;
@@ -128,26 +129,36 @@ class AutoContinueController {
     }
 
     this.stopInProgress.add(key);
-    this.requestStop(botId, chatId);
+    this.requestStop(botId, chatId, sessionId);
     return true;
   }
 
-  finishStop(botId: string, chatId: string): void {
-    const key = this.key(botId, chatId);
+  finishStop(botId: string, chatId: string, sessionId?: string): void {
+    const key = this.primaryKey(botId, chatId, sessionId);
     this.stopInProgress.delete(key);
     this.stopDedupUntil.set(key, Date.now() + this.stopDedupMs);
   }
 
-  clear(botId: string, chatId: string): void {
-    this.stops.delete(this.key(botId, chatId));
+  clear(botId: string, chatId: string, sessionId?: string): void {
+    for (const key of this.keys(botId, chatId, sessionId)) {
+      this.stops.delete(key);
+    }
   }
 
-  isStopRequested(botId: string, chatId: string): boolean {
-    return this.stops.has(this.key(botId, chatId));
+  isStopRequested(botId: string, chatId: string, sessionId?: string): boolean {
+    return this.keys(botId, chatId, sessionId).some((key) => this.stops.has(key));
   }
 
-  isSuppressingNewWork(botId: string, chatId: string): boolean {
-    const key = this.key(botId, chatId);
+  isSuppressingNewWork(botId: string, chatId: string, sessionId?: string): boolean {
+    for (const key of this.keys(botId, chatId, sessionId)) {
+      if (this.isSuppressingKey(key)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private isSuppressingKey(key: string): boolean {
     const until = this.suppressUntil.get(key);
     if (!until) {
       return false;
@@ -160,8 +171,24 @@ class AutoContinueController {
     return true;
   }
 
-  private key(botId: string, chatId: string): string {
+  private keys(botId: string, chatId: string, sessionId?: string): string[] {
+    const keys = [this.chatKey(botId, chatId)];
+    if (sessionId) {
+      keys.push(this.sessionKey(sessionId));
+    }
+    return keys;
+  }
+
+  private primaryKey(botId: string, chatId: string, sessionId?: string): string {
+    return sessionId ? this.sessionKey(sessionId) : this.chatKey(botId, chatId);
+  }
+
+  private chatKey(botId: string, chatId: string): string {
     return `${botId}:${chatId}`;
+  }
+
+  private sessionKey(sessionId: string): string {
+    return `session:${sessionId}`;
   }
 
   private loadStopGates(): void {
@@ -440,10 +467,12 @@ ${bridge.formatStatus(mapping)}`);
   bot.command("stop", async (ctx) => {
     const botId = getBotId();
     const chatId = String(ctx.chat.id);
-    autoContinue.requestStop(botId, chatId);
+    const mapping = await bridge.status(botId, chatId);
+    const sessionId = mapping?.session.sessionId;
+    autoContinue.requestStop(botId, chatId, sessionId);
     const pendingBatch = messageBatcher.cancelPending(botId, chatId);
     const manualBatch = messageBatcher.cancelManual(botId, chatId);
-    if (!autoContinue.beginStop(botId, chatId)) {
+    if (!autoContinue.beginStop(botId, chatId, sessionId)) {
       const batchCount = pendingBatch.count + manualBatch.count;
       if (batchCount > 0) {
         await bridge.logSystem(botId, chatId, `Duplicate stop discarded ${batchCount} queued message(s).`);
@@ -462,7 +491,7 @@ ${bridge.formatStatus(mapping)}`);
           : `Stop requested. No active provider process was running, but further automatic continuation will stop, and ${batchCount} queued message(s) were discarded.`,
       );
     } finally {
-      autoContinue.finishStop(botId, chatId);
+      autoContinue.finishStop(botId, chatId, sessionId);
     }
   });
 
@@ -687,7 +716,8 @@ ${bridge.formatStatus(mapping)}`);
       return;
     }
 
-    if (autoContinue.isSuppressingNewWork(botId, chatId)) {
+    const mapping = await bridge.status(botId, chatId).catch(() => undefined);
+    if (autoContinue.isSuppressingNewWork(botId, chatId, mapping?.session.sessionId)) {
       await bridge.logSystem(botId, chatId, "Telegram message ignored during stop cooldown.");
       await reply(ctx, "Stopped. Ignored this message so the previous work does not restart. Send a new message again in a moment to start fresh.");
       return;
@@ -1103,7 +1133,9 @@ async function routeTelegramWorkLoop(
   autoContinue: AutoContinueController,
   transform: (blocks: string[]) => string[] = (blocks) => blocks,
 ): Promise<string[]> {
-  autoContinue.clear(botId, chatId);
+  const currentSession = await bridge.status(botId, chatId);
+  const sessionId = currentSession?.session.sessionId;
+  autoContinue.clear(botId, chatId, sessionId);
   let prompt = appendReportProtocol(message);
   const maxTurns = config.telegramAutoProgressMaxTurns;
   const emptyResponseRetries = config.telegramEmptyResponseRetries;
@@ -1117,14 +1149,14 @@ async function routeTelegramWorkLoop(
     if (typeof maxTurns === "number" && maxTurns > 0 && turn > maxTurns) {
       const limitMessage = `Automatic continue limit (${maxTurns}) reached before a final result.`;
       await bridge.logSystem(botId, chatId, limitMessage);
-      autoContinue.clear(botId, chatId);
+      autoContinue.clear(botId, chatId, sessionId);
       return [limitMessage];
     }
 
-    if (autoContinue.isStopRequested(botId, chatId)) {
+    if (autoContinue.isStopRequested(botId, chatId, sessionId)) {
       const stopMessage = "Automatic continuation stopped.";
       await bridge.logSystem(botId, chatId, stopMessage);
-      autoContinue.clear(botId, chatId);
+      autoContinue.clear(botId, chatId, sessionId);
       return [stopMessage];
     }
 
@@ -1141,10 +1173,10 @@ async function routeTelegramWorkLoop(
       if (parsed.kind === "progress") {
         deliveredProgressCount += 1;
         await helpers.reportProgress(parsed.chunks);
-        if (autoContinue.isStopRequested(botId, chatId)) {
+        if (autoContinue.isStopRequested(botId, chatId, sessionId)) {
           const stopMessage = "Automatic continuation stopped after the latest progress report.";
           await bridge.logSystem(botId, chatId, stopMessage);
-          autoContinue.clear(botId, chatId);
+          autoContinue.clear(botId, chatId, sessionId);
           return [stopMessage];
         }
         prompt = REPORT_CONTINUE_PROMPT;
@@ -1152,12 +1184,12 @@ async function routeTelegramWorkLoop(
       }
 
       if (parsed.kind === "result" || parsed.kind === "blocked") {
-        autoContinue.clear(botId, chatId);
+        autoContinue.clear(botId, chatId, sessionId);
         return parsed.chunks;
       }
 
       await bridge.logSystem(botId, chatId, `${turnLabel} returned an untagged response; treating it as final output.`);
-      autoContinue.clear(botId, chatId);
+      autoContinue.clear(botId, chatId, sessionId);
       return parsed.chunks;
     } catch (error) {
       const messageText = error instanceof Error ? error.message : "An unexpected error occurred.";
@@ -1178,10 +1210,10 @@ async function routeTelegramWorkLoop(
         console.warn(`[telegram-route] bot=${botId} chat=${chatId} ${turnLabel} retrying: ${messageText}`);
         await bridge.logSystem(botId, chatId, `${turnLabel} retrying after temporary provider issue: ${messageText}`);
         await helpers.reportProgress([retryMessage]);
-        if (autoContinue.isStopRequested(botId, chatId)) {
+        if (autoContinue.isStopRequested(botId, chatId, sessionId)) {
           const stopMessage = "Automatic continuation stopped after the latest retry notice.";
           await bridge.logSystem(botId, chatId, stopMessage);
-          autoContinue.clear(botId, chatId);
+          autoContinue.clear(botId, chatId, sessionId);
           return [stopMessage];
         }
         await sleep(retryable.retryAfterMs);
@@ -1191,7 +1223,7 @@ async function routeTelegramWorkLoop(
 
       console.error(`[telegram-route] bot=${botId} chat=${chatId} ${turnLabel} failed: ${messageText}`, error);
       await bridge.logSystem(botId, chatId, `${turnLabel} failed: ${messageText}`);
-      autoContinue.clear(botId, chatId);
+      autoContinue.clear(botId, chatId, sessionId);
 
       if (retryable) {
         return [formatRetryableProviderFinalMessage(retryable)];
