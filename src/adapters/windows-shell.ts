@@ -17,6 +17,7 @@ function buildChildEnv(extraEnv?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const dataDir = process.env.DATA_DIR?.trim() || path.join(os.homedir(), ".remoteagent");
   env.REMOTEAGENT_DATA_DIR = dataDir;
   env.REMOTEAGENT_REPORT_BIN = path.resolve(process.cwd(), "dist", "report-telegram.js");
+  env.REMOTEAGENT_SECRET_BIN = path.resolve(process.cwd(), "dist", "secret-helper.js");
   if (extraEnv) {
     Object.assign(env, extraEnv);
   }

@@ -12,6 +12,7 @@ import { BridgeService } from "./services/bridge-service.js";
 import { BotManagementService } from "./services/bot-management-service.js";
 import { ProviderSetupService } from "./services/provider-setup-service.js";
 import { RemoteShellService } from "./services/remote-shell-service.js";
+import { AgentMemoryService } from "./services/agent-memory-service.js";
 import type { ChatSession, CodexSandboxMode, Provider } from "./types.js";
 import type { UserFromGetMe } from "grammy/types";
 
@@ -32,6 +33,10 @@ const HELP_TEXT = [
   "/sandbox codex <read-only|workspace-write|danger-full-access>",
   "/status",
   "/reportbot list|set <target>|status|test|send|clear",
+  "/task status|clear",
+  "/artifacts list|cleanup <days>",
+  "/secret set|list|remove",
+  "/docs pin|find|list|remove",
   "/bots",
   "/bot add <token>",
   "/bot addreport <token>",
@@ -79,6 +84,10 @@ const RECOGNIZED_COMMANDS = new Set([
   "sandbox",
   "status",
   "reportbot",
+  "task",
+  "artifacts",
+  "secret",
+  "docs",
   "bots",
   "bot",
   "install",
@@ -223,6 +232,7 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
   const bot = new Bot(token, { botInfo });
   const autoContinue = new AutoContinueController(path.join(config.dataDir, "stop-gates.json"));
   const shellService = new RemoteShellService(config.commandTimeoutMs);
+  const memoryService = new AgentMemoryService(config.dataDir);
   const sourceBotToken = token;
   const setupService = new ProviderSetupService(
     config.setupCommandTimeoutMs,
@@ -248,6 +258,7 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
             "Telegram text request",
             helpers,
             autoContinue,
+            memoryService,
           ),
         };
       });
@@ -573,6 +584,124 @@ ${bridge.formatStatus(mapping)}`);
     );
   });
 
+  bot.command("task", async (ctx) => {
+    const botId = getBotId();
+    const chatId = String(ctx.chat.id);
+    const { args } = parseCommand(ctx.message?.text, 1);
+    const action = args[0]?.toLowerCase() || "status";
+    const mapping = await bridge.status(botId, chatId);
+    if (!mapping) {
+      await reply(ctx, "No paired session for this chat yet.");
+      return;
+    }
+
+    if (action === "status") {
+      await reply(ctx, await memoryService.formatProviderContext(mapping.session));
+      return;
+    }
+    if (action === "clear") {
+      await memoryService.completeTask(mapping.session, "Cleared by /task clear.");
+      await reply(ctx, `Cleared current task ledger for ${mapping.session.publicId}.`);
+      return;
+    }
+    await reply(ctx, "Usage: `/task status` or `/task clear`", { parse_mode: "Markdown" });
+  });
+
+  bot.command("artifacts", async (ctx) => {
+    await ensureOwnerControlAccess(ctx);
+    const botId = getBotId();
+    const chatId = String(ctx.chat.id);
+    const { args } = parseCommand(ctx.message?.text, 2);
+    const action = args[0]?.toLowerCase() || "list";
+    const mapping = await bridge.status(botId, chatId).catch(() => undefined);
+
+    if (action === "list") {
+      await reply(ctx, await memoryService.listArtifacts(mapping?.session));
+      return;
+    }
+    if (action === "cleanup") {
+      const days = Number.parseInt(args[1] ?? "", 10);
+      if (!Number.isFinite(days) || days < 1) {
+        await reply(ctx, "Usage: `/artifacts cleanup <days>`", { parse_mode: "Markdown" });
+        return;
+      }
+      await reply(ctx, await memoryService.cleanupArtifacts(days));
+      return;
+    }
+    await reply(ctx, "Usage: `/artifacts list` or `/artifacts cleanup <days>`", { parse_mode: "Markdown" });
+  });
+
+  bot.command("secret", async (ctx) => {
+    await ensureOwnerControlAccess(ctx);
+    const { args, rest } = parseCommand(ctx.message?.text, 2);
+    const action = args[0]?.toLowerCase();
+    const key = args[1]?.trim().toUpperCase();
+
+    if (action === "list") {
+      await reply(ctx, await memoryService.listSecrets());
+      return;
+    }
+    if (action === "set") {
+      if (!key || !rest?.trim()) {
+        await reply(ctx, "Usage: `/secret set KEY value`", { parse_mode: "Markdown" });
+        return;
+      }
+      await memoryService.setSecret(key, rest.trim());
+      await reply(ctx, `Stored secret key ${key}. Value is hidden from agents and chat output.`);
+      return;
+    }
+    if (action === "remove") {
+      if (!key) {
+        await reply(ctx, "Usage: `/secret remove KEY`", { parse_mode: "Markdown" });
+        return;
+      }
+      const removed = await memoryService.removeSecret(key);
+      await reply(ctx, removed ? `Removed secret key ${key}.` : `Secret key was not found: ${key}`);
+      return;
+    }
+    await reply(ctx, "Usage: `/secret list`, `/secret set KEY value`, or `/secret remove KEY`", { parse_mode: "Markdown" });
+  });
+
+  bot.command("docs", async (ctx) => {
+    const { args, rest } = parseCommand(ctx.message?.text, 2);
+    const action = args[0]?.toLowerCase() || "list";
+    const keyword = args[1]?.trim();
+
+    if (action === "list") {
+      await reply(ctx, await memoryService.listDocuments());
+      return;
+    }
+    if (action === "find") {
+      if (!keyword) {
+        await reply(ctx, "Usage: `/docs find <keyword>`", { parse_mode: "Markdown" });
+        return;
+      }
+      await reply(ctx, await memoryService.findDocuments(keyword));
+      return;
+    }
+    if (action === "pin") {
+      await ensureOwnerControlAccess(ctx);
+      if (!keyword || !rest?.trim()) {
+        await reply(ctx, "Usage: `/docs pin <keyword> <path-or-folder> [note]`", { parse_mode: "Markdown" });
+        return;
+      }
+      await memoryService.pinDocument(keyword, rest.trim());
+      await reply(ctx, `Pinned docs keyword ${keyword} -> ${rest.trim()}`);
+      return;
+    }
+    if (action === "remove") {
+      await ensureOwnerControlAccess(ctx);
+      if (!keyword) {
+        await reply(ctx, "Usage: `/docs remove <keyword>`", { parse_mode: "Markdown" });
+        return;
+      }
+      const removed = await memoryService.removeDocumentPin(keyword);
+      await reply(ctx, removed ? `Removed docs keyword ${keyword}.` : `Docs keyword was not found: ${keyword}`);
+      return;
+    }
+    await reply(ctx, "Usage: `/docs list`, `/docs find <keyword>`, `/docs pin <keyword> <path>`, or `/docs remove <keyword>`", { parse_mode: "Markdown" });
+  });
+
   bot.command("bots", async (ctx) => {
     await ensureOwnerControlAccess(ctx);
     const pendingNotice = await botManagement.getPendingOperationNotice();
@@ -725,6 +854,15 @@ ${bridge.formatStatus(mapping)}`);
 
     if (photo) {
       const downloaded = await downloadTelegramFile(token, botId, chatId, photo.file_id, "telegram-photo.jpg");
+      await memoryService.recordArtifact({
+        session: mapping?.session,
+        botId,
+        chatId,
+        kind: "image",
+        filePath: downloaded.path,
+        fileName: "telegram-photo.jpg",
+        mimeType: "image/jpeg",
+      });
       const message = await formatTelegramAttachmentPrompt("image", downloaded.path, ctx.message.caption?.trim());
 
       await bridge.logSystem(botId, chatId, `Telegram image received: ${downloaded.path}`);
@@ -738,6 +876,7 @@ ${bridge.formatStatus(mapping)}`);
             "Telegram image request",
             helpers,
             autoContinue,
+            memoryService,
             sanitizeAttachmentResponseBlocks,
           ),
         };
@@ -748,6 +887,15 @@ ${bridge.formatStatus(mapping)}`);
     if (document) {
       const attachment = classifyTelegramDocument(document.mime_type, document.file_name);
       const downloaded = await downloadTelegramFile(token, botId, chatId, document.file_id, document.file_name);
+      await memoryService.recordArtifact({
+        session: mapping?.session,
+        botId,
+        chatId,
+        kind: attachment.kind,
+        filePath: downloaded.path,
+        fileName: document.file_name,
+        mimeType: document.mime_type,
+      });
       const message = await formatTelegramAttachmentPrompt(
         attachment.kind,
         downloaded.path,
@@ -770,6 +918,7 @@ ${bridge.formatStatus(mapping)}`);
             `Telegram ${attachment.kind} request`,
             helpers,
             autoContinue,
+            memoryService,
             sanitizeAttachmentResponseBlocks,
           ),
         };
@@ -786,6 +935,15 @@ ${bridge.formatStatus(mapping)}`);
         voice ? voice.file_id : audio!.file_id,
         voice ? "telegram-voice.ogg" : audio?.file_name,
       );
+      await memoryService.recordArtifact({
+        session: mapping?.session,
+        botId,
+        chatId,
+        kind: attachmentKind,
+        filePath: downloaded.path,
+        fileName: voice ? "telegram-voice.ogg" : audio?.file_name,
+        mimeType: voice?.mime_type ?? audio?.mime_type,
+      });
       const message = await formatTelegramAttachmentPrompt(attachmentKind, downloaded.path, ctx.message.caption?.trim());
 
       await bridge.logSystem(botId, chatId, `Telegram ${attachmentKind} received: ${downloaded.path}`);
@@ -799,6 +957,7 @@ ${bridge.formatStatus(mapping)}`);
             `Telegram ${attachmentKind} request`,
             helpers,
             autoContinue,
+            memoryService,
             sanitizeAttachmentResponseBlocks,
           ),
         };
@@ -1019,6 +1178,10 @@ function sanitizeLoggedTelegramText(text: string): string {
   if (/^\/login\s+claude\s+/i.test(trimmed)) {
     return "/login claude [redacted]";
   }
+  if (/^\/secret\s+set\s+/i.test(trimmed)) {
+    const parts = trimmed.split(/\s+/);
+    return `/secret set ${parts[2] ?? "[key]"} [redacted]`;
+  }
   return text;
 }
 
@@ -1131,12 +1294,19 @@ async function routeTelegramWorkLoop(
   label: string,
   helpers: PendingAnimationHelpers,
   autoContinue: AutoContinueController,
+  memoryService: AgentMemoryService,
   transform: (blocks: string[]) => string[] = (blocks) => blocks,
 ): Promise<string[]> {
   const currentSession = await bridge.status(botId, chatId);
   const sessionId = currentSession?.session.sessionId;
+  if (currentSession) {
+    await memoryService.recordInstruction(currentSession.session, message);
+  }
+  const managedContext = currentSession
+    ? await memoryService.formatProviderContext(currentSession.session)
+    : "";
   autoContinue.clear(botId, chatId, sessionId);
-  let prompt = appendReportProtocol(message);
+  let prompt = appendManagedContext(appendReportProtocol(message), managedContext);
   const maxTurns = config.telegramAutoProgressMaxTurns;
   const emptyResponseRetries = config.telegramEmptyResponseRetries;
   const retryableErrorRetries = config.telegramRetryableErrorRetries;
@@ -1172,6 +1342,18 @@ async function routeTelegramWorkLoop(
 
       if (parsed.kind === "progress") {
         deliveredProgressCount += 1;
+        if (currentSession) {
+          const progress = await memoryService.recordProgress(currentSession.session, parsed.chunks.join("\n"));
+          if (progress.repeated) {
+            const repeatedMessage = [
+              "Repeated progress detected. The same work pattern has appeared 3 or more times.",
+              "Automatic continuation stopped so the task can be inspected instead of looping.",
+            ].join("\n");
+            await bridge.logSystem(botId, chatId, repeatedMessage);
+            autoContinue.clear(botId, chatId, sessionId);
+            return [repeatedMessage];
+          }
+        }
         await helpers.reportProgress(parsed.chunks);
         if (autoContinue.isStopRequested(botId, chatId, sessionId)) {
           const stopMessage = "Automatic continuation stopped after the latest progress report.";
@@ -1179,11 +1361,14 @@ async function routeTelegramWorkLoop(
           autoContinue.clear(botId, chatId, sessionId);
           return [stopMessage];
         }
-        prompt = REPORT_CONTINUE_PROMPT;
+        prompt = appendManagedContext(REPORT_CONTINUE_PROMPT, managedContext);
         continue;
       }
 
       if (parsed.kind === "result" || parsed.kind === "blocked") {
+        if (currentSession && parsed.kind === "result") {
+          await memoryService.completeTask(currentSession.session, parsed.chunks.join("\n"));
+        }
         autoContinue.clear(botId, chatId, sessionId);
         return parsed.chunks;
       }
@@ -1200,7 +1385,7 @@ async function routeTelegramWorkLoop(
         const retryMessage = `${turnLabel} returned an empty response; retrying automatic continuation (${emptyResponseRetryCount}/${emptyResponseRetries}).`;
         console.warn(`[telegram-route] bot=${botId} chat=${chatId} ${retryMessage}`);
         await bridge.logSystem(botId, chatId, retryMessage);
-        prompt = REPORT_CONTINUE_PROMPT;
+        prompt = appendManagedContext(REPORT_CONTINUE_PROMPT, managedContext);
         continue;
       }
 
@@ -1217,7 +1402,7 @@ async function routeTelegramWorkLoop(
           return [stopMessage];
         }
         await sleep(retryable.retryAfterMs);
-        prompt = REPORT_CONTINUE_PROMPT;
+        prompt = appendManagedContext(REPORT_CONTINUE_PROMPT, managedContext);
         continue;
       }
 
@@ -1255,6 +1440,13 @@ type RetryableProviderIssue = {
 
 function appendReportProtocol(message: string): string {
   return `${message}\n\n${REPORT_PROTOCOL_PROMPT}`;
+}
+
+function appendManagedContext(message: string, managedContext: string): string {
+  if (!managedContext.trim()) {
+    return message;
+  }
+  return `${managedContext}\n\nUser request:\n${message}`;
 }
 
 function parseReportResponses(
