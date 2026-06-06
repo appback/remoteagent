@@ -107,9 +107,13 @@ export class AgentMemoryService {
         items: nextItems,
       });
     } else if (decision.kind === "continue") {
-      const mergedItems = previousTodo.items.length > 0 ? previousTodo.items : nextItems;
+      const mergedItems = previousTodo.items.length > 0 ? previousTodo.items.slice() : nextItems;
       if (nextItems.length > 0 && previousTodo.items.length > 0) {
-        mergedItems.push(...nextItems.map((item) => ({ ...item, status: "pending" as TodoStatus })));
+        for (const item of nextItems) {
+          if (!this.matchesAnyTodo(item.text, mergedItems)) {
+            mergedItems.push({ ...item, status: "pending" as TodoStatus });
+          }
+        }
       }
       await this.writeTodo(session, {
         createdAt: previousTodo.createdAt || now,
@@ -152,6 +156,16 @@ export class AgentMemoryService {
     const activeTodo = this.activeTodoItems(todo);
     if (activeTodo.length === 0) {
       return { kind: "new", instruction: normalized, reason: current.trim() ? "task note exists but no active todo" : "no active todo" };
+    }
+
+    if (this.matchesAnyTodo(normalized, activeTodo)) {
+      return {
+        kind: "continue",
+        instruction: normalized,
+        reason: "message matches active todo",
+        currentSummary: this.summarizeCurrentTask(current),
+        todoSummary: this.formatTodoSummary(todo),
+      };
     }
 
     if (this.looksLikeContinuation(normalized)) {
@@ -580,6 +594,57 @@ export class AgentMemoryService {
       updatedAt: changed ? now : (todo.updatedAt || now),
       items: this.ensureActiveTodo(items),
     };
+  }
+
+  private matchesAnyTodo(text: string, items: TodoItem[]): boolean {
+    return items.some((item) => this.todoTextSimilarity(text, item.text) >= 0.86);
+  }
+
+  private todoTextSimilarity(left: string, right: string): number {
+    const a = this.normalizeComparableText(left);
+    const b = this.normalizeComparableText(right);
+    if (!a || !b) {
+      return 0;
+    }
+    if (a === b) {
+      return 1;
+    }
+    const shorter = a.length <= b.length ? a : b;
+    const longer = a.length > b.length ? a : b;
+    if (shorter.length >= 20 && longer.includes(shorter)) {
+      return shorter.length / longer.length;
+    }
+    const aGrams = this.charBigrams(a);
+    const bGrams = this.charBigrams(b);
+    if (aGrams.size === 0 || bGrams.size === 0) {
+      return 0;
+    }
+    let intersection = 0;
+    for (const gram of aGrams) {
+      if (bGrams.has(gram)) {
+        intersection += 1;
+      }
+    }
+    return intersection / (aGrams.size + bGrams.size - intersection);
+  }
+
+  private normalizeComparableText(text: string): string {
+    return text
+      .toLowerCase()
+      .replace(/\s+/g, "")
+      .replace(/[^\p{L}\p{N}가-힣]/gu, "")
+      .trim();
+  }
+
+  private charBigrams(text: string): Set<string> {
+    if (text.length <= 1) {
+      return new Set(text ? [text] : []);
+    }
+    const grams = new Set<string>();
+    for (let index = 0; index < text.length - 1; index += 1) {
+      grams.add(text.slice(index, index + 2));
+    }
+    return grams;
   }
 
   private async touchActiveTodo(session: SessionRecord): Promise<void> {
