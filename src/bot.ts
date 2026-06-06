@@ -596,7 +596,7 @@ ${bridge.formatStatus(mapping)}`);
     }
 
     if (action === "status") {
-      await reply(ctx, await memoryService.formatProviderContext(mapping.session));
+      await reply(ctx, await memoryService.formatTaskStatus(mapping.session));
       return;
     }
     if (action === "clear") {
@@ -607,7 +607,17 @@ ${bridge.formatStatus(mapping)}`);
     if (action === "new" || action === "continue") {
       const instruction = rest?.trim();
       if (!instruction) {
-        await reply(ctx, action === "new" ? "Usage: `/task new <내용>`" : "Usage: `/task continue <내용>`", { parse_mode: "Markdown" });
+        if (action === "new") {
+          await reply(ctx, "Usage: `/task new <내용>`", { parse_mode: "Markdown" });
+          return;
+        }
+        const continuePrompt = await memoryService.createContinuePrompt(mapping.session);
+        if (!continuePrompt) {
+          await reply(ctx, "이어갈 미완료 TODO가 없습니다. 새 작업은 `/task new <내용>` 또는 일반 메시지로 시작하세요.", { parse_mode: "Markdown" });
+          return;
+        }
+        await messageBatcher.enqueue({ botToken: token, telegramChatId: ctx.chat.id }, botId, chatId, continuePrompt);
+        await reply(ctx, "미완료 TODO 이어가기로 접수했습니다.");
         return;
       }
       const prefix = action === "new" ? "new:" : "continue:";

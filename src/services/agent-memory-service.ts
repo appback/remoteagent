@@ -38,11 +38,30 @@ type AttemptsState = {
   progress: Record<string, { count: number; lastAt: string; sample: string }>;
 };
 
+type TodoStatus = "pending" | "in_progress" | "done" | "blocked";
+
+type TodoItem = {
+  id: string;
+  text: string;
+  status: TodoStatus;
+  createdAt: string;
+  updatedAt: string;
+  attempts: number;
+  note?: string;
+};
+
+type TodoState = {
+  createdAt: string;
+  updatedAt: string;
+  items: TodoItem[];
+};
+
 export type InstructionDecision = {
   kind: "new" | "continue" | "ambiguous";
   instruction: string;
   reason: string;
   currentSummary?: string;
+  todoSummary?: string;
 };
 
 const MAX_CONTEXT_CHARS = 2500;
@@ -68,6 +87,8 @@ export class AgentMemoryService {
     const currentPath = path.join(dir, "current.md");
     const now = new Date().toISOString();
     const current = await fs.readFile(currentPath, "utf8").catch(() => "");
+    const previousTodo = await this.readTodo(session);
+    const nextItems = this.extractTodoItems(normalizedInstruction, now);
 
     if (current.trim() && decision.kind === "new") {
       await this.appendHistory(session, {
@@ -77,6 +98,24 @@ export class AgentMemoryService {
         text: this.truncate(current, 4000),
       });
       await this.resetAttempts(session);
+    }
+
+    if (decision.kind === "new") {
+      await this.writeTodo(session, {
+        createdAt: now,
+        updatedAt: now,
+        items: nextItems,
+      });
+    } else if (decision.kind === "continue") {
+      const mergedItems = previousTodo.items.length > 0 ? previousTodo.items : nextItems;
+      if (nextItems.length > 0 && previousTodo.items.length > 0) {
+        mergedItems.push(...nextItems.map((item) => ({ ...item, status: "pending" as TodoStatus })));
+      }
+      await this.writeTodo(session, {
+        createdAt: previousTodo.createdAt || now,
+        updatedAt: now,
+        items: this.ensureActiveTodo(mergedItems),
+      });
     }
 
     const next = [
@@ -89,6 +128,7 @@ export class AgentMemoryService {
       normalizedInstruction.trim(),
       ``,
       `## Immediate Rule`,
+      `Manage work by the TODO list. Do not treat this note alone as active work if no TODO item is pending or in progress.`,
       `Before repeating a prior step, check history/attempts. If the same work repeats 3 times, stop and report the blocker.`,
       ``,
     ].join("\n");
@@ -108,8 +148,10 @@ export class AgentMemoryService {
     }
 
     const current = await this.currentTaskText(session);
-    if (!current.trim()) {
-      return { kind: "new", instruction: normalized, reason: "no active task ledger" };
+    const todo = await this.readTodo(session);
+    const activeTodo = this.activeTodoItems(todo);
+    if (activeTodo.length === 0) {
+      return { kind: "new", instruction: normalized, reason: current.trim() ? "task note exists but no active todo" : "no active todo" };
     }
 
     if (this.looksLikeContinuation(normalized)) {
@@ -118,6 +160,7 @@ export class AgentMemoryService {
         instruction: normalized,
         reason: "continuation phrase",
         currentSummary: this.summarizeCurrentTask(current),
+        todoSummary: this.formatTodoSummary(todo),
       };
     }
 
@@ -127,6 +170,7 @@ export class AgentMemoryService {
         instruction: normalized,
         reason: "new task phrase",
         currentSummary: this.summarizeCurrentTask(current),
+        todoSummary: this.formatTodoSummary(todo),
       };
     }
 
@@ -135,14 +179,16 @@ export class AgentMemoryService {
       instruction: normalized,
       reason: "active task exists and the new message is not clearly continue or new",
       currentSummary: this.summarizeCurrentTask(current),
+      todoSummary: this.formatTodoSummary(todo),
     };
   }
 
   formatAmbiguousInstruction(session: SessionRecord, decision: InstructionDecision): string {
     return [
-      `현재 ${session.publicId}에 진행 중인 작업 원장이 있습니다.`,
+      `현재 ${session.publicId}에 미완료 TODO가 있습니다.`,
       "",
-      decision.currentSummary ? `현재 작업:\n${decision.currentSummary}` : undefined,
+      decision.todoSummary ? `현재 TODO:\n${decision.todoSummary}` : undefined,
+      decision.currentSummary ? `참고 지시:\n${decision.currentSummary}` : undefined,
       "",
       "방금 메시지가 기존 작업을 이어가는지, 새 작업인지 확실하지 않습니다.",
       "",
@@ -158,13 +204,57 @@ export class AgentMemoryService {
     ].filter(Boolean).join("\n");
   }
 
+  async hasActiveTodo(session: SessionRecord): Promise<boolean> {
+    return this.activeTodoItems(await this.readTodo(session)).length > 0;
+  }
+
+  async createContinuePrompt(session: SessionRecord): Promise<string | undefined> {
+    const todo = await this.readTodo(session);
+    const active = this.activeTodoItems(todo);
+    if (active.length === 0) {
+      return undefined;
+    }
+    return [
+      "continue:",
+      "현재 RemoteAgent TODO를 이어서 진행해.",
+      "새 계획을 반복하지 말고, in_progress 또는 pending 항목 중 하나를 실제로 수행한 뒤 증거와 함께 보고해.",
+      "",
+      this.formatTodoSummary(todo),
+    ].join("\n");
+  }
+
+  async formatTaskStatus(session: SessionRecord): Promise<string> {
+    const current = await this.currentTaskText(session);
+    const todo = await this.readTodo(session);
+    const active = this.activeTodoItems(todo);
+    return [
+      `Task status for ${session.publicId}`,
+      "",
+      todo.items.length > 0 ? this.formatTodoSummary(todo, true) : "TODO: none",
+      "",
+      `activeTodo: ${active.length > 0 ? "yes" : "no"}`,
+      current.trim() ? `\nCurrent note:\n${this.summarizeCurrentTask(current)}` : undefined,
+    ].filter(Boolean).join("\n");
+  }
+
   async completeTask(session: SessionRecord, summary: string): Promise<void> {
     const dir = this.sessionDir(session);
     const currentPath = path.join(dir, "current.md");
     const current = await fs.readFile(currentPath, "utf8").catch(() => "");
+    const todo = await this.readTodo(session);
+    const now = new Date().toISOString();
+    if (todo.items.length > 0) {
+      await this.writeTodo(session, {
+        ...todo,
+        updatedAt: now,
+        items: todo.items.map((item) => this.isActiveTodo(item)
+          ? { ...item, status: "done", updatedAt: now, note: this.truncate(summary, 500) }
+          : item),
+      });
+    }
     await this.appendHistory(session, {
       type: "completed",
-      at: new Date().toISOString(),
+      at: now,
       summary: this.truncate(summary, 2000),
       text: this.truncate(current, 4000),
     });
@@ -185,6 +275,11 @@ export class AgentMemoryService {
     };
     await this.writeAttempts(session, attempts);
     await this.appendHistory(session, { type: "progress", at: now, count, signature, text: this.truncate(text, 1000) });
+    if (count >= 3) {
+      await this.markActiveTodoBlocked(session, `Repeated similar progress report ${count} times.`);
+    } else {
+      await this.touchActiveTodo(session);
+    }
     return { count, repeated: count >= 3 };
   }
 
@@ -359,6 +454,7 @@ export class AgentMemoryService {
 
   async formatProviderContext(session: SessionRecord): Promise<string> {
     const current = await fs.readFile(path.join(this.sessionDir(session), "current.md"), "utf8").catch(() => "");
+    const todo = await this.readTodo(session);
     const docs = Object.values(await this.readDocs()).slice(0, 30);
     const secrets = Object.keys(await this.readSecrets()).sort();
     const artifacts = (await this.readJson<ArtifactRecord[]>(this.artifactsPath, []))
@@ -368,7 +464,10 @@ export class AgentMemoryService {
 
     const lines = [
       "RemoteAgent managed context:",
-      current.trim() ? ["Current task ledger:", this.truncate(current.trim(), 900)].join("\n") : undefined,
+      todo.items.length > 0
+        ? ["Task TODO:", this.formatTodoSummary(todo, true)].join("\n")
+        : "Task TODO: none. Treat any current note as context only, not active work.",
+      current.trim() ? ["Current task note:", this.truncate(current.trim(), 700)].join("\n") : undefined,
       docs.length > 0
         ? ["Document index:", ...docs.map((doc) => `- ${doc.keyword}: ${doc.targetPath}${doc.note ? ` (${doc.note})` : ""}`)].join("\n")
         : undefined,
@@ -385,6 +484,99 @@ export class AgentMemoryService {
 
   private async currentTaskText(session: SessionRecord): Promise<string> {
     return fs.readFile(path.join(this.sessionDir(session), "current.md"), "utf8").catch(() => "");
+  }
+
+  private todoPath(session: SessionRecord): string {
+    return path.join(this.sessionDir(session), "todo.json");
+  }
+
+  private async readTodo(session: SessionRecord): Promise<TodoState> {
+    return this.readJson<TodoState>(this.todoPath(session), { createdAt: "", updatedAt: "", items: [] });
+  }
+
+  private async writeTodo(session: SessionRecord, todo: TodoState): Promise<void> {
+    await this.writeJson(this.todoPath(session), {
+      ...todo,
+      items: this.ensureActiveTodo(todo.items),
+    });
+  }
+
+  private extractTodoItems(text: string, now: string): TodoItem[] {
+    if (!this.looksActionableInstruction(text)) {
+      return [];
+    }
+
+    const lines = text
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const listed = lines
+      .map((line) => line.replace(/^[-*]\s+/, "").replace(/^\d+[.)]\s+/, "").trim())
+      .filter((line) => line.length >= 4 && this.looksActionableInstruction(line));
+    const source = listed.length > 1 ? listed : [text.trim()];
+    return source.slice(0, 20).map((item, index) => ({
+      id: `T${String(index + 1).padStart(3, "0")}`,
+      text: this.truncate(item, 500),
+      status: index === 0 ? "in_progress" : "pending",
+      createdAt: now,
+      updatedAt: now,
+      attempts: 0,
+    }));
+  }
+
+  private looksActionableInstruction(text: string): boolean {
+    const normalized = text.trim();
+    if (!normalized) {
+      return false;
+    }
+    if (/너는\s+.+담당|담당이야|역할은|프로젝트는/i.test(normalized) && !/수정|구현|추가|저장|기록|남겨|배포|테스트|검증|실패|에러|버그|문제|DB|database|api|postback|로그|히스토리/i.test(normalized)) {
+      return false;
+    }
+    return /수정|고쳐|구현|추가|저장|기록|남겨|배포|테스트|검증|확인해|찾아|분석|비교|실패|에러|버그|문제|DB|database|api|postback|로그|히스토리|마이그레이션|schema|table|endpoint/i.test(normalized);
+  }
+
+  private activeTodoItems(todo: TodoState): TodoItem[] {
+    return todo.items.filter((item) => this.isActiveTodo(item));
+  }
+
+  private isActiveTodo(item: TodoItem): boolean {
+    return item.status === "pending" || item.status === "in_progress";
+  }
+
+  private ensureActiveTodo(items: TodoItem[]): TodoItem[] {
+    const activeIndex = items.findIndex((item) => item.status === "in_progress");
+    if (activeIndex >= 0) {
+      return items;
+    }
+    const pendingIndex = items.findIndex((item) => item.status === "pending");
+    if (pendingIndex < 0) {
+      return items;
+    }
+    return items.map((item, index) => index === pendingIndex ? { ...item, status: "in_progress" } : item);
+  }
+
+  private async touchActiveTodo(session: SessionRecord): Promise<void> {
+    const todo = await this.readTodo(session);
+    const index = todo.items.findIndex((item) => item.status === "in_progress");
+    if (index < 0) {
+      return;
+    }
+    const now = new Date().toISOString();
+    const items = todo.items.slice();
+    items[index] = { ...items[index], attempts: items[index].attempts + 1, updatedAt: now };
+    await this.writeTodo(session, { ...todo, updatedAt: now, items });
+  }
+
+  private async markActiveTodoBlocked(session: SessionRecord, note: string): Promise<void> {
+    const todo = await this.readTodo(session);
+    const now = new Date().toISOString();
+    await this.writeTodo(session, {
+      ...todo,
+      updatedAt: now,
+      items: todo.items.map((item) => item.status === "in_progress"
+        ? { ...item, status: "blocked", updatedAt: now, note }
+        : item),
+    });
   }
 
   private extractInstructionDirective(text: string): { kind: "new" | "continue"; instruction: string } | undefined {
@@ -417,6 +609,18 @@ export class AgentMemoryService {
     const immediateRuleIndex = body.indexOf("## Immediate Rule");
     const instruction = (immediateRuleIndex >= 0 ? body.slice(0, immediateRuleIndex) : body).trim();
     return this.truncate(instruction || current.trim(), 700);
+  }
+
+  private formatTodoSummary(todo: TodoState, includeDone = false): string {
+    const items = includeDone ? todo.items : todo.items.filter((item) => item.status !== "done");
+    if (items.length === 0) {
+      return "TODO: none";
+    }
+    return items.map((item, index) => {
+      const marker = item.status === "done" ? "완료" : item.status === "in_progress" ? "진행중" : item.status === "blocked" ? "차단" : "대기";
+      const note = item.note ? ` (${item.note})` : "";
+      return `${index + 1}. [${item.id}] ${marker}: ${item.text}${note}`;
+    }).join("\n");
   }
 
   private progressSignature(text: string): string {
