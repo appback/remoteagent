@@ -139,13 +139,28 @@ async function startManualPolling(bot: Bot): Promise<never> {
         continue;
       }
 
-      for (const update of orderUpdatesForDispatch(payload.result)) {
-        const handler = pollingBot.handleUpdates([update]).catch((error) => {
-          console.error(`Telegram update ${update.update_id} handler failed for @${pollingBot.botInfo.username}:`, error);
-        }).finally(() => {
-          activeHandlers.delete(handler);
-        });
-        activeHandlers.add(handler);
+      const orderedUpdates = orderUpdatesForDispatch(payload.result);
+      const stopUpdates = orderedUpdates.filter((update) => isStopCommandUpdate(update));
+      if (stopUpdates.length > 0) {
+        for (const update of stopUpdates) {
+          await pollingBot.handleUpdates([update]).catch((error) => {
+            console.error(`Telegram stop update ${update.update_id} handler failed for @${pollingBot.botInfo.username}:`, error);
+          });
+        }
+
+        const skipped = orderedUpdates.length - stopUpdates.length;
+        if (skipped > 0) {
+          console.log(`Skipped ${skipped} queued update(s) for @${pollingBot.botInfo.username} because /stop was received in the same polling batch.`);
+        }
+      } else {
+        for (const update of orderedUpdates) {
+          const handler = pollingBot.handleUpdates([update]).catch((error) => {
+            console.error(`Telegram update ${update.update_id} handler failed for @${pollingBot.botInfo.username}:`, error);
+          }).finally(() => {
+            activeHandlers.delete(handler);
+          });
+          activeHandlers.add(handler);
+        }
       }
       offset = payload.result[payload.result.length - 1]!.update_id + 1;
     } catch (error) {
