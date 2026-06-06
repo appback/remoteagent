@@ -38,6 +38,13 @@ type AttemptsState = {
   progress: Record<string, { count: number; lastAt: string; sample: string }>;
 };
 
+export type InstructionDecision = {
+  kind: "new" | "continue" | "ambiguous";
+  instruction: string;
+  reason: string;
+  currentSummary?: string;
+};
+
 const MAX_CONTEXT_CHARS = 2500;
 
 export class AgentMemoryService {
@@ -54,13 +61,15 @@ export class AgentMemoryService {
   }
 
   async recordInstruction(session: SessionRecord, instruction: string): Promise<void> {
+    const decision = await this.classifyInstruction(session, instruction);
+    const normalizedInstruction = decision.instruction;
     const dir = this.sessionDir(session);
     await fs.mkdir(dir, { recursive: true });
     const currentPath = path.join(dir, "current.md");
     const now = new Date().toISOString();
     const current = await fs.readFile(currentPath, "utf8").catch(() => "");
 
-    if (current.trim() && !this.looksLikeContinuation(instruction)) {
+    if (current.trim() && decision.kind === "new") {
       await this.appendHistory(session, {
         type: "archived",
         at: now,
@@ -77,14 +86,76 @@ export class AgentMemoryService {
       `updatedAt: ${now}`,
       ``,
       `## Instruction`,
-      instruction.trim(),
+      normalizedInstruction.trim(),
       ``,
       `## Immediate Rule`,
       `Before repeating a prior step, check history/attempts. If the same work repeats 3 times, stop and report the blocker.`,
       ``,
     ].join("\n");
     await fs.writeFile(currentPath, next, "utf8");
-    await this.appendHistory(session, { type: "instruction", at: now, text: instruction.trim() });
+    await this.appendHistory(session, { type: "instruction", at: now, mode: decision.kind, text: normalizedInstruction.trim() });
+  }
+
+  async classifyInstruction(session: SessionRecord, instruction: string): Promise<InstructionDecision> {
+    const normalized = instruction.trim();
+    const directive = this.extractInstructionDirective(normalized);
+    if (directive) {
+      return {
+        kind: directive.kind,
+        instruction: directive.instruction,
+        reason: `explicit ${directive.kind} directive`,
+      };
+    }
+
+    const current = await this.currentTaskText(session);
+    if (!current.trim()) {
+      return { kind: "new", instruction: normalized, reason: "no active task ledger" };
+    }
+
+    if (this.looksLikeContinuation(normalized)) {
+      return {
+        kind: "continue",
+        instruction: normalized,
+        reason: "continuation phrase",
+        currentSummary: this.summarizeCurrentTask(current),
+      };
+    }
+
+    if (this.looksLikeNewTask(normalized)) {
+      return {
+        kind: "new",
+        instruction: normalized,
+        reason: "new task phrase",
+        currentSummary: this.summarizeCurrentTask(current),
+      };
+    }
+
+    return {
+      kind: "ambiguous",
+      instruction: normalized,
+      reason: "active task exists and the new message is not clearly continue or new",
+      currentSummary: this.summarizeCurrentTask(current),
+    };
+  }
+
+  formatAmbiguousInstruction(session: SessionRecord, decision: InstructionDecision): string {
+    return [
+      `현재 ${session.publicId}에 진행 중인 작업 원장이 있습니다.`,
+      "",
+      decision.currentSummary ? `현재 작업:\n${decision.currentSummary}` : undefined,
+      "",
+      "방금 메시지가 기존 작업을 이어가는지, 새 작업인지 확실하지 않습니다.",
+      "",
+      "기존 작업을 이어가려면:",
+      `continue: ${decision.instruction}`,
+      "",
+      "새 작업으로 전환하려면:",
+      `new: ${decision.instruction}`,
+      "",
+      "명령어로도 가능합니다:",
+      "/task continue <내용>",
+      "/task new <내용>",
+    ].filter(Boolean).join("\n");
   }
 
   async completeTask(session: SessionRecord, summary: string): Promise<void> {
@@ -312,8 +383,40 @@ export class AgentMemoryService {
     return this.truncate(lines, MAX_CONTEXT_CHARS);
   }
 
+  private async currentTaskText(session: SessionRecord): Promise<string> {
+    return fs.readFile(path.join(this.sessionDir(session), "current.md"), "utf8").catch(() => "");
+  }
+
+  private extractInstructionDirective(text: string): { kind: "new" | "continue"; instruction: string } | undefined {
+    const match = /^(new|새작업|새\s*작업|continue|계속|이어|이어서)\s*[:：]\s*([\s\S]+)$/i.exec(text.trim());
+    if (!match) {
+      return undefined;
+    }
+    const raw = match[1]?.toLowerCase().replace(/\s+/g, "") ?? "";
+    const instruction = match[2]?.trim() ?? "";
+    if (!instruction) {
+      return undefined;
+    }
+    return {
+      kind: raw === "new" || raw === "새작업" ? "new" : "continue",
+      instruction,
+    };
+  }
+
   private looksLikeContinuation(text: string): boolean {
-    return /^(계속|이어|진행|수정|고쳐|해|다시|확인|배포|테스트|continue|go on|resume)\b/i.test(text.trim());
+    return /^(계속|이어|이어서|진행|수정|고쳐|해|다시|확인|배포|테스트|continue|go on|resume)\b/i.test(text.trim());
+  }
+
+  private looksLikeNewTask(text: string): boolean {
+    return /^(새로|새\s*작업|다른\s*작업|이제\s*부터|다음\s*작업|전환|바꿔서|new task)\b/i.test(text.trim());
+  }
+
+  private summarizeCurrentTask(current: string): string {
+    const instructionIndex = current.indexOf("## Instruction");
+    const body = instructionIndex >= 0 ? current.slice(instructionIndex + "## Instruction".length) : current;
+    const immediateRuleIndex = body.indexOf("## Immediate Rule");
+    const instruction = (immediateRuleIndex >= 0 ? body.slice(0, immediateRuleIndex) : body).trim();
+    return this.truncate(instruction || current.trim(), 700);
   }
 
   private progressSignature(text: string): string {

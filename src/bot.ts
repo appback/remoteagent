@@ -33,7 +33,7 @@ const HELP_TEXT = [
   "/sandbox codex <read-only|workspace-write|danger-full-access>",
   "/status",
   "/reportbot list|set <target>|status|test|send|clear",
-  "/task status|clear",
+  "/task status|clear|new|continue",
   "/artifacts list|cleanup <days>",
   "/secret set|list|remove",
   "/docs pin|find|list|remove",
@@ -587,7 +587,7 @@ ${bridge.formatStatus(mapping)}`);
   bot.command("task", async (ctx) => {
     const botId = getBotId();
     const chatId = String(ctx.chat.id);
-    const { args } = parseCommand(ctx.message?.text, 1);
+    const { args, rest } = parseCommand(ctx.message?.text, 1);
     const action = args[0]?.toLowerCase() || "status";
     const mapping = await bridge.status(botId, chatId);
     if (!mapping) {
@@ -604,7 +604,18 @@ ${bridge.formatStatus(mapping)}`);
       await reply(ctx, `Cleared current task ledger for ${mapping.session.publicId}.`);
       return;
     }
-    await reply(ctx, "Usage: `/task status` or `/task clear`", { parse_mode: "Markdown" });
+    if (action === "new" || action === "continue") {
+      const instruction = rest?.trim();
+      if (!instruction) {
+        await reply(ctx, action === "new" ? "Usage: `/task new <내용>`" : "Usage: `/task continue <내용>`", { parse_mode: "Markdown" });
+        return;
+      }
+      const prefix = action === "new" ? "new:" : "continue:";
+      await messageBatcher.enqueue({ botToken: token, telegramChatId: ctx.chat.id }, botId, chatId, `${prefix} ${instruction}`);
+      await reply(ctx, action === "new" ? "새 작업으로 접수했습니다." : "기존 작업 이어가기로 접수했습니다.");
+      return;
+    }
+    await reply(ctx, "Usage: `/task status`, `/task clear`, `/task new <내용>`, or `/task continue <내용>`", { parse_mode: "Markdown" });
   });
 
   bot.command("artifacts", async (ctx) => {
@@ -993,6 +1004,17 @@ ${bridge.formatStatus(mapping)}`);
     }
 
     await bridge.logSystem(botId, chatId, `Telegram text received (${text.length} chars).`);
+    if (mapping) {
+      const decision = await memoryService.classifyInstruction(mapping.session, text);
+      if (decision.kind === "ambiguous") {
+        await bridge.logSystem(botId, chatId, `Telegram text held for task clarification: ${decision.reason}`);
+        await reply(ctx, memoryService.formatAmbiguousInstruction(mapping.session, decision));
+        return;
+      }
+      await messageBatcher.enqueue({ botToken: token, telegramChatId: ctx.chat.id }, botId, chatId, decision.kind === "new" ? `new: ${decision.instruction}` : `continue: ${decision.instruction}`);
+      return;
+    }
+
     await messageBatcher.enqueue({ botToken: token, telegramChatId: ctx.chat.id }, botId, chatId, text);
   });
 
