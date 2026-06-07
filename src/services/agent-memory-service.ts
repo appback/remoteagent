@@ -491,6 +491,12 @@ export class AgentMemoryService {
     const lines = [
       "RemoteAgent managed context:",
       [
+        "Session work locations:",
+        `- workspace: ${session.workspace}`,
+        `- memory: ${this.sessionDir(session)}`,
+        "- docs: use managed document pins first, then inspect docs/ under the workspace when relevant.",
+      ].join("\n"),
+      [
         "Task execution rules:",
         "- Start from the TODO workspace/memory/docs pointers before searching broadly.",
         "- Do one concrete TODO item at a time; separate investigation from modification.",
@@ -499,7 +505,7 @@ export class AgentMemoryService {
         "- A final report must include concrete evidence: changed files, relevant line references, git diff/status, command output, or log path.",
       ].join("\n"),
       todo.items.length > 0
-        ? ["Task TODO:", this.formatTodoSummary(todo, true)].join("\n")
+        ? ["Task TODO:", this.formatTodoSummary(todo, true, true)].join("\n")
         : "Task TODO: none. Treat any current note as context only, not active work.",
       current.trim() ? ["Current task note:", this.truncate(current.trim(), 700)].join("\n") : undefined,
       docs.length > 0
@@ -545,15 +551,32 @@ export class AgentMemoryService {
       return [];
     }
 
+    const listed = this.extractExplicitTodoLines(text);
+    const source = listed.length > 1 ? listed : [text.trim()];
+    return source.slice(0, 20).map((item, index) => this.createTodoItem(session, item, index, now));
+  }
+
+  private extractExplicitTodoLines(text: string): string[] {
+    const shouldSplit = /쪼개|나눠서|단계별|순서대로|체크리스트|todo/i.test(text);
     const lines = text
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter(Boolean);
     const listed = lines
+      .map((line) => {
+        const match = /^([-*]|\d+[.)])\s+(.+)$/.exec(line);
+        return match?.[2]?.trim();
+      })
+      .filter((line): line is string => Boolean(line && line.length >= 4 && this.looksActionableInstruction(line)));
+    if (listed.length > 1) {
+      return listed;
+    }
+    if (!shouldSplit) {
+      return [];
+    }
+    return lines
       .map((line) => line.replace(/^[-*]\s+/, "").replace(/^\d+[.)]\s+/, "").trim())
       .filter((line) => line.length >= 4 && this.looksActionableInstruction(line));
-    const source = listed.length > 1 ? listed : [text.trim()];
-    return source.slice(0, 20).map((item, index) => this.createTodoItem(session, item, index, now));
   }
 
   private createTodoItem(session: SessionRecord, text: string, index: number, now: string): TodoItem {
@@ -566,15 +589,9 @@ export class AgentMemoryService {
       createdAt: now,
       updatedAt: now,
       attempts: 0,
-      workspace: session.workspace,
-      memoryPath: sessionMemory,
-      officialDocs: "Check managed document pins first; then inspect docs/ under the workspace if relevant.",
-      relatedFiles: "Unknown until inspected. Record exact files after the first concrete check.",
       action: this.truncate(text.trim(), 700),
-      caution: "Do not infer dashboard access, deployment, Telegram/file delivery, or external state without direct evidence.",
-      doneEvidence: "Report concrete evidence: file paths/lines, git diff/status, command output, logs, or transferred file confirmation.",
-      reportFormat: "Progress: what was checked or changed + evidence + next concrete step. Final: result + evidence + remaining risk.",
-      stopCondition: "If the same check/progress repeats 3 times, or required access/evidence is missing, stop and report the blocker.",
+      workspace: index === 0 ? session.workspace : undefined,
+      memoryPath: index === 0 ? sessionMemory : undefined,
     };
   }
 
@@ -745,7 +762,7 @@ export class AgentMemoryService {
     return this.truncate(instruction || current.trim(), 700);
   }
 
-  private formatTodoSummary(todo: TodoState, includeDone = false): string {
+  private formatTodoSummary(todo: TodoState, includeDone = false, detailed = false): string {
     const items = includeDone ? todo.items : todo.items.filter((item) => item.status !== "done");
     if (items.length === 0) {
       return "TODO: none";
@@ -753,6 +770,10 @@ export class AgentMemoryService {
     return items.map((item, index) => {
       const marker = item.status === "done" ? "완료" : item.status === "in_progress" ? "진행중" : item.status === "blocked" ? "차단" : "대기";
       const note = item.note ? ` (${item.note})` : "";
+      if (!detailed) {
+        const attempts = item.attempts > 0 ? ` attempts=${item.attempts}` : "";
+        return `${index + 1}. [${item.id}] ${marker}: ${item.text}${note}${attempts}`;
+      }
       const details = [
         `${index + 1}. [${item.id}] ${marker}: ${item.text}${note}`,
         item.workspace ? `   - 작업 폴더: ${item.workspace}` : undefined,
