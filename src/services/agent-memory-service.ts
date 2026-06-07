@@ -688,11 +688,12 @@ export class AgentMemoryService {
   }
 
   private looksLikeContinuation(text: string): boolean {
-    return /^(계속|이어|이어서|진행|수정|고쳐|해|다시|확인|배포|테스트|continue|go on|resume)\b/i.test(text.trim());
+    const normalized = text.trim();
+    return /^(계속|이어|이어서|진행|수정|고쳐|해|다시|확인|검증|배포|빌드|테스트|적용|마무리|커밋|푸시|중단|멈춰|결과|상태|됐어|했어|끝났|완료|continue|go on|resume)/i.test(normalized);
   }
 
   private looksLikeNewTask(text: string): boolean {
-    return /^(새로|새\s*작업|다른\s*작업|이제\s*부터|다음\s*작업|전환|바꿔서|new task)\b/i.test(text.trim());
+    return /^(새로|새\s*작업|다른\s*작업|이제\s*부터|다음\s*작업|전환|바꿔서|new task)/i.test(text.trim());
   }
 
   private summarizeCurrentTask(current: string): string {
