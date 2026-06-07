@@ -124,6 +124,13 @@ class AutoContinueController {
     this.persistStopGates();
   }
 
+  requestSessionStop(sessionId: string): void {
+    const key = this.sessionKey(sessionId);
+    this.stops.add(key);
+    this.suppressUntil.set(key, Date.now() + this.suppressMs);
+    this.persistStopGates();
+  }
+
   beginStop(botId: string, chatId: string, sessionId?: string): boolean {
     const key = this.primaryKey(botId, chatId, sessionId);
     const dedupUntil = this.stopDedupUntil.get(key);
@@ -265,6 +272,16 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
     },
   );
   const getBotId = (): string => bot.botInfo?.username ?? String(bot.botInfo?.id ?? token);
+  const stopPreviousSessionForRebind = async (botId: string, chatId: string, reason: string): Promise<void> => {
+    const previous = await bridge.status(botId, chatId).catch(() => undefined);
+    if (!previous) {
+      return;
+    }
+    autoContinue.requestSessionStop(previous.session.sessionId);
+    messageBatcher.cancelPending(botId, chatId);
+    messageBatcher.cancelManual(botId, chatId);
+    await bridge.stopSessionRun(previous.session.sessionId, botId, chatId, reason);
+  };
   const reply = async (ctx: Context, text: string, extra?: TelegramMessageOptions): Promise<TelegramMessageResult> => {
     if (!ctx.chat) {
       throw new Error("Telegram chat context is missing.");
@@ -335,6 +352,7 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
 
     const explicitProvider = first ? first.toLowerCase() as Provider : undefined;
     const provider = await bridge.resolveStartProvider(explicitProvider);
+    await stopPreviousSessionForRebind(botId, chatId, "Chat started a new session; previous session execution was stopped.");
     const mapping = await bridge.startSession(botId, chatId, provider);
     await reply(ctx, `Started a fresh ${provider} session.
 
@@ -367,6 +385,7 @@ ${bridge.formatStatus(mapping)}`);
     const botId = getBotId();
     const chatId = String(ctx.chat.id);
     const { rest } = parseCommand(ctx.message?.text, 0);
+    await stopPreviousSessionForRebind(botId, chatId, "Chat created a new session; previous session execution was stopped.");
     const mapping = await bridge.createSession(botId, chatId, rest);
     await reply(ctx, `Created and bound a new ${mapping.session.mode} session.\n\n${bridge.formatCurrentSession(mapping)}`);
   });
@@ -384,7 +403,14 @@ ${bridge.formatStatus(mapping)}`);
       return;
     }
 
+    const previous = await bridge.status(botId, chatId).catch(() => undefined);
     const mapping = await bridge.switchSession(botId, chatId, sessionId);
+    if (previous && previous.session.sessionId !== mapping.session.sessionId) {
+      autoContinue.requestSessionStop(previous.session.sessionId);
+      messageBatcher.cancelPending(botId, chatId);
+      messageBatcher.cancelManual(botId, chatId);
+      await bridge.stopSessionRun(previous.session.sessionId, botId, chatId, "Chat switched to another session; previous session execution was stopped.");
+    }
     await reply(ctx, `Switched this chat to session ${sessionId}.\n\n${bridge.formatCurrentSession(mapping)}`);
   });
 
@@ -849,6 +875,7 @@ ${bridge.formatStatus(mapping)}`);
   bot.command("reset", async (ctx) => {
     const botId = getBotId();
     const chatId = String(ctx.chat.id);
+    await stopPreviousSessionForRebind(botId, chatId, "Chat binding was reset; previous session execution was stopped.");
     await bridge.reset(botId, chatId);
     await reply(ctx, "Cleared all pairings for this chat.");
   });
@@ -1278,6 +1305,10 @@ async function runWithPendingAnimation(
       await sendTelegramDocuments(botToken, chatId, normalized.documents);
     }
   } catch (error) {
+    if (error instanceof SilentTelegramAbort) {
+      await deleteTelegramMessage(botToken, chatId, pending.message_id).catch(() => undefined);
+      return;
+    }
     const message = error instanceof Error ? error.message : "An unexpected error occurred.";
     console.error(`[telegram-pending] chat=${chatId} failed: ${message}`, error);
     await editTelegramMessageText(botToken, chatId, pending.message_id, message).catch(async () => {
@@ -1346,6 +1377,22 @@ async function routeTelegramWorkLoop(
   let emptyResponseRetryCount = 0;
   let retryableErrorCount = 0;
   let deliveredProgressCount = 0;
+  const ensureStillBound = async (phase: string): Promise<void> => {
+    if (!sessionId) {
+      return;
+    }
+    if (await bridge.isChatBoundToSession(botId, chatId, sessionId)) {
+      return;
+    }
+    autoContinue.requestSessionStop(sessionId);
+    await bridge.stopSessionRun(
+      sessionId,
+      botId,
+      chatId,
+      `Telegram work loop stopped during ${phase} because the chat is now bound to another session.`,
+    );
+    throw new SilentTelegramAbort(`Session ${currentSession?.session.publicId ?? sessionId} is no longer bound to this chat.`);
+  };
 
   for (let turn = 1; ; turn += 1) {
     if (typeof maxTurns === "number" && maxTurns > 0 && turn > maxTurns) {
@@ -1362,11 +1409,15 @@ async function routeTelegramWorkLoop(
       return [stopMessage];
     }
 
+    await ensureStillBound(`turn ${turn} start`);
     const turnLabel = `${label} turn ${turn}`;
     await bridge.logSystem(botId, chatId, `${turnLabel} started.`);
 
     try {
-      const responses = await bridge.routeMessage(botId, chatId, prompt);
+      const responses = sessionId
+        ? await bridge.routeSessionMessageForChat(sessionId, botId, chatId, prompt)
+        : await bridge.routeMessage(botId, chatId, prompt);
+      await ensureStillBound(`${turnLabel} response`);
       const parsed = parseReportResponses(bridge.formatResponses(responses), transform);
       await bridge.logSystem(botId, chatId, `${turnLabel} returned ${parsed.kind}.`);
       emptyResponseRetryCount = 0;
@@ -1386,6 +1437,7 @@ async function routeTelegramWorkLoop(
             return [repeatedMessage];
           }
         }
+        await ensureStillBound(`${turnLabel} progress delivery`);
         await helpers.reportProgress(parsed.chunks);
         if (autoContinue.isStopRequested(botId, chatId, sessionId)) {
           const stopMessage = "Automatic continuation stopped after the latest progress report.";
@@ -1398,6 +1450,7 @@ async function routeTelegramWorkLoop(
       }
 
       if (parsed.kind === "result" || parsed.kind === "blocked") {
+        await ensureStillBound(`${turnLabel} final delivery`);
         if (currentSession && parsed.kind === "result") {
           await memoryService.completeTask(currentSession.session, parsed.chunks.join("\n"));
         }
@@ -1409,6 +1462,9 @@ async function routeTelegramWorkLoop(
       autoContinue.clear(botId, chatId, sessionId);
       return parsed.chunks;
     } catch (error) {
+      if (error instanceof SilentTelegramAbort) {
+        throw error;
+      }
       const messageText = error instanceof Error ? error.message : "An unexpected error occurred.";
       const retryable = classifyRetryableProviderIssue(messageText, retryableErrorDelayMs);
 
@@ -1461,6 +1517,13 @@ async function routeTelegramWorkLoop(
 type PendingAnimationHelpers = {
   reportProgress: (chunks: string[], parseMode?: "HTML" | "MarkdownV2") => Promise<void>;
 };
+
+class SilentTelegramAbort extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SilentTelegramAbort";
+  }
+}
 
 type ReportKind = "progress" | "result" | "blocked" | "unknown";
 type RetryableProviderIssueKind = "capacity" | "timeout" | "empty-response";

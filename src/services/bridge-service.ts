@@ -55,6 +55,11 @@ export class BridgeService {
     return this.store.bindChatToSession(botId, chatId, session.sessionId);
   }
 
+  async isChatBoundToSession(botId: string, chatId: string, sessionId: string): Promise<boolean> {
+    const chatSession = await this.store.getChatSession(botId, chatId);
+    return chatSession?.session.sessionId === sessionId;
+  }
+
   async startSession(botId: string, chatId: string, provider: Provider, cwd?: string): Promise<ChatSession> {
     this.ensureConfigured(provider);
 
@@ -386,6 +391,28 @@ export class BridgeService {
     return { stopped, sessionPublicId: chatSession.session.publicId };
   }
 
+  async stopSessionRun(sessionId: string, botId?: string, chatId?: string, reason = "Session execution was stopped."): Promise<{ stopped: boolean; sessionPublicId?: string }> {
+    const session = await this.store.getSession(sessionId);
+    if (!session) {
+      return { stopped: false };
+    }
+
+    const stopped = stopSpawnedExecution(session.sessionId);
+    if (stopped) {
+      await this.log({
+        timestamp: new Date().toISOString(),
+        remoteSessionId: session.sessionId,
+        botId,
+        chatId,
+        provider: "system",
+        direction: "system",
+        text: reason,
+      });
+    }
+
+    return { stopped, sessionPublicId: session.publicId };
+  }
+
   async routeMessage(botId: string, chatId: string, message: string): Promise<ProviderResponse[]> {
     const chatSession = await this.requireChat(botId, chatId);
 
@@ -417,6 +444,25 @@ export class BridgeService {
     });
 
     return this.withSessionLock(session.sessionId, () => this.routeSession(session, message, "pc-ui"));
+  }
+
+  async routeSessionMessageForChat(sessionId: string, botId: string, chatId: string, message: string): Promise<ProviderResponse[]> {
+    const session = await this.store.getSession(sessionId);
+    if (!session) {
+      throw new Error(`Session was not found: ${sessionId}`);
+    }
+
+    await this.log({
+      timestamp: new Date().toISOString(),
+      remoteSessionId: session.sessionId,
+      botId,
+      chatId,
+      provider: "telegram",
+      direction: "in",
+      text: message,
+    });
+
+    return this.withSessionLock(session.sessionId, () => this.routeSession(session, message, "telegram", botId, chatId));
   }
 
   formatStatus(chatSession: ChatSession | undefined): string {
@@ -604,7 +650,11 @@ export class BridgeService {
         lastUsedAt: new Date().toISOString(),
       };
 
-      if (chatId) {
+      const stillBound = chatId
+        ? await this.store.getChatSession(botId ?? "telegram", chatId)
+        : undefined;
+
+      if (chatId && stillBound?.session.sessionId === session.sessionId) {
         await this.store.upsertProviderForChat(botId ?? "telegram", chatId, provider, updatedProviderSession, session.workspace);
       } else {
         await this.store.upsertProviderForSession(
