@@ -48,6 +48,15 @@ type TodoItem = {
   updatedAt: string;
   attempts: number;
   note?: string;
+  workspace?: string;
+  memoryPath?: string;
+  officialDocs?: string;
+  relatedFiles?: string;
+  action?: string;
+  caution?: string;
+  doneEvidence?: string;
+  reportFormat?: string;
+  stopCondition?: string;
 };
 
 type TodoState = {
@@ -88,7 +97,7 @@ export class AgentMemoryService {
     const now = new Date().toISOString();
     const current = await fs.readFile(currentPath, "utf8").catch(() => "");
     const previousTodo = await this.readTodo(session);
-    const nextItems = this.extractTodoItems(normalizedInstruction, now);
+    const nextItems = this.extractTodoItems(session, normalizedInstruction, now);
 
     if (current.trim() && decision.kind === "new") {
       await this.appendHistory(session, {
@@ -133,6 +142,7 @@ export class AgentMemoryService {
       ``,
       `## Immediate Rule`,
       `Manage work by the TODO list. Do not treat this note alone as active work if no TODO item is pending or in progress.`,
+      `Each TODO must expose where to work, what evidence proves completion, and when to stop.`,
       `Before repeating a prior step, check history/attempts. If the same work repeats 3 times, stop and report the blocker.`,
       ``,
     ].join("\n");
@@ -231,7 +241,9 @@ export class AgentMemoryService {
     return [
       "continue:",
       "현재 RemoteAgent TODO를 이어서 진행해.",
-      "새 계획을 반복하지 말고, in_progress 또는 pending 항목 중 하나를 실제로 수행한 뒤 증거와 함께 보고해.",
+      "새 계획을 반복하지 말고, in_progress 또는 pending 항목 중 하나를 실제로 수행해.",
+      "TODO의 작업 폴더, memory, 관련 문서, 하지 말 것, 완료 증거, 중단 조건을 먼저 확인해.",
+      "보고는 반드시 실제 증거(파일 경로/라인, git diff, 명령 출력, 확인한 로그 중 해당되는 것)를 포함해.",
       "",
       this.formatTodoSummary(todo),
     ].join("\n");
@@ -478,6 +490,14 @@ export class AgentMemoryService {
 
     const lines = [
       "RemoteAgent managed context:",
+      [
+        "Task execution rules:",
+        "- Start from the TODO workspace/memory/docs pointers before searching broadly.",
+        "- Do one concrete TODO item at a time; separate investigation from modification.",
+        "- Do not claim external delivery, dashboard access, deployment, or file transfer without RemoteAgent-confirmed evidence.",
+        "- If the same action or progress repeats 3 times, stop, mark the blocker, and report the exact blocker.",
+        "- A final report must include concrete evidence: changed files, relevant line references, git diff/status, command output, or log path.",
+      ].join("\n"),
       todo.items.length > 0
         ? ["Task TODO:", this.formatTodoSummary(todo, true)].join("\n")
         : "Task TODO: none. Treat any current note as context only, not active work.",
@@ -520,7 +540,7 @@ export class AgentMemoryService {
     });
   }
 
-  private extractTodoItems(text: string, now: string): TodoItem[] {
+  private extractTodoItems(session: SessionRecord, text: string, now: string): TodoItem[] {
     if (!this.looksActionableInstruction(text)) {
       return [];
     }
@@ -533,14 +553,35 @@ export class AgentMemoryService {
       .map((line) => line.replace(/^[-*]\s+/, "").replace(/^\d+[.)]\s+/, "").trim())
       .filter((line) => line.length >= 4 && this.looksActionableInstruction(line));
     const source = listed.length > 1 ? listed : [text.trim()];
-    return source.slice(0, 20).map((item, index) => ({
+    return source.slice(0, 20).map((item, index) => this.createTodoItem(session, item, index, now));
+  }
+
+  private createTodoItem(session: SessionRecord, text: string, index: number, now: string): TodoItem {
+    const purpose = this.truncate(this.normalizeTodoPurpose(text), 500);
+    const sessionMemory = this.sessionDir(session);
+    return {
       id: `T${String(index + 1).padStart(3, "0")}`,
-      text: this.truncate(item, 500),
+      text: purpose,
       status: index === 0 ? "in_progress" : "pending",
       createdAt: now,
       updatedAt: now,
       attempts: 0,
-    }));
+      workspace: session.workspace,
+      memoryPath: sessionMemory,
+      officialDocs: "Check managed document pins first; then inspect docs/ under the workspace if relevant.",
+      relatedFiles: "Unknown until inspected. Record exact files after the first concrete check.",
+      action: this.truncate(text.trim(), 700),
+      caution: "Do not infer dashboard access, deployment, Telegram/file delivery, or external state without direct evidence.",
+      doneEvidence: "Report concrete evidence: file paths/lines, git diff/status, command output, logs, or transferred file confirmation.",
+      reportFormat: "Progress: what was checked or changed + evidence + next concrete step. Final: result + evidence + remaining risk.",
+      stopCondition: "If the same check/progress repeats 3 times, or required access/evidence is missing, stop and report the blocker.",
+    };
+  }
+
+  private normalizeTodoPurpose(text: string): string {
+    const compact = text.replace(/\s+/g, " ").trim();
+    const sentence = compact.split(/(?<=[.!?。！？])\s+/u)[0] || compact;
+    return sentence;
   }
 
   private looksActionableInstruction(text: string): boolean {
@@ -712,7 +753,20 @@ export class AgentMemoryService {
     return items.map((item, index) => {
       const marker = item.status === "done" ? "완료" : item.status === "in_progress" ? "진행중" : item.status === "blocked" ? "차단" : "대기";
       const note = item.note ? ` (${item.note})` : "";
-      return `${index + 1}. [${item.id}] ${marker}: ${item.text}${note}`;
+      const details = [
+        `${index + 1}. [${item.id}] ${marker}: ${item.text}${note}`,
+        item.workspace ? `   - 작업 폴더: ${item.workspace}` : undefined,
+        item.memoryPath ? `   - 개인 memory: ${item.memoryPath}` : undefined,
+        item.officialDocs ? `   - 공식 문서 위치: ${item.officialDocs}` : undefined,
+        item.relatedFiles ? `   - 관련 파일: ${item.relatedFiles}` : undefined,
+        item.action ? `   - 해야 할 일: ${item.action}` : undefined,
+        item.caution ? `   - 하지 말 것: ${item.caution}` : undefined,
+        item.doneEvidence ? `   - 완료 조건: ${item.doneEvidence}` : undefined,
+        item.stopCondition ? `   - 중단 조건: ${item.stopCondition}` : undefined,
+        item.reportFormat ? `   - 보고 형식: ${item.reportFormat}` : undefined,
+        `   - attempts: ${item.attempts}`,
+      ].filter(Boolean);
+      return details.join("\n");
     }).join("\n");
   }
 
