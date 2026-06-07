@@ -170,7 +170,7 @@ export const config = {
   telegramBotRoles,
   telegramOwnerId: readOptional("TELEGRAM_OWNER_ID"),
   telegramMessageBatchMs: readNonNegativeTimeout("TELEGRAM_MESSAGE_BATCH_MS", 1500),
-  telegramAutoProgressMaxTurns: readOptionalNonNegativeInteger("TELEGRAM_AUTO_PROGRESS_MAX_TURNS"),
+  telegramAutoProgressMaxTurns: readOptionalNonNegativeInteger("TELEGRAM_AUTO_PROGRESS_MAX_TURNS") ?? 1,
   telegramEmptyResponseRetries: readOptionalNonNegativeInteger("TELEGRAM_EMPTY_RESPONSE_RETRIES") ?? 1,
   telegramRetryableErrorRetries: readOptionalNonNegativeInteger("TELEGRAM_RETRYABLE_ERROR_RETRIES") ?? 2,
   telegramRetryableErrorDelayMs: readNonNegativeTimeout("TELEGRAM_RETRYABLE_ERROR_DELAY_MS", 5_000),
