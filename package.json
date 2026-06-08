@@ -1,6 +1,6 @@
 {
   "name": "remoteagent",
-  "version": "0.9.13",
+  "version": "0.9.14",
   "private": true,
   "description": "Personal installable session server for continuing local AI work across PC and Telegram",
   "license": "MIT",
@@ -14,6 +14,7 @@
     "start": "node dist/index.js",
     "check": "tsc --noEmit -p tsconfig.json",
     "selftest:telegram": "npm run build && node scripts/selftest-telegram-update.mjs",
+    "e2e:telegram-user": "node scripts/e2e-telegram-user.mjs",
     "prepare": "npm run build",
     "version:patch": "npm version --no-git-tag-version patch",
     "version:minor": "npm version --no-git-tag-version minor",
@@ -21,7 +22,9 @@
   },
   "dependencies": {
     "dotenv": "^16.6.1",
-    "grammy": "^1.38.3"
+    "grammy": "^1.38.3",
+    "input": "^1.0.1",
+    "telegram": "^2.26.22"
   },
   "devDependencies": {
     "@types/node": "^24.6.1",
