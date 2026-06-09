@@ -65,14 +65,6 @@ type TodoState = {
   items: TodoItem[];
 };
 
-export type InstructionDecision = {
-  kind: "new" | "continue" | "ambiguous";
-  instruction: string;
-  reason: string;
-  currentSummary?: string;
-  todoSummary?: string;
-};
-
 const MAX_CONTEXT_CHARS = 2500;
 
 export class AgentMemoryService {
@@ -89,21 +81,18 @@ export class AgentMemoryService {
   }
 
   async recordInstruction(session: SessionRecord, instruction: string): Promise<void> {
-    const decision = await this.classifyInstruction(session, instruction);
-    const normalizedInstruction = decision.instruction;
+    const directive = this.extractInstructionDirective(instruction);
+    const mode = directive?.kind ?? "message";
+    const normalizedInstruction = (directive?.instruction ?? instruction).trim();
+    if (!normalizedInstruction) {
+      return;
+    }
     const dir = this.sessionDir(session);
     await fs.mkdir(dir, { recursive: true });
     const currentPath = path.join(dir, "current.md");
     const now = new Date().toISOString();
     const current = await fs.readFile(currentPath, "utf8").catch(() => "");
-    const previousTodo = await this.readTodo(session);
-    const nextItems = this.extractTodoItems(session, normalizedInstruction, now);
-    const currentInstruction = current.trim() ? this.summarizeCurrentTask(current) : "";
-    const fallbackItems = decision.kind === "continue" && previousTodo.items.length === 0 && currentInstruction
-      ? this.extractTodoItems(session, currentInstruction, now)
-      : [];
-
-    if (current.trim() && decision.kind === "new") {
+    if (current.trim() && mode === "new") {
       await this.appendHistory(session, {
         type: "archived",
         at: now,
@@ -113,172 +102,41 @@ export class AgentMemoryService {
       await this.resetAttempts(session);
     }
 
-    if (decision.kind === "new") {
-      await this.writeTodo(session, {
-        createdAt: now,
-        updatedAt: now,
-        items: nextItems,
-      });
-    } else if (decision.kind === "continue") {
-      const mergedItems = previousTodo.items.length > 0
-        ? previousTodo.items.slice()
-        : (fallbackItems.length > 0 ? fallbackItems : nextItems);
-      if (nextItems.length > 0 && previousTodo.items.length > 0) {
-        for (const item of nextItems) {
-          if (!this.matchesAnyTodo(item.text, mergedItems)) {
-            mergedItems.push({ ...item, status: "pending" as TodoStatus });
-          }
-        }
-      }
-      await this.writeTodo(session, {
-        createdAt: previousTodo.createdAt || now,
-        updatedAt: now,
-        items: this.ensureActiveTodo(mergedItems),
-      });
-    }
-
     const next = [
-      `# Current Task`,
+      `# Session State`,
       ``,
       `session: ${session.publicId}`,
       `updatedAt: ${now}`,
       ``,
-      `## Instruction`,
+      `## Latest User Instruction`,
       normalizedInstruction.trim(),
       ``,
-      `## Immediate Rule`,
-      `Manage work by the TODO list. Do not treat this note alone as active work if no TODO item is pending or in progress.`,
-      `Each TODO must expose where to work, what evidence proves completion, and when to stop.`,
-      `Before repeating a prior step, check history/attempts. If the same work repeats 3 times, stop and report the blocker.`,
+      `## Harness Rule`,
+      `RemoteAgent records this as session state. It must not block provider execution because a TODO is missing.`,
+      `Use this state to avoid repeating completed work, reverting prior changes, or losing the current workspace after context compaction.`,
       ``,
     ].join("\n");
     await fs.writeFile(currentPath, next, "utf8");
-    await this.appendHistory(session, { type: "instruction", at: now, mode: decision.kind, text: normalizedInstruction.trim() });
+    await this.appendHistory(session, { type: "instruction", at: now, mode, text: normalizedInstruction.trim() });
   }
 
-  async classifyInstruction(session: SessionRecord, instruction: string): Promise<InstructionDecision> {
-    const normalized = instruction.trim();
-    const directive = this.extractInstructionDirective(normalized);
-    if (directive) {
-      return {
-        kind: directive.kind,
-        instruction: directive.instruction,
-        reason: `explicit ${directive.kind} directive`,
-      };
-    }
-
-    const current = await this.currentTaskText(session);
-    const todo = await this.readTodo(session);
-    const activeTodo = this.activeTodoItems(todo);
-    if (activeTodo.length === 0) {
-      if (current.trim() && this.looksLikeContinuation(normalized)) {
-        return {
-          kind: "continue",
-          instruction: normalized,
-          reason: "continuation phrase with current task note",
-          currentSummary: this.summarizeCurrentTask(current),
-          todoSummary: this.formatTodoSummary(todo),
-        };
-      }
-      return { kind: "new", instruction: normalized, reason: current.trim() ? "task note exists but no active todo" : "no active todo" };
-    }
-
-    if (this.matchesAnyTodo(normalized, activeTodo)) {
-      return {
-        kind: "continue",
-        instruction: normalized,
-        reason: "message matches active todo",
-        currentSummary: this.summarizeCurrentTask(current),
-        todoSummary: this.formatTodoSummary(todo),
-      };
-    }
-
-    if (this.looksLikeContinuation(normalized)) {
-      return {
-        kind: "continue",
-        instruction: normalized,
-        reason: "continuation phrase",
-        currentSummary: this.summarizeCurrentTask(current),
-        todoSummary: this.formatTodoSummary(todo),
-      };
-    }
-
-    if (this.looksLikeNewTask(normalized)) {
-      return {
-        kind: "new",
-        instruction: normalized,
-        reason: "new task phrase",
-        currentSummary: this.summarizeCurrentTask(current),
-        todoSummary: this.formatTodoSummary(todo),
-      };
-    }
-
-    return {
-      kind: "ambiguous",
-      instruction: normalized,
-      reason: "active task exists and the new message is not clearly continue or new",
-      currentSummary: this.summarizeCurrentTask(current),
-      todoSummary: this.formatTodoSummary(todo),
-    };
-  }
-
-  formatAmbiguousInstruction(session: SessionRecord, decision: InstructionDecision): string {
-    return [
-      `현재 ${session.publicId}에 미완료 TODO가 있습니다.`,
-      "",
-      decision.todoSummary ? `현재 TODO:\n${decision.todoSummary}` : undefined,
-      decision.currentSummary ? `참고 지시:\n${decision.currentSummary}` : undefined,
-      "",
-      "방금 메시지가 기존 작업을 이어가는지, 새 작업인지 확실하지 않습니다.",
-      "",
-      "기존 작업을 이어가려면:",
-      `continue: ${decision.instruction}`,
-      "",
-      "새 작업으로 전환하려면:",
-      `new: ${decision.instruction}`,
-      "",
-      "명령어로도 가능합니다:",
-      "/task continue <내용>",
-      "/task new <내용>",
-    ].filter(Boolean).join("\n");
-  }
-
-  async hasActiveTodo(session: SessionRecord): Promise<boolean> {
-    return this.activeTodoItems(await this.readTodo(session)).length > 0;
-  }
-
-  async createContinuePrompt(session: SessionRecord): Promise<string | undefined> {
-    const todo = await this.readTodo(session);
-    const active = this.activeTodoItems(todo);
-    if (active.length === 0) {
-      return undefined;
-    }
-    return [
-      "continue:",
-      "현재 RemoteAgent TODO를 이어서 진행해.",
-      "새 계획을 반복하지 말고, in_progress 또는 pending 항목 중 하나를 실제로 수행해.",
-      "TODO의 작업 폴더, memory, 관련 문서, 하지 말 것, 완료 증거, 중단 조건을 먼저 확인해.",
-      "보고는 반드시 실제 증거(파일 경로/라인, git diff, 명령 출력, 확인한 로그 중 해당되는 것)를 포함해.",
-      "",
-      this.formatTodoSummary(todo),
-    ].join("\n");
-  }
-
-  async formatTaskStatus(session: SessionRecord): Promise<string> {
+  async formatSessionState(session: SessionRecord): Promise<string> {
     const current = await this.currentTaskText(session);
     const todo = await this.readTodo(session);
     const active = this.activeTodoItems(todo);
+    const history = await this.readRecentHistory(session, 6);
     return [
-      `Task status for ${session.publicId}`,
+      `Session state for ${session.publicId}`,
       "",
-      todo.items.length > 0 ? this.formatTodoSummary(todo, true) : "TODO: none",
+      current.trim() ? `Current note:\n${this.summarizeCurrentTask(current)}` : "Current note: none",
       "",
-      `activeTodo: ${active.length > 0 ? "yes" : "no"}`,
-      current.trim() ? `\nCurrent note:\n${this.summarizeCurrentTask(current)}` : undefined,
+      todo.items.length > 0 ? `Legacy TODO notes:\n${this.formatTodoSummary(todo, true)}` : undefined,
+      active.length > 0 ? `legacyActiveTodo: yes` : undefined,
+      history.length > 0 ? ["Recent history:", ...history.map((entry) => `- ${entry}`)].join("\n") : undefined,
     ].filter(Boolean).join("\n");
   }
 
-  async completeTask(session: SessionRecord, summary: string): Promise<void> {
+  async clearSessionState(session: SessionRecord, summary: string): Promise<void> {
     const dir = this.sessionDir(session);
     const currentPath = path.join(dir, "current.md");
     const current = await fs.readFile(currentPath, "utf8").catch(() => "");
@@ -301,6 +159,36 @@ export class AgentMemoryService {
     });
     await fs.rm(currentPath, { force: true }).catch(() => undefined);
     await this.resetAttempts(session);
+  }
+
+  async completeTask(session: SessionRecord, summary: string): Promise<void> {
+    await this.clearSessionState(session, summary);
+  }
+
+  async addSessionNote(session: SessionRecord, note: string): Promise<void> {
+    const normalized = note.trim();
+    if (!normalized) {
+      return;
+    }
+    const dir = this.sessionDir(session);
+    await fs.mkdir(dir, { recursive: true });
+    const now = new Date().toISOString();
+    await this.appendHistory(session, { type: "note", at: now, text: this.truncate(normalized, 2000) });
+    const currentPath = path.join(dir, "current.md");
+    const current = await fs.readFile(currentPath, "utf8").catch(() => "");
+    const next = [
+      current.trim() || [
+        "# Session State",
+        "",
+        `session: ${session.publicId}`,
+        `updatedAt: ${now}`,
+      ].join("\n"),
+      "",
+      "## Operator Note",
+      normalized,
+      "",
+    ].join("\n");
+    await fs.writeFile(currentPath, next, "utf8");
   }
 
   async recordProgress(session: SessionRecord, text: string): Promise<{ count: number; repeated: boolean }> {
@@ -496,6 +384,7 @@ export class AgentMemoryService {
   async formatProviderContext(session: SessionRecord): Promise<string> {
     const current = await fs.readFile(path.join(this.sessionDir(session), "current.md"), "utf8").catch(() => "");
     const todo = await this.readTodo(session);
+    const history = await this.readRecentHistory(session, 5);
     const docs = Object.values(await this.readDocs()).slice(0, 30);
     const secrets = Object.keys(await this.readSecrets()).sort();
     const artifacts = (await this.readJson<ArtifactRecord[]>(this.artifactsPath, []))
@@ -512,17 +401,19 @@ export class AgentMemoryService {
         "- docs: use managed document pins first, then inspect docs/ under the workspace when relevant.",
       ].join("\n"),
       [
-        "Task execution rules:",
-        "- Start from the TODO workspace/memory/docs pointers before searching broadly.",
-        "- Do one concrete TODO item at a time; separate investigation from modification.",
+        "Harness execution rules:",
+        "- Treat the user message as the active instruction unless the user explicitly says otherwise.",
+        "- RemoteAgent state is guidance only; never refuse work because a TODO is missing.",
+        "- Use the workspace/memory/docs pointers before searching broadly.",
         "- Do not claim external delivery, dashboard access, deployment, or file transfer without RemoteAgent-confirmed evidence.",
         "- If the same action or progress repeats 3 times, stop, mark the blocker, and report the exact blocker.",
         "- A final report must include concrete evidence: changed files, relevant line references, git diff/status, command output, or log path.",
       ].join("\n"),
       todo.items.length > 0
-        ? ["Task TODO:", this.formatTodoSummary(todo, true, true)].join("\n")
-        : "Task TODO: none. Treat any current note as context only, not active work.",
+        ? ["Legacy task notes:", this.formatTodoSummary(todo, true, true)].join("\n")
+        : undefined,
       current.trim() ? ["Current task note:", this.truncate(current.trim(), 700)].join("\n") : undefined,
+      history.length > 0 ? ["Recent session history:", ...history.map((entry) => `- ${entry}`)].join("\n") : undefined,
       docs.length > 0
         ? ["Document index:", ...docs.map((doc) => `- ${doc.keyword}: ${doc.targetPath}${doc.note ? ` (${doc.note})` : ""}`)].join("\n")
         : undefined,
@@ -539,6 +430,26 @@ export class AgentMemoryService {
 
   private async currentTaskText(session: SessionRecord): Promise<string> {
     return fs.readFile(path.join(this.sessionDir(session), "current.md"), "utf8").catch(() => "");
+  }
+
+  private async readRecentHistory(session: SessionRecord, limit: number): Promise<string[]> {
+    const historyPath = path.join(this.sessionDir(session), "history.ndjson");
+    const raw = await fs.readFile(historyPath, "utf8").catch(() => "");
+    return raw
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .slice(-limit)
+      .map((line) => {
+        try {
+          const entry = JSON.parse(line) as { type?: string; at?: string; mode?: string; text?: string; summary?: string; reason?: string };
+          const kind = entry.mode ? `${entry.type ?? "event"}:${entry.mode}` : entry.type ?? "event";
+          const body = entry.summary ?? entry.text ?? entry.reason ?? "";
+          return `${entry.at ?? "unknown"} ${kind}: ${this.truncate(body.replace(/\s+/g, " ").trim(), 220)}`;
+        } catch {
+          return this.truncate(line.replace(/\s+/g, " ").trim(), 220);
+        }
+      });
   }
 
   private todoPath(session: SessionRecord): string {

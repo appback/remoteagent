@@ -132,8 +132,8 @@ async function send(text) {
 }
 
 await send("/start codex");
-await send("/task new 같은 값을 봐야하는데 로직문제네? 확인해줘\\n이미 수정되어 있을 수 있어.\\n나한테 수정했다고 보고했었거든");
-await send("/task");
+await send("같은 값을 봐야하는데 로직문제네? 확인해줘\\n이미 수정되어 있을 수 있어.\\n나한테 수정했다고 보고했었거든");
+await send("/state");
 
 const state = JSON.parse(await fs.readFile(path.join(dataDir, "state.json"), "utf8"));
 const sessions = Object.values(state.sessions);
@@ -141,17 +141,6 @@ if (sessions.length !== 1) {
   throw new Error(`Expected one session, got ${sessions.length}`);
 }
 const session = sessions[0];
-const todo = JSON.parse(await fs.readFile(path.join(dataDir, "managed", "sessions", session.publicId, "todo.json"), "utf8"));
-const active = todo.items.filter((item) => item.status === "in_progress" || item.status === "pending");
-if (todo.items.length !== 1) {
-  throw new Error(`Expected one TODO item, got ${todo.items.length}`);
-}
-if (active.length !== 1) {
-  throw new Error(`Expected one active TODO item, got ${active.length}`);
-}
-if (/Auto-cleared non-actionable/.test(JSON.stringify(todo))) {
-  throw new Error("TODO was auto-cleared as non-actionable");
-}
 if (providerCalls.length !== 0) {
   throw new Error(`Provider should not run before batch flush, got ${providerCalls.length} calls`);
 }
@@ -164,10 +153,13 @@ const developmentSession = {
   workspace: path.join(tmp, "dev-workspace"),
 };
 await memory.recordInstruction(developmentSession, "그럼 기프티쇼 개발 진행해");
-const developmentTodo = JSON.parse(await fs.readFile(path.join(dataDir, "managed", "sessions", "SDEV", "todo.json"), "utf8"));
-const developmentActive = developmentTodo.items.filter((item) => item.status === "in_progress" || item.status === "pending");
-if (developmentActive.length !== 1 || !/기프티쇼|개발|진행/.test(developmentActive[0].text)) {
-  throw new Error(`Development instruction did not create an active TODO: ${JSON.stringify(developmentTodo, null, 2)}`);
+const developmentCurrent = await fs.readFile(path.join(dataDir, "managed", "sessions", "SDEV", "current.md"), "utf8");
+if (!/기프티쇼 개발 진행해/.test(developmentCurrent) || /Manage work by the TODO list/.test(developmentCurrent)) {
+  throw new Error(`Development instruction was not stored as session state: ${developmentCurrent}`);
+}
+const developmentContext = await memory.formatProviderContext(developmentSession);
+if (/Task TODO: none|context only|Manage work by the TODO list/.test(developmentContext)) {
+  throw new Error(`Provider context still contains TODO gate language: ${developmentContext}`);
 }
 
 const legacySession = {
@@ -179,24 +171,24 @@ const legacySession = {
 const legacyDir = path.join(dataDir, "managed", "sessions", "SLEG");
 await fs.mkdir(legacyDir, { recursive: true });
 await fs.writeFile(path.join(legacyDir, "current.md"), [
-  "# Current Task",
+  "# Session State",
   "",
   "session: SLEG",
   "updatedAt: 2026-06-09T00:00:00.000Z",
   "",
-  "## Instruction",
+  "## Latest User Instruction",
   "그럼 기프티쇼 개발 진행해",
   "",
-  "## Immediate Rule",
-  "Manage work by the TODO list.",
+  "## Harness Rule",
+  "RemoteAgent records this as session state.",
   "",
 ].join("\n"), "utf8");
 await fs.writeFile(path.join(legacyDir, "todo.json"), JSON.stringify({ createdAt: "", updatedAt: "", items: [] }, null, 2), "utf8");
 await memory.recordInstruction(legacySession, "진행해");
 const recoveredTodo = JSON.parse(await fs.readFile(path.join(legacyDir, "todo.json"), "utf8"));
 const recoveredActive = recoveredTodo.items.filter((item) => item.status === "in_progress" || item.status === "pending");
-if (recoveredActive.length !== 1 || !/기프티쇼|개발/.test(recoveredActive[0].text)) {
-  throw new Error(`Continuation did not recover TODO from current note: ${JSON.stringify(recoveredTodo, null, 2)}`);
+if (recoveredActive.length !== 0) {
+  throw new Error(`Continuation unexpectedly created TODO gate items: ${JSON.stringify(recoveredTodo, null, 2)}`);
 }
 
 const calls = (await fs.readFile(telegramCalls, "utf8"))
@@ -211,20 +203,18 @@ const calls = (await fs.readFile(telegramCalls, "utf8"))
       text: Buffer.from(textB64, "base64").toString("utf8"),
     };
   });
-if (!calls.some((call) => call.method === "sendMessage" && /새 작업으로 접수/.test(call.text))) {
-  throw new Error(`Did not see immediate /task new acknowledgement. Calls: ${JSON.stringify(calls, null, 2)}`);
+if (!calls.some((call) => call.method === "sendMessage" && /Session state for S001/.test(call.text))) {
+  throw new Error(`Did not see state status reply. Calls: ${JSON.stringify(calls, null, 2)}`);
 }
-if (!calls.some((call) => call.method === "sendMessage" && /Task status for S001/.test(call.text))) {
-  throw new Error(`Did not see task status reply. Calls: ${JSON.stringify(calls, null, 2)}`);
+if (calls.some((call) => /미완료 TODO|\/task|새 작업으로 접수/.test(call.text))) {
+  throw new Error(`Task gate language leaked to Telegram replies. Calls: ${JSON.stringify(calls, null, 2)}`);
 }
 
 console.log(JSON.stringify({
   ok: true,
   dataDir,
   session: session.publicId,
-  todoItems: todo.items.length,
-  activeTodoItems: active.length,
-  developmentTodoItems: developmentActive.length,
+  developmentState: /기프티쇼 개발 진행해/.test(developmentCurrent),
   recoveredTodoItems: recoveredActive.length,
   providerCalls: providerCalls.length,
   telegramSendMessages: calls.filter((call) => call.method === "sendMessage").length,

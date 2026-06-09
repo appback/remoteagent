@@ -33,7 +33,7 @@ const HELP_TEXT = [
   "/sandbox codex <read-only|workspace-write|danger-full-access>",
   "/status",
   "/reportbot list|set <target>|status|test|send|clear",
-  "/task status|clear|new|continue",
+  "/state [clear|note <text>]",
   "/artifacts list|cleanup <days>",
   "/secret set|list|remove",
   "/docs pin|find|list|remove",
@@ -84,7 +84,7 @@ const RECOGNIZED_COMMANDS = new Set([
   "sandbox",
   "status",
   "reportbot",
-  "task",
+  "state",
   "artifacts",
   "secret",
   "docs",
@@ -610,7 +610,7 @@ ${bridge.formatStatus(mapping)}`);
     );
   });
 
-  bot.command("task", async (ctx) => {
+  bot.command("state", async (ctx) => {
     const botId = getBotId();
     const chatId = String(ctx.chat.id);
     const { args, rest } = parseCommand(ctx.message?.text, 1);
@@ -622,48 +622,25 @@ ${bridge.formatStatus(mapping)}`);
     }
 
     if (action === "status") {
-      await reply(ctx, await memoryService.formatTaskStatus(mapping.session));
+      await reply(ctx, await memoryService.formatSessionState(mapping.session));
       return;
     }
     if (action === "clear") {
-      await memoryService.completeTask(mapping.session, "Cleared by /task clear.");
-      await reply(ctx, `Cleared current task ledger for ${mapping.session.publicId}.`);
+      await memoryService.clearSessionState(mapping.session, "Cleared by /state clear.");
+      await reply(ctx, `Cleared session state for ${mapping.session.publicId}.`);
       return;
     }
-    if (action === "new" || action === "continue") {
-      const instruction = rest?.trim();
-      if (!instruction) {
-        if (action === "new") {
-          await reply(ctx, "Usage: `/task new <내용>`", { parse_mode: "Markdown" });
-          return;
-        }
-        const continuePrompt = await memoryService.createContinuePrompt(mapping.session);
-        if (!continuePrompt) {
-          await reply(ctx, "이어갈 미완료 TODO가 없습니다. 새 작업은 `/task new <내용>` 또는 일반 메시지로 시작하세요.", { parse_mode: "Markdown" });
-          return;
-        }
-        autoContinue.clear(botId, chatId, mapping.session.sessionId);
-        messageBatcher.cancelPending(botId, chatId);
-        await messageBatcher.enqueue({ botToken: token, telegramChatId: ctx.chat.id }, botId, chatId, continuePrompt);
-        await reply(ctx, "미완료 TODO 이어가기로 접수했습니다.");
+    if (action === "note") {
+      const note = rest?.trim();
+      if (!note) {
+        await reply(ctx, "Usage: `/state note <내용>`", { parse_mode: "Markdown" });
         return;
       }
-      const prefix = action === "new" ? "new:" : "continue:";
-      if (action === "new") {
-        autoContinue.requestStop(botId, chatId, mapping.session.sessionId);
-        messageBatcher.cancelPending(botId, chatId);
-        messageBatcher.cancelManual(botId, chatId);
-        await bridge.stopSessionRun(mapping.session.sessionId, botId, chatId, "New /task instruction replaced the previous task.");
-      } else {
-        autoContinue.clear(botId, chatId, mapping.session.sessionId);
-        messageBatcher.cancelPending(botId, chatId);
-      }
-      await memoryService.recordInstruction(mapping.session, `${prefix} ${instruction}`);
-      await reply(ctx, action === "new" ? "새 작업으로 접수했습니다." : "기존 작업 이어가기로 접수했습니다.");
-      await messageBatcher.enqueue({ botToken: token, telegramChatId: ctx.chat.id }, botId, chatId, `${prefix} ${instruction}`);
+      await memoryService.addSessionNote(mapping.session, note);
+      await reply(ctx, `Saved state note for ${mapping.session.publicId}.`);
       return;
     }
-    await reply(ctx, "Usage: `/task status`, `/task clear`, `/task new <내용>`, or `/task continue <내용>`", { parse_mode: "Markdown" });
+    await reply(ctx, "Usage: `/state`, `/state clear`, or `/state note <내용>`", { parse_mode: "Markdown" });
   });
 
   bot.command("artifacts", async (ctx) => {
@@ -1053,17 +1030,6 @@ ${bridge.formatStatus(mapping)}`);
     }
 
     await bridge.logSystem(botId, chatId, `Telegram text received (${text.length} chars).`);
-    if (mapping) {
-      const decision = await memoryService.classifyInstruction(mapping.session, text);
-      if (decision.kind === "ambiguous") {
-        await bridge.logSystem(botId, chatId, `Telegram text held for task clarification: ${decision.reason}`);
-        await reply(ctx, memoryService.formatAmbiguousInstruction(mapping.session, decision));
-        return;
-      }
-      await messageBatcher.enqueue({ botToken: token, telegramChatId: ctx.chat.id }, botId, chatId, decision.kind === "new" ? `new: ${decision.instruction}` : `continue: ${decision.instruction}`);
-      return;
-    }
-
     await messageBatcher.enqueue({ botToken: token, telegramChatId: ctx.chat.id }, botId, chatId, text);
   });
 

@@ -102,6 +102,9 @@ Current command surface implemented in `src/bot.ts`:
 | `/new` | Creates and binds a new session using the saved default mode in a new managed workspace |
 | `/switch <session>` | Rebinds this chat to an existing RemoteAgent session |
 | `/status` | Shows current session, workspace, provider, and sandbox state |
+| `/state` | Shows the session ledger that is injected as provider context |
+| `/state clear` | Clears the current session ledger without deleting the session |
+| `/state note <text>` | Adds an operator note to the session ledger |
 | `/reportbot list` | Lists available report targets discovered from owner private chats across registered bots |
 | `/reportbot set <number\|@bot_username>` | Assigns a separate Telegram bot/chat as the report target for this session |
 | `/reportbot status` | Shows whether this session has a Telegram report target |
