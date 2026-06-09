@@ -62,11 +62,12 @@ process.env.TELEGRAM_EMPTY_RESPONSE_RETRIES = "0";
 process.env.TELEGRAM_RETRYABLE_ERROR_RETRIES = "0";
 process.env.LOCAL_UI_ENABLED = "false";
 
-const [{ createBot }, { BridgeService }, { BotManagementService }, { FileStore }] = await Promise.all([
+const [{ createBot }, { BridgeService }, { BotManagementService }, { FileStore }, { AgentMemoryService }] = await Promise.all([
   import(path.join(root, "dist", "bot.js")),
   import(path.join(root, "dist", "services", "bridge-service.js")),
   import(path.join(root, "dist", "services", "bot-management-service.js")),
   import(path.join(root, "dist", "store", "file-store.js")),
+  import(path.join(root, "dist", "services", "agent-memory-service.js")),
 ]);
 
 const providerCalls = [];
@@ -155,6 +156,49 @@ if (providerCalls.length !== 0) {
   throw new Error(`Provider should not run before batch flush, got ${providerCalls.length} calls`);
 }
 
+const memory = new AgentMemoryService(dataDir);
+const developmentSession = {
+  ...session,
+  sessionId: "selftest-development-session",
+  publicId: "SDEV",
+  workspace: path.join(tmp, "dev-workspace"),
+};
+await memory.recordInstruction(developmentSession, "그럼 기프티쇼 개발 진행해");
+const developmentTodo = JSON.parse(await fs.readFile(path.join(dataDir, "managed", "sessions", "SDEV", "todo.json"), "utf8"));
+const developmentActive = developmentTodo.items.filter((item) => item.status === "in_progress" || item.status === "pending");
+if (developmentActive.length !== 1 || !/기프티쇼|개발|진행/.test(developmentActive[0].text)) {
+  throw new Error(`Development instruction did not create an active TODO: ${JSON.stringify(developmentTodo, null, 2)}`);
+}
+
+const legacySession = {
+  ...session,
+  sessionId: "selftest-legacy-session",
+  publicId: "SLEG",
+  workspace: path.join(tmp, "legacy-workspace"),
+};
+const legacyDir = path.join(dataDir, "managed", "sessions", "SLEG");
+await fs.mkdir(legacyDir, { recursive: true });
+await fs.writeFile(path.join(legacyDir, "current.md"), [
+  "# Current Task",
+  "",
+  "session: SLEG",
+  "updatedAt: 2026-06-09T00:00:00.000Z",
+  "",
+  "## Instruction",
+  "그럼 기프티쇼 개발 진행해",
+  "",
+  "## Immediate Rule",
+  "Manage work by the TODO list.",
+  "",
+].join("\n"), "utf8");
+await fs.writeFile(path.join(legacyDir, "todo.json"), JSON.stringify({ createdAt: "", updatedAt: "", items: [] }, null, 2), "utf8");
+await memory.recordInstruction(legacySession, "진행해");
+const recoveredTodo = JSON.parse(await fs.readFile(path.join(legacyDir, "todo.json"), "utf8"));
+const recoveredActive = recoveredTodo.items.filter((item) => item.status === "in_progress" || item.status === "pending");
+if (recoveredActive.length !== 1 || !/기프티쇼|개발/.test(recoveredActive[0].text)) {
+  throw new Error(`Continuation did not recover TODO from current note: ${JSON.stringify(recoveredTodo, null, 2)}`);
+}
+
 const calls = (await fs.readFile(telegramCalls, "utf8"))
   .trim()
   .split("\n")
@@ -180,6 +224,8 @@ console.log(JSON.stringify({
   session: session.publicId,
   todoItems: todo.items.length,
   activeTodoItems: active.length,
+  developmentTodoItems: developmentActive.length,
+  recoveredTodoItems: recoveredActive.length,
   providerCalls: providerCalls.length,
   telegramSendMessages: calls.filter((call) => call.method === "sendMessage").length,
 }, null, 2));

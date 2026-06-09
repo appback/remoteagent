@@ -98,6 +98,10 @@ export class AgentMemoryService {
     const current = await fs.readFile(currentPath, "utf8").catch(() => "");
     const previousTodo = await this.readTodo(session);
     const nextItems = this.extractTodoItems(session, normalizedInstruction, now);
+    const currentInstruction = current.trim() ? this.summarizeCurrentTask(current) : "";
+    const fallbackItems = decision.kind === "continue" && previousTodo.items.length === 0 && currentInstruction
+      ? this.extractTodoItems(session, currentInstruction, now)
+      : [];
 
     if (current.trim() && decision.kind === "new") {
       await this.appendHistory(session, {
@@ -116,7 +120,9 @@ export class AgentMemoryService {
         items: nextItems,
       });
     } else if (decision.kind === "continue") {
-      const mergedItems = previousTodo.items.length > 0 ? previousTodo.items.slice() : nextItems;
+      const mergedItems = previousTodo.items.length > 0
+        ? previousTodo.items.slice()
+        : (fallbackItems.length > 0 ? fallbackItems : nextItems);
       if (nextItems.length > 0 && previousTodo.items.length > 0) {
         for (const item of nextItems) {
           if (!this.matchesAnyTodo(item.text, mergedItems)) {
@@ -165,6 +171,15 @@ export class AgentMemoryService {
     const todo = await this.readTodo(session);
     const activeTodo = this.activeTodoItems(todo);
     if (activeTodo.length === 0) {
+      if (current.trim() && this.looksLikeContinuation(normalized)) {
+        return {
+          kind: "continue",
+          instruction: normalized,
+          reason: "continuation phrase with current task note",
+          currentSummary: this.summarizeCurrentTask(current),
+          todoSummary: this.formatTodoSummary(todo),
+        };
+      }
       return { kind: "new", instruction: normalized, reason: current.trim() ? "task note exists but no active todo" : "no active todo" };
     }
 
@@ -606,10 +621,10 @@ export class AgentMemoryService {
     if (!normalized) {
       return false;
     }
-    if (/너는\s+.+담당|담당이야|역할은|프로젝트는/i.test(normalized) && !/수정|고쳐|구현|추가|저장|기록|남겨|배포|테스트|검증|실패|에러|버그|문제|postback|로그|히스토리|마이그레이션|근거|참조|산출물|확인/i.test(normalized)) {
+    if (/너는\s+.+담당|담당이야|역할은|프로젝트는/i.test(normalized) && !/개발|진행|등록|처리|시작|작업|수정|고쳐|구현|추가|저장|기록|남겨|배포|테스트|검증|실패|에러|버그|문제|postback|로그|히스토리|마이그레이션|근거|참조|산출물|확인/i.test(normalized)) {
       return false;
     }
-    return /수정|고쳐|구현|추가|저장|기록|남겨|배포|테스트|검증|확인|찾아|분석|비교|참조|근거|이유|왜|어떤|어디|어떻게|산출물|자료|데이터|출처|실패|에러|버그|문제|DB|database|api|postback|로그|히스토리|마이그레이션|schema|table|endpoint/i.test(normalized);
+    return /개발|진행|등록|처리|시작|작업|구축|연동|작성|수정|고쳐|구현|추가|저장|기록|남겨|배포|테스트|검증|확인|찾아|분석|비교|참조|근거|이유|왜|어떤|어디|어떻게|산출물|자료|데이터|출처|실패|에러|버그|문제|DB|database|api|postback|로그|히스토리|마이그레이션|schema|table|endpoint/i.test(normalized);
   }
 
   private activeTodoItems(todo: TodoState): TodoItem[] {
