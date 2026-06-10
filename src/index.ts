@@ -144,16 +144,25 @@ async function setTelegramCommandsViaCurl(
 ): Promise<void> {
   const url = `https://api.telegram.org/bot${token}/setMyCommands`;
   const payload = JSON.stringify({ commands });
-  const { stdout, stderr } = await execFileAsync("curl", [
-    "-sS",
-    "--max-time",
-    "20",
-    "-H",
-    "Content-Type: application/json",
-    "-d",
-    payload,
-    url,
-  ]);
+  let stdout: string;
+  let stderr: string | undefined;
+
+  try {
+    const result = await execFileAsync("curl", [
+      "-sS",
+      "--max-time",
+      "20",
+      "-H",
+      "Content-Type: application/json",
+      "-d",
+      payload,
+      url,
+    ]);
+    stdout = result.stdout;
+    stderr = result.stderr;
+  } catch (error) {
+    throw new Error(`Telegram setMyCommands curl failed: ${formatCurlError(error)}`);
+  }
 
   if (stderr?.trim()) {
     console.error(`curl stderr for setMyCommands: ${stderr.trim()}`);
@@ -163,6 +172,23 @@ async function setTelegramCommandsViaCurl(
   if (!parsed.ok) {
     throw new Error(parsed.description || "Telegram setMyCommands failed.");
   }
+}
+
+function formatCurlError(error: unknown): string {
+  if (!(error instanceof Error)) {
+    return String(error);
+  }
+
+  const code = typeof error === "object" && error !== null && "code" in error
+    ? String((error as { code?: unknown }).code ?? "")
+    : "";
+  const stderr = typeof error === "object" && error !== null && "stderr" in error
+    ? String((error as { stderr?: unknown }).stderr ?? "").trim()
+    : "";
+
+  return [code ? `code=${code}` : undefined, stderr || error.message]
+    .filter(Boolean)
+    .join(" ");
 }
 
 main().catch((error: unknown) => {
