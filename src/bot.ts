@@ -67,6 +67,7 @@ const REPORT_PROTOCOL_PROMPT = [
   "After the first line, write only the user-facing report.",
   "Do not stop at intent like 'I will' or 'I am going to'. Do the work first, then report progress/result, or report blocked.",
   "Do not claim that a Telegram message or file was sent unless RemoteAgent explicitly confirmed that delivery step.",
+  "If REPORT:result claims code, DB, deploy, commit, push, file delivery, or verification work is complete, include concrete evidence such as file paths, commands, logs, commit IDs, digests, or line references.",
   "If you want RemoteAgent to send a file, include a separate line exactly like: TELEGRAM_FILE: /absolute/path/to/file",
   "Do not call Telegram APIs directly or use bot credentials even if they appear to exist in the environment.",
   "If this session has an approved Telegram report target, background jobs may report through the helper command: node \"$REMOTEAGENT_REPORT_BIN\" --session \"$REMOTEAGENT_PUBLIC_SESSION_ID\" \"message\"",
@@ -1431,6 +1432,7 @@ async function routeTelegramWorkLoop(
   let emptyResponseRetryCount = 0;
   let retryableErrorCount = 0;
   let untaggedIntentRetryCount = 0;
+  let missingEvidenceRetryCount = 0;
   let deliveredProgressCount = 0;
   const ensureStillBound = async (phase: string): Promise<void> => {
     if (!sessionId) {
@@ -1480,6 +1482,7 @@ async function routeTelegramWorkLoop(
 
       if (parsed.kind === "progress") {
         untaggedIntentRetryCount = 0;
+        missingEvidenceRetryCount = 0;
         deliveredProgressCount += 1;
         if (currentSession) {
           const progress = await memoryService.recordProgress(currentSession.session, parsed.chunks.join("\n"));
@@ -1505,12 +1508,39 @@ async function routeTelegramWorkLoop(
         continue;
       }
 
-      if (parsed.kind === "result" || parsed.kind === "blocked") {
+      if (parsed.kind === "result") {
         untaggedIntentRetryCount = 0;
+        const resultText = parsed.chunks.join("\n");
+        const evidenceIssue = classifyMissingResultEvidence(resultText);
+        if (evidenceIssue && missingEvidenceRetryCount < 1) {
+          missingEvidenceRetryCount += 1;
+          const retryMessage = `${turnLabel} returned a result without required evidence: ${evidenceIssue}`;
+          await bridge.logSystem(botId, chatId, retryMessage);
+          prompt = appendManagedContext(formatMissingEvidenceRetryPrompt(resultText, evidenceIssue), managedContext);
+          continue;
+        }
+        if (evidenceIssue) {
+          const blockedMessage = [
+            "Provider reported a completed result without concrete evidence after a retry.",
+            `Reason: ${evidenceIssue}`,
+            "Automatic continuation stopped so the work is not accepted on an unsupported claim.",
+          ].join("\n");
+          await bridge.logSystem(botId, chatId, blockedMessage);
+          autoContinue.clear(botId, chatId, sessionId);
+          return [blockedMessage];
+        }
         await ensureStillBound(`${turnLabel} final delivery`);
-        if (currentSession && parsed.kind === "result") {
+        if (currentSession) {
           await memoryService.completeTask(currentSession.session, parsed.chunks.join("\n"));
         }
+        autoContinue.clear(botId, chatId, sessionId);
+        return parsed.chunks;
+      }
+
+      if (parsed.kind === "blocked") {
+        untaggedIntentRetryCount = 0;
+        missingEvidenceRetryCount = 0;
+        await ensureStillBound(`${turnLabel} final delivery`);
         autoContinue.clear(botId, chatId, sessionId);
         return parsed.chunks;
       }
@@ -1689,6 +1719,62 @@ function formatUntaggedIntentRetryPrompt(lastResponse: string): string {
     "If you cannot continue, use REPORT:blocked and state the exact blocker.",
     "",
     "Previous invalid response:",
+    lastResponse.trim(),
+  ].join("\n");
+}
+
+function classifyMissingResultEvidence(text: string): string | undefined {
+  const normalized = text.trim();
+  if (!normalized) {
+    return undefined;
+  }
+
+  if (!looksLikeCompletedWorkClaim(normalized)) {
+    return undefined;
+  }
+
+  if (hasConcreteResultEvidence(normalized)) {
+    return undefined;
+  }
+
+  return "REPORT:result claims completed work but does not include concrete evidence.";
+}
+
+function looksLikeCompletedWorkClaim(text: string): boolean {
+  return [
+    /(수정|반영|배포|커밋|푸시|전송|생성|삭제|추가|적용|구현|저장|업데이트|등록|제거|정리|마이그레이션|검증|테스트|빌드).{0,24}(완료|했습니다|됐습니다|성공|통과)/,
+    /(완료했습니다|완료됐습니다|끝났습니다|처리했습니다)/,
+    /\b(fixed|implemented|deployed|committed|pushed|sent|created|deleted|updated|added|removed|migrated|verified|passed|completed|built)\b/i,
+  ].some((pattern) => pattern.test(text));
+}
+
+function hasConcreteResultEvidence(text: string): boolean {
+  return [
+    /```/,
+    /`[^`]+`/,
+    /\b[0-9a-f]{7,40}\b/i,
+    /sha256:[0-9a-f]{20,}/i,
+    /\b(HTTP\s+\d{3}|exit\s+\d+|active|passed|failed)\b/i,
+    /\b(npm run|git status|git diff|node --check|docker|journalctl|curl|psql|grep|rg|bash)\b/i,
+    /\/[A-Za-z0-9._/-]{3,}/,
+    /\b[A-Za-z0-9._/-]+\.(?:js|ts|tsx|jsx|sql|md|json|yml|yaml|sh|py|css|html|txt|log)\b/,
+    /:\d{1,5}\b/,
+    /(근거|검증|변경 파일|커밋|푸시|배포|로그|명령|출력|파일|라인|경로|상태)\s*:/,
+  ].some((pattern) => pattern.test(text));
+}
+
+function formatMissingEvidenceRetryPrompt(lastResponse: string, issue: string): string {
+  return [
+    "The previous REPORT:result was not accepted by RemoteAgent.",
+    issue,
+    "RemoteAgent does not inspect code or decide whether the work is correct.",
+    "You, the provider, must either provide concrete evidence for the completed work or change the reply to REPORT:progress or REPORT:blocked.",
+    "Do not repeat a bare completion claim.",
+    "Reply with exactly one first line: REPORT:progress, REPORT:result, or REPORT:blocked.",
+    "",
+    "Accepted evidence examples: file paths, line references, commands and outputs, log paths, commit IDs, image digests, deployment status, or explicit verification output.",
+    "",
+    "Previous unsupported result:",
     lastResponse.trim(),
   ].join("\n");
 }

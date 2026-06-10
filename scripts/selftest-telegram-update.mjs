@@ -73,6 +73,7 @@ const [{ createBot }, { BridgeService }, { BotManagementService }, { FileStore }
 const providerCalls = [];
 let providerMode = "success";
 let untaggedIntentCalls = 0;
+let missingEvidenceCalls = 0;
 const provider = {
   async send(request) {
     providerCalls.push(request);
@@ -89,6 +90,18 @@ const provider = {
         output: untaggedIntentCalls === 1
           ? "계속 진행해서 확인하겠습니다."
           : "REPORT:result\nuntagged intent recovered",
+      };
+    }
+    if (providerMode === "missing-evidence") {
+      missingEvidenceCalls += 1;
+      return {
+        provider: "codex",
+        sessionId: request.sessionId || "mock-thread",
+        publicSessionId: request.publicSessionId,
+        cwd: request.cwd,
+        output: missingEvidenceCalls === 1
+          ? "REPORT:result\n수정 완료했습니다."
+          : "REPORT:result\n수정 완료했습니다.\n\n근거:\n- 변경 파일: `src/example.ts`\n- 검증: `npm run check` 통과",
       };
     }
     return {
@@ -300,6 +313,33 @@ if (untaggedCalls.some((call) => call.method === "sendMessage" && /^계속 진�
   throw new Error(`Untagged intent-only response leaked as final Telegram message. Calls: ${JSON.stringify(untaggedCalls, null, 2)}`);
 }
 
+providerMode = "missing-evidence";
+await send("/batch start");
+await send("missing evidence regression test");
+await send("/batch send");
+
+const evidenceCalls = (await fs.readFile(telegramCalls, "utf8"))
+  .trim()
+  .split("\n")
+  .filter(Boolean)
+  .map((line) => {
+    const [method, chatId, textB64 = ""] = line.split("\t");
+    return {
+      method,
+      chat_id: chatId,
+      text: Buffer.from(textB64, "base64").toString("utf8"),
+    };
+  });
+if (missingEvidenceCalls !== 2) {
+  throw new Error(`Expected missing evidence result to be retried once, got ${missingEvidenceCalls}`);
+}
+if (!evidenceCalls.some((call) => /변경 파일: `src\/example\.ts`/.test(call.text) && /`npm run check` 통과/.test(call.text))) {
+  throw new Error(`Did not see recovered result with concrete evidence. Calls: ${JSON.stringify(evidenceCalls, null, 2)}`);
+}
+if (evidenceCalls.some((call) => call.method === "sendMessage" && /^수정 완료했습니다\.$/.test(call.text.trim()))) {
+  throw new Error(`Evidence-free completion leaked as final Telegram message. Calls: ${JSON.stringify(evidenceCalls, null, 2)}`);
+}
+
 console.log(JSON.stringify({
   ok: true,
   dataDir,
@@ -311,8 +351,9 @@ console.log(JSON.stringify({
   intentRetryOption: 4,
   providerCalls: providerCalls.length,
   untaggedIntentCalls,
+  missingEvidenceCalls,
   timeoutFinalMessage: true,
-  telegramSendMessages: untaggedCalls.filter((call) => call.method === "sendMessage").length,
+  telegramSendMessages: evidenceCalls.filter((call) => call.method === "sendMessage").length,
 }, null, 2));
 
 process.exit(0);
