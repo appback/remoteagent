@@ -1662,7 +1662,7 @@ function formatRetryableProviderRetryMessage(issue: RetryableProviderIssue, atte
 
   switch (issue.kind) {
     case "capacity":
-      return `일시적인 장애로 인해 ${waitSeconds}초 후 다시 시도합니다. (${attempt}/${maxAttempts})`;
+      return `선택한 모델이 capacity 상태라 ${waitSeconds}초 후 다시 시도합니다. (${attempt}/${maxAttempts})`;
     case "empty-response":
       return `후속 응답이 비어 있어 ${waitSeconds}초 후 다시 시도합니다. (${attempt}/${maxAttempts})`;
   }
@@ -1671,7 +1671,7 @@ function formatRetryableProviderRetryMessage(issue: RetryableProviderIssue, atte
 function formatRetryableProviderFinalMessage(issue: RetryableProviderIssue): string {
   switch (issue.kind) {
     case "capacity":
-      return "일시적인 장애가 반복되어 자동 재시도를 중단했습니다. 잠시 후 다시 시도하거나 다른 모델로 변경해 주세요.";
+      return "선택한 모델이 capacity 상태라 자동 재시도를 모두 사용했습니다. 잠시 후 다시 시도하거나 `/model`로 다른 모델을 선택해 주세요.";
     case "empty-response":
       return "후속 응답이 반복해서 비어 자동 재시도를 중단했습니다. 같은 세션에서 다시 시도해 주세요.";
   }

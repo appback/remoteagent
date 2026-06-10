@@ -26,7 +26,7 @@ RemoteAgent should never leak raw provider event payloads directly to Telegram u
 
 When retries are exhausted:
 
-- capacity -> ask the user to retry later or switch models
+- capacity -> say the selected model is at capacity, then ask the user to retry later or switch models
 - empty response -> explain that automatic continuation stopped after repeated empty follow-up replies
 
 When a provider process reaches `COMMAND_TIMEOUT_MS`:
