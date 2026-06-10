@@ -32,7 +32,7 @@ const HELP_TEXT = [
   "/stop",
   "/sandbox codex <read-only|workspace-write|danger-full-access>",
   "/status",
-  "/option [retry <count>|timeout <seconds>]",
+  "/option [retry <count>|timeout <seconds>|intent <count>]",
   "/reportbot list|set <target>|status|test|send|clear",
   "/state [clear|note <text>]",
   "/artifacts list|cleanup <days>",
@@ -554,8 +554,8 @@ ${bridge.formatStatus(mapping)}`);
       return;
     }
 
-    if (option !== "retry" && option !== "timeout") {
-      await reply(ctx, "Usage: `/option retry <count>` or `/option timeout <seconds>`\n\n`retry` controls automatic continuation turns. `timeout` controls one provider execution limit.", {
+    if (option !== "retry" && option !== "timeout" && option !== "intent") {
+      await reply(ctx, "Usage: `/option retry <count>`, `/option timeout <seconds>`, or `/option intent <count>`\n\n`retry` controls automatic continuation turns. `timeout` controls one provider execution limit. `intent` controls retries for untagged intent-only provider replies.", {
         parse_mode: "Markdown",
       });
       return;
@@ -564,7 +564,9 @@ ${bridge.formatStatus(mapping)}`);
     if (!value) {
       const current = option === "retry"
         ? `Current automatic continuation retry limit: ${formatRetryLimit(config.telegramAutoProgressMaxTurns)}\n\nUsage: \`/option retry <count>\``
-        : `Current provider execution timeout: ${formatTimeoutSeconds(config.commandTimeoutMs)}\n\nUsage: \`/option timeout <seconds>\``;
+        : option === "intent"
+          ? `Current untagged intent retry limit: ${formatRetryLimit(config.telegramUntaggedIntentRetries)}\n\nUsage: \`/option intent <count>\``
+          : `Current provider execution timeout: ${formatTimeoutSeconds(config.commandTimeoutMs)}\n\nUsage: \`/option timeout <seconds>\``;
       await reply(ctx, current, {
         parse_mode: "Markdown",
       });
@@ -575,7 +577,9 @@ ${bridge.formatStatus(mapping)}`);
     if (!Number.isInteger(parsed) || parsed < 0 || String(parsed) !== value.trim()) {
       await reply(ctx, option === "retry"
         ? "Invalid retry count. Use `0` or a positive integer, for example `/option retry 6`."
-        : "Invalid timeout. Use seconds as a positive integer, for example `/option timeout 600`.", {
+        : option === "intent"
+          ? "Invalid intent retry count. Use `0` or a positive integer, for example `/option intent 4`."
+          : "Invalid timeout. Use seconds as a positive integer, for example `/option timeout 600`.", {
         parse_mode: "Markdown",
       });
       return;
@@ -586,6 +590,14 @@ ${bridge.formatStatus(mapping)}`);
       await upsertInstalledEnvValue("TELEGRAM_AUTO_PROGRESS_MAX_TURNS", String(parsed));
       await bridge.logSystem(botId, chatId, `Runtime option TELEGRAM_AUTO_PROGRESS_MAX_TURNS set to ${parsed}.`);
       await reply(ctx, `Set automatic continuation retry limit to ${formatRetryLimit(parsed)}.\n\nSaved: TELEGRAM_AUTO_PROGRESS_MAX_TURNS=${parsed}`);
+      return;
+    }
+
+    if (option === "intent") {
+      config.telegramUntaggedIntentRetries = parsed;
+      await upsertInstalledEnvValue("TELEGRAM_UNTAGGED_INTENT_RETRIES", String(parsed));
+      await bridge.logSystem(botId, chatId, `Runtime option TELEGRAM_UNTAGGED_INTENT_RETRIES set to ${parsed}.`);
+      await reply(ctx, `Set untagged intent retry limit to ${formatRetryLimit(parsed)}.\n\nSaved: TELEGRAM_UNTAGGED_INTENT_RETRIES=${parsed}`);
       return;
     }
 
@@ -1415,6 +1427,7 @@ async function routeTelegramWorkLoop(
   const emptyResponseRetries = config.telegramEmptyResponseRetries;
   const retryableErrorRetries = config.telegramRetryableErrorRetries;
   const retryableErrorDelayMs = config.telegramRetryableErrorDelayMs;
+  const untaggedIntentRetries = config.telegramUntaggedIntentRetries;
   let emptyResponseRetryCount = 0;
   let retryableErrorCount = 0;
   let untaggedIntentRetryCount = 0;
@@ -1502,7 +1515,7 @@ async function routeTelegramWorkLoop(
         return parsed.chunks;
       }
 
-      if (looksLikeUntaggedIntentOnlyResponse(parsed.chunks.join("\n")) && untaggedIntentRetryCount < 2) {
+      if (looksLikeUntaggedIntentOnlyResponse(parsed.chunks.join("\n")) && untaggedIntentRetryCount < untaggedIntentRetries) {
         untaggedIntentRetryCount += 1;
         const retryMessage = `${turnLabel} returned an untagged intent-only response; asking provider to do concrete work before replying.`;
         await bridge.logSystem(botId, chatId, retryMessage);
@@ -1843,12 +1856,15 @@ function formatRuntimeOptions(): string {
     "Runtime options",
     `- retry: ${formatRetryLimit(config.telegramAutoProgressMaxTurns)} (TELEGRAM_AUTO_PROGRESS_MAX_TURNS)`,
     `- timeout: ${formatTimeoutSeconds(config.commandTimeoutMs)} (COMMAND_TIMEOUT_MS)`,
+    `- intent: ${formatRetryLimit(config.telegramUntaggedIntentRetries)} (TELEGRAM_UNTAGGED_INTENT_RETRIES)`,
     "",
     "Usage:",
     "/option retry <count>",
     "/option timeout <seconds>",
+    "/option intent <count>",
     "",
     "`retry 0` disables the automatic continuation limit.",
+    "`intent 0` disables untagged intent-only response retries.",
   ].join("\n");
 }
 

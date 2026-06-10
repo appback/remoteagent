@@ -151,6 +151,7 @@ async function send(text) {
 await send("/start codex");
 await send("/option retry 6");
 await send("/option timeout 600");
+await send("/option intent 4");
 await send("같은 값을 봐야하는데 로직문제네? 확인해줘\\n이미 수정되어 있을 수 있어.\\n나한테 수정했다고 보고했었거든");
 await send("/state");
 
@@ -169,6 +170,9 @@ if (!/^TELEGRAM_AUTO_PROGRESS_MAX_TURNS=6$/m.test(envText)) {
 }
 if (!/^COMMAND_TIMEOUT_MS=600000$/m.test(envText)) {
   throw new Error(`Option command did not persist command timeout to .env: ${envText}`);
+}
+if (!/^TELEGRAM_UNTAGGED_INTENT_RETRIES=4$/m.test(envText)) {
+  throw new Error(`Option command did not persist untagged intent retry limit to .env: ${envText}`);
 }
 
 const memory = new AgentMemoryService(dataDir);
@@ -238,6 +242,9 @@ if (!calls.some((call) => call.method === "sendMessage" && /Set automatic contin
 if (!calls.some((call) => call.method === "sendMessage" && /Set provider execution timeout to 600s/.test(call.text))) {
   throw new Error(`Did not see option timeout acknowledgement. Calls: ${JSON.stringify(calls, null, 2)}`);
 }
+if (!calls.some((call) => call.method === "sendMessage" && /Set untagged intent retry limit to 4/.test(call.text))) {
+  throw new Error(`Did not see option intent acknowledgement. Calls: ${JSON.stringify(calls, null, 2)}`);
+}
 if (calls.some((call) => /미완료 TODO|\/task|새 작업으로 접수/.test(call.text))) {
   throw new Error(`Task gate language leaked to Telegram replies. Calls: ${JSON.stringify(calls, null, 2)}`);
 }
@@ -301,6 +308,7 @@ console.log(JSON.stringify({
   recoveredTodoItems: recoveredActive.length,
   retryOption: 6,
   timeoutOptionMs: 600000,
+  intentRetryOption: 4,
   providerCalls: providerCalls.length,
   untaggedIntentCalls,
   timeoutFinalMessage: true,

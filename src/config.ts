@@ -174,6 +174,7 @@ export const config = {
   telegramEmptyResponseRetries: readOptionalNonNegativeInteger("TELEGRAM_EMPTY_RESPONSE_RETRIES") ?? 1,
   telegramRetryableErrorRetries: readOptionalNonNegativeInteger("TELEGRAM_RETRYABLE_ERROR_RETRIES") ?? 2,
   telegramRetryableErrorDelayMs: readNonNegativeTimeout("TELEGRAM_RETRYABLE_ERROR_DELAY_MS", 5_000),
+  telegramUntaggedIntentRetries: readOptionalNonNegativeInteger("TELEGRAM_UNTAGGED_INTENT_RETRIES") ?? 2,
   dataDir: defaultDataDir,
   defaultMode: readMode("DEFAULT_MODE", "codex"),
   defaultWorkspace: path.resolve(process.env.DEFAULT_WORKSPACE?.trim() || os.homedir()),
