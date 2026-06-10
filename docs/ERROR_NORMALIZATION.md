@@ -15,20 +15,26 @@ RemoteAgent should never leak raw provider event payloads directly to Telegram u
 - `provider.capacity.retryable`
   - example: `Selected model is at capacity`
   - behavior: send a progress-style retry notice, wait, retry automatically
-- `provider.timeout.retryable`
-  - example: provider timed out before a final reply
-  - behavior: send a progress-style retry notice, wait, retry automatically
 - `provider.empty_response.retryable`
   - example: provider returned no usable final text after progress
   - behavior: send a progress-style retry notice, wait, retry automatically
+- `provider.timeout.final`
+  - example: `Codex timed out after 600s without returning a final reply`
+  - behavior: do not retry automatically; explain the exact configured timeout that killed the provider process
 
 ## Current terminal behavior
 
 When retries are exhausted:
 
 - capacity -> ask the user to retry later or switch models
-- timeout -> explain that automatic continuation stopped after repeated delays
 - empty response -> explain that automatic continuation stopped after repeated empty follow-up replies
+
+When a provider process reaches `COMMAND_TIMEOUT_MS`:
+
+- report that the provider process exceeded the configured execution timeout
+- do not say only that "response was delayed"
+- do not invent a cause such as context compaction, provider outage, or model quality unless the provider output explicitly says that
+- tell the operator to increase `/option timeout <seconds>` for long-running work
 
 ## Maintenance rule
 

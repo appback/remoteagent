@@ -178,7 +178,7 @@ export const config = {
   defaultMode: readMode("DEFAULT_MODE", "codex"),
   defaultWorkspace: path.resolve(process.env.DEFAULT_WORKSPACE?.trim() || os.homedir()),
   workspaceRoot: path.resolve(process.env.WORKSPACE_ROOT?.trim() || path.join(os.homedir(), "workspaces", "remoteagent")),
-  commandTimeoutMs: readTimeout("COMMAND_TIMEOUT_MS", 120_000),
+  commandTimeoutMs: readTimeout("COMMAND_TIMEOUT_MS", 600_000),
   setupCommandTimeoutMs: readTimeout("SETUP_COMMAND_TIMEOUT_MS", 600_000),
   codexBin: readOptional("CODEX_BIN") || "codex",
   codexSandboxMode: readCodexSandboxMode("CODEX_SANDBOX_MODE"),

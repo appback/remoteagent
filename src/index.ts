@@ -86,6 +86,9 @@ async function main(): Promise<void> {
 
   for (const bot of bots) {
     const username = bot.botInfo.username;
+    await configureTelegramCommandMenu(bot).catch((error) => {
+      console.error(`Failed to configure command menu for @${username}:`, error);
+    });
     console.log(`Bot @${username} is ready`);
   }
 
@@ -94,6 +97,25 @@ async function main(): Promise<void> {
   });
 
   await Promise.all(bots.map((bot) => startManualPolling(bot)));
+}
+
+async function configureTelegramCommandMenu(bot: Bot): Promise<void> {
+  await bot.api.setMyCommands([
+    { command: "start", description: "Start a new Codex or Claude session" },
+    { command: "list", description: "List sessions" },
+    { command: "switch", description: "Switch to a session" },
+    { command: "status", description: "Show current session status" },
+    { command: "state", description: "Show or edit session state notes" },
+    { command: "option", description: "Show or change runtime options" },
+    { command: "model", description: "Show or change provider model" },
+    { command: "stop", description: "Stop active work and clear queued messages" },
+    { command: "batch", description: "Collect and send a multi-message batch" },
+    { command: "reportbot", description: "Configure report delivery bot" },
+    { command: "install", description: "Install or update Codex or Claude" },
+    { command: "login", description: "Run provider login flow" },
+    { command: "reset", description: "Clear this chat binding" },
+    { command: "help", description: "Show command help" },
+  ]);
 }
 
 main().catch((error: unknown) => {
