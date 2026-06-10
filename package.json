@@ -1,6 +1,6 @@
 {
   "name": "remoteagent",
-  "version": "0.9.17",
+  "version": "0.9.18",
   "private": true,
   "description": "Personal installable session server for continuing local AI work across PC and Telegram",
   "license": "MIT",

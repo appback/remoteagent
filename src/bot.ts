@@ -32,6 +32,7 @@ const HELP_TEXT = [
   "/stop",
   "/sandbox codex <read-only|workspace-write|danger-full-access>",
   "/status",
+  "/option [retry <count>]",
   "/reportbot list|set <target>|status|test|send|clear",
   "/state [clear|note <text>]",
   "/artifacts list|cleanup <days>",
@@ -83,6 +84,7 @@ const RECOGNIZED_COMMANDS = new Set([
   "stop",
   "sandbox",
   "status",
+  "option",
   "reportbot",
   "state",
   "artifacts",
@@ -537,6 +539,47 @@ ${bridge.formatStatus(mapping)}`);
     const chatId = String(ctx.chat.id);
     const mapping = await bridge.status(botId, chatId);
     await reply(ctx, bridge.formatStatus(mapping));
+  });
+
+  bot.command("option", async (ctx) => {
+    await ensureOwnerControlAccess(ctx);
+    const botId = getBotId();
+    const chatId = String(ctx.chat.id);
+    const { args } = parseCommand(ctx.message?.text, 2);
+    const option = args[0]?.toLowerCase();
+    const value = args[1];
+
+    if (!option) {
+      await reply(ctx, formatRuntimeOptions());
+      return;
+    }
+
+    if (option !== "retry") {
+      await reply(ctx, "Usage: `/option retry <count>`\n\n`count` must be 0 or a positive integer. `0` disables the automatic continuation limit.", {
+        parse_mode: "Markdown",
+      });
+      return;
+    }
+
+    if (!value) {
+      await reply(ctx, `Current automatic continuation retry limit: ${formatRetryLimit(config.telegramAutoProgressMaxTurns)}\n\nUsage: \`/option retry <count>\``, {
+        parse_mode: "Markdown",
+      });
+      return;
+    }
+
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isInteger(parsed) || parsed < 0 || String(parsed) !== value.trim()) {
+      await reply(ctx, "Invalid retry count. Use `0` or a positive integer, for example `/option retry 6`.", {
+        parse_mode: "Markdown",
+      });
+      return;
+    }
+
+    config.telegramAutoProgressMaxTurns = parsed;
+    await upsertInstalledEnvValue("TELEGRAM_AUTO_PROGRESS_MAX_TURNS", String(parsed));
+    await bridge.logSystem(botId, chatId, `Runtime option TELEGRAM_AUTO_PROGRESS_MAX_TURNS set to ${parsed}.`);
+    await reply(ctx, `Set automatic continuation retry limit to ${formatRetryLimit(parsed)}.\n\nSaved: TELEGRAM_AUTO_PROGRESS_MAX_TURNS=${parsed}`);
   });
 
   bot.command("reportbot", async (ctx) => {
@@ -1697,6 +1740,44 @@ function parseCommand(text: string | undefined, headCount: number): { args: stri
     args,
     rest: remaining || undefined,
   };
+}
+
+function formatRuntimeOptions(): string {
+  return [
+    "Runtime options",
+    `- retry: ${formatRetryLimit(config.telegramAutoProgressMaxTurns)} (TELEGRAM_AUTO_PROGRESS_MAX_TURNS)`,
+    "",
+    "Usage:",
+    "/option retry <count>",
+    "",
+    "`0` disables the automatic continuation limit.",
+  ].join("\n");
+}
+
+function formatRetryLimit(value: number): string {
+  return value === 0 ? "unlimited" : `${value}`;
+}
+
+async function upsertInstalledEnvValue(key: string, value: string): Promise<void> {
+  if (!/^[A-Z0-9_]+$/.test(key)) {
+    throw new Error(`Invalid environment key: ${key}`);
+  }
+  const envPath = path.join(config.dataDir, ".env");
+  await fs.mkdir(path.dirname(envPath), { recursive: true });
+  const existing = await fs.readFile(envPath, "utf8").catch(() => "");
+  const lines = existing ? existing.split(/\r?\n/) : [];
+  let updated = false;
+  const next = lines.map((line) => {
+    if (line.startsWith(`${key}=`)) {
+      updated = true;
+      return `${key}=${value}`;
+    }
+    return line;
+  });
+  if (!updated) {
+    next.push(`${key}=${value}`);
+  }
+  await fs.writeFile(envPath, `${next.join("\n").replace(/\n+$/u, "")}\n`, "utf8");
 }
 
 function chunkMessage(text: string, size: number): string[] {

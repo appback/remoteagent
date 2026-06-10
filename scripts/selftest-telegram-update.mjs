@@ -132,6 +132,7 @@ async function send(text) {
 }
 
 await send("/start codex");
+await send("/option retry 6");
 await send("같은 값을 봐야하는데 로직문제네? 확인해줘\\n이미 수정되어 있을 수 있어.\\n나한테 수정했다고 보고했었거든");
 await send("/state");
 
@@ -143,6 +144,10 @@ if (sessions.length !== 1) {
 const session = sessions[0];
 if (providerCalls.length !== 0) {
   throw new Error(`Provider should not run before batch flush, got ${providerCalls.length} calls`);
+}
+const envText = await fs.readFile(path.join(dataDir, ".env"), "utf8");
+if (!/^TELEGRAM_AUTO_PROGRESS_MAX_TURNS=6$/m.test(envText)) {
+  throw new Error(`Option command did not persist retry limit to .env: ${envText}`);
 }
 
 const memory = new AgentMemoryService(dataDir);
@@ -206,6 +211,9 @@ const calls = (await fs.readFile(telegramCalls, "utf8"))
 if (!calls.some((call) => call.method === "sendMessage" && /Session state for S001/.test(call.text))) {
   throw new Error(`Did not see state status reply. Calls: ${JSON.stringify(calls, null, 2)}`);
 }
+if (!calls.some((call) => call.method === "sendMessage" && /Set automatic continuation retry limit to 6/.test(call.text))) {
+  throw new Error(`Did not see option retry acknowledgement. Calls: ${JSON.stringify(calls, null, 2)}`);
+}
 if (calls.some((call) => /미완료 TODO|\/task|새 작업으로 접수/.test(call.text))) {
   throw new Error(`Task gate language leaked to Telegram replies. Calls: ${JSON.stringify(calls, null, 2)}`);
 }
@@ -216,6 +224,7 @@ console.log(JSON.stringify({
   session: session.publicId,
   developmentState: /기프티쇼 개발 진행해/.test(developmentCurrent),
   recoveredTodoItems: recoveredActive.length,
+  retryOption: 6,
   providerCalls: providerCalls.length,
   telegramSendMessages: calls.filter((call) => call.method === "sendMessage").length,
 }, null, 2));
