@@ -100,7 +100,7 @@ async function main(): Promise<void> {
 }
 
 async function configureTelegramCommandMenu(bot: Bot): Promise<void> {
-  await bot.api.setMyCommands([
+  const commands = [
     { command: "start", description: "Start a new Codex or Claude session" },
     { command: "list", description: "List sessions" },
     { command: "switch", description: "Switch to a session" },
@@ -115,7 +115,22 @@ async function configureTelegramCommandMenu(bot: Bot): Promise<void> {
     { command: "login", description: "Run provider login flow" },
     { command: "reset", description: "Clear this chat binding" },
     { command: "help", description: "Show command help" },
-  ]);
+  ];
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      await bot.api.setMyCommands(commands);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3) {
+        await sleep(1000 * attempt);
+      }
+    }
+  }
+
+  throw lastError;
 }
 
 main().catch((error: unknown) => {
