@@ -117,10 +117,15 @@ async function configureTelegramCommandMenu(bot: Bot): Promise<void> {
     { command: "help", description: "Show command help" },
   ];
 
+  const token = (bot as unknown as { token?: string }).token;
+  if (!token) {
+    throw new Error("Telegram bot token is unavailable for command menu registration.");
+  }
+
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
-      await bot.api.setMyCommands(commands);
+      await setTelegramCommandsViaCurl(token, commands);
       return;
     } catch (error) {
       lastError = error;
@@ -131,6 +136,33 @@ async function configureTelegramCommandMenu(bot: Bot): Promise<void> {
   }
 
   throw lastError;
+}
+
+async function setTelegramCommandsViaCurl(
+  token: string,
+  commands: Array<{ command: string; description: string }>,
+): Promise<void> {
+  const url = `https://api.telegram.org/bot${token}/setMyCommands`;
+  const payload = JSON.stringify({ commands });
+  const { stdout, stderr } = await execFileAsync("curl", [
+    "-sS",
+    "--max-time",
+    "20",
+    "-H",
+    "Content-Type: application/json",
+    "-d",
+    payload,
+    url,
+  ]);
+
+  if (stderr?.trim()) {
+    console.error(`curl stderr for setMyCommands: ${stderr.trim()}`);
+  }
+
+  const parsed = JSON.parse(stdout) as { ok?: boolean; description?: string };
+  if (!parsed.ok) {
+    throw new Error(parsed.description || "Telegram setMyCommands failed.");
+  }
 }
 
 main().catch((error: unknown) => {
