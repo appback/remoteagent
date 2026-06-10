@@ -32,7 +32,7 @@ const HELP_TEXT = [
   "/stop",
   "/sandbox codex <read-only|workspace-write|danger-full-access>",
   "/status",
-  "/option [retry <count>]",
+  "/option [retry <count>|timeout <seconds>]",
   "/reportbot list|set <target>|status|test|send|clear",
   "/state [clear|note <text>]",
   "/artifacts list|cleanup <days>",
@@ -554,15 +554,18 @@ ${bridge.formatStatus(mapping)}`);
       return;
     }
 
-    if (option !== "retry") {
-      await reply(ctx, "Usage: `/option retry <count>`\n\n`count` must be 0 or a positive integer. `0` disables the automatic continuation limit.", {
+    if (option !== "retry" && option !== "timeout") {
+      await reply(ctx, "Usage: `/option retry <count>` or `/option timeout <seconds>`\n\n`retry` controls automatic continuation turns. `timeout` controls one provider execution limit.", {
         parse_mode: "Markdown",
       });
       return;
     }
 
     if (!value) {
-      await reply(ctx, `Current automatic continuation retry limit: ${formatRetryLimit(config.telegramAutoProgressMaxTurns)}\n\nUsage: \`/option retry <count>\``, {
+      const current = option === "retry"
+        ? `Current automatic continuation retry limit: ${formatRetryLimit(config.telegramAutoProgressMaxTurns)}\n\nUsage: \`/option retry <count>\``
+        : `Current provider execution timeout: ${formatTimeoutSeconds(config.commandTimeoutMs)}\n\nUsage: \`/option timeout <seconds>\``;
+      await reply(ctx, current, {
         parse_mode: "Markdown",
       });
       return;
@@ -570,16 +573,33 @@ ${bridge.formatStatus(mapping)}`);
 
     const parsed = Number.parseInt(value, 10);
     if (!Number.isInteger(parsed) || parsed < 0 || String(parsed) !== value.trim()) {
-      await reply(ctx, "Invalid retry count. Use `0` or a positive integer, for example `/option retry 6`.", {
+      await reply(ctx, option === "retry"
+        ? "Invalid retry count. Use `0` or a positive integer, for example `/option retry 6`."
+        : "Invalid timeout. Use seconds as a positive integer, for example `/option timeout 600`.", {
         parse_mode: "Markdown",
       });
       return;
     }
 
-    config.telegramAutoProgressMaxTurns = parsed;
-    await upsertInstalledEnvValue("TELEGRAM_AUTO_PROGRESS_MAX_TURNS", String(parsed));
-    await bridge.logSystem(botId, chatId, `Runtime option TELEGRAM_AUTO_PROGRESS_MAX_TURNS set to ${parsed}.`);
-    await reply(ctx, `Set automatic continuation retry limit to ${formatRetryLimit(parsed)}.\n\nSaved: TELEGRAM_AUTO_PROGRESS_MAX_TURNS=${parsed}`);
+    if (option === "retry") {
+      config.telegramAutoProgressMaxTurns = parsed;
+      await upsertInstalledEnvValue("TELEGRAM_AUTO_PROGRESS_MAX_TURNS", String(parsed));
+      await bridge.logSystem(botId, chatId, `Runtime option TELEGRAM_AUTO_PROGRESS_MAX_TURNS set to ${parsed}.`);
+      await reply(ctx, `Set automatic continuation retry limit to ${formatRetryLimit(parsed)}.\n\nSaved: TELEGRAM_AUTO_PROGRESS_MAX_TURNS=${parsed}`);
+      return;
+    }
+
+    if (parsed < 10) {
+      await reply(ctx, "Invalid timeout. Use at least 10 seconds, for example `/option timeout 600`.", {
+        parse_mode: "Markdown",
+      });
+      return;
+    }
+
+    config.commandTimeoutMs = parsed * 1000;
+    await upsertInstalledEnvValue("COMMAND_TIMEOUT_MS", String(config.commandTimeoutMs));
+    await bridge.logSystem(botId, chatId, `Runtime option COMMAND_TIMEOUT_MS set to ${config.commandTimeoutMs}.`);
+    await reply(ctx, `Set provider execution timeout to ${formatTimeoutSeconds(config.commandTimeoutMs)}.\n\nSaved: COMMAND_TIMEOUT_MS=${config.commandTimeoutMs}`);
   });
 
   bot.command("reportbot", async (ctx) => {
@@ -1489,6 +1509,14 @@ async function routeTelegramWorkLoop(
       const messageText = error instanceof Error ? error.message : "An unexpected error occurred.";
       const retryable = classifyRetryableProviderIssue(messageText, retryableErrorDelayMs);
 
+      if (isProviderTimeoutError(messageText)) {
+        const timeoutMessage = formatProviderTimeoutFinalMessage(messageText);
+        console.warn(`[telegram-route] bot=${botId} chat=${chatId} ${turnLabel} timed out: ${messageText}`);
+        await bridge.logSystem(botId, chatId, `${turnLabel} timed out: ${messageText}`);
+        autoContinue.clear(botId, chatId, sessionId);
+        return [timeoutMessage];
+      }
+
       if (isEmptyResponseError(messageText) && emptyResponseRetryCount < emptyResponseRetries) {
         emptyResponseRetryCount += 1;
         const retryMessage = `${turnLabel} returned an empty response; retrying automatic continuation (${emptyResponseRetryCount}/${emptyResponseRetries}).`;
@@ -1622,10 +1650,6 @@ function classifyRetryableProviderIssue(message: string, retryAfterMs: number): 
     return { kind: "capacity", retryAfterMs };
   }
 
-  if (/timed out after/i.test(message)) {
-    return { kind: "timeout", retryAfterMs };
-  }
-
   if (isEmptyResponseError(message)) {
     return { kind: "empty-response", retryAfterMs };
   }
@@ -1655,6 +1679,24 @@ function formatRetryableProviderFinalMessage(issue: RetryableProviderIssue): str
     case "empty-response":
       return "후속 응답이 반복해서 비어 자동 재시도를 중단했습니다. 같은 세션에서 다시 시도해 주세요.";
   }
+}
+
+function isProviderTimeoutError(message: string): boolean {
+  return /\b(Codex|Claude)\s+timed out after\s+\d+s without returning a final reply/i.test(message);
+}
+
+function formatProviderTimeoutFinalMessage(message: string): string {
+  const match = /\b(Codex|Claude)\s+timed out after\s+(\d+)s/i.exec(message);
+  const provider = match?.[1] ?? "Provider";
+  const seconds = match?.[2] ?? String(Math.round(config.commandTimeoutMs / 1000));
+  return [
+    `${provider} 실행이 ${seconds}초 안에 최종 응답을 반환하지 않아 중단했습니다.`,
+    "",
+    "같은 요청을 즉시 재시도하지 않았습니다. 이미 실행 프로세스가 timeout으로 종료된 상태라 반복 재시도하면 같은 루프가 생깁니다.",
+    "",
+    "긴 작업이면 먼저 timeout을 늘린 뒤 다시 요청하세요.",
+    "예: /option timeout 600",
+  ].join("\n");
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -1746,16 +1788,22 @@ function formatRuntimeOptions(): string {
   return [
     "Runtime options",
     `- retry: ${formatRetryLimit(config.telegramAutoProgressMaxTurns)} (TELEGRAM_AUTO_PROGRESS_MAX_TURNS)`,
+    `- timeout: ${formatTimeoutSeconds(config.commandTimeoutMs)} (COMMAND_TIMEOUT_MS)`,
     "",
     "Usage:",
     "/option retry <count>",
+    "/option timeout <seconds>",
     "",
-    "`0` disables the automatic continuation limit.",
+    "`retry 0` disables the automatic continuation limit.",
   ].join("\n");
 }
 
 function formatRetryLimit(value: number): string {
   return value === 0 ? "unlimited" : `${value}`;
+}
+
+function formatTimeoutSeconds(valueMs: number): string {
+  return `${Math.round(valueMs / 1000)}s`;
 }
 
 async function upsertInstalledEnvValue(key: string, value: string): Promise<void> {

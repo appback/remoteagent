@@ -10,7 +10,7 @@ export class ShellAdapter implements ProviderAdapter {
   constructor(
     private readonly provider: Provider,
     private readonly command: string,
-    private readonly timeoutMs: number,
+    private readonly timeoutMs: number | (() => number),
   ) {}
 
   async send(request: ProviderRequest): Promise<ProviderResponse> {
@@ -27,7 +27,7 @@ export class ShellAdapter implements ProviderAdapter {
 
     const { stdout, stderr } = await exec(this.command, {
       env,
-      timeout: this.timeoutMs,
+      timeout: this.currentTimeoutMs(),
       maxBuffer: 1024 * 1024,
     });
 
@@ -42,5 +42,9 @@ export class ShellAdapter implements ProviderAdapter {
       cwd: request.cwd,
       output,
     };
+  }
+
+  private currentTimeoutMs(): number {
+    return typeof this.timeoutMs === "function" ? this.timeoutMs() : this.timeoutMs;
   }
 }

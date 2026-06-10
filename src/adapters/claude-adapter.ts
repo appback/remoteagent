@@ -7,7 +7,7 @@ import { spawnWithPlatformShell } from "./windows-shell.js";
 export class ClaudeAdapter implements ProviderAdapter {
   constructor(
     private readonly claudeBin: string,
-    private readonly timeoutMs: number,
+    private readonly timeoutMs: number | (() => number),
     private readonly permissionMode: string,
   ) {}
 
@@ -70,7 +70,7 @@ export class ClaudeAdapter implements ProviderAdapter {
     remoteSessionId: string,
     publicSessionId?: string,
   ): Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean }> {
-    return spawnWithPlatformShell(this.claudeBin, args, cwd, this.timeoutMs, undefined, remoteSessionId, {
+    return spawnWithPlatformShell(this.claudeBin, args, cwd, this.currentTimeoutMs(), undefined, remoteSessionId, {
       REMOTEAGENT_SESSION_ID: remoteSessionId,
       REMOTEAGENT_PUBLIC_SESSION_ID: publicSessionId ?? "",
       REMOTEAGENT_WORKSPACE: cwd,
@@ -94,6 +94,10 @@ export class ClaudeAdapter implements ProviderAdapter {
   }
 
   private formatTimeoutError(): string {
-    return `Claude timed out after ${Math.round(this.timeoutMs / 1000)}s without returning a final reply.`;
+    return `Claude timed out after ${Math.round(this.currentTimeoutMs() / 1000)}s without returning a final reply.`;
+  }
+
+  private currentTimeoutMs(): number {
+    return typeof this.timeoutMs === "function" ? this.timeoutMs() : this.timeoutMs;
   }
 }

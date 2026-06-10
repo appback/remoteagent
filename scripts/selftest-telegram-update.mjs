@@ -71,9 +71,13 @@ const [{ createBot }, { BridgeService }, { BotManagementService }, { FileStore }
 ]);
 
 const providerCalls = [];
+let providerMode = "success";
 const provider = {
   async send(request) {
     providerCalls.push(request);
+    if (providerMode === "timeout") {
+      throw new Error("Codex timed out after 600s without returning a final reply.");
+    }
     return {
       provider: "codex",
       sessionId: request.sessionId || "mock-thread",
@@ -133,6 +137,7 @@ async function send(text) {
 
 await send("/start codex");
 await send("/option retry 6");
+await send("/option timeout 600");
 await send("같은 값을 봐야하는데 로직문제네? 확인해줘\\n이미 수정되어 있을 수 있어.\\n나한테 수정했다고 보고했었거든");
 await send("/state");
 
@@ -148,6 +153,9 @@ if (providerCalls.length !== 0) {
 const envText = await fs.readFile(path.join(dataDir, ".env"), "utf8");
 if (!/^TELEGRAM_AUTO_PROGRESS_MAX_TURNS=6$/m.test(envText)) {
   throw new Error(`Option command did not persist retry limit to .env: ${envText}`);
+}
+if (!/^COMMAND_TIMEOUT_MS=600000$/m.test(envText)) {
+  throw new Error(`Option command did not persist command timeout to .env: ${envText}`);
 }
 
 const memory = new AgentMemoryService(dataDir);
@@ -214,8 +222,35 @@ if (!calls.some((call) => call.method === "sendMessage" && /Session state for S0
 if (!calls.some((call) => call.method === "sendMessage" && /Set automatic continuation retry limit to 6/.test(call.text))) {
   throw new Error(`Did not see option retry acknowledgement. Calls: ${JSON.stringify(calls, null, 2)}`);
 }
+if (!calls.some((call) => call.method === "sendMessage" && /Set provider execution timeout to 600s/.test(call.text))) {
+  throw new Error(`Did not see option timeout acknowledgement. Calls: ${JSON.stringify(calls, null, 2)}`);
+}
 if (calls.some((call) => /미완료 TODO|\/task|새 작업으로 접수/.test(call.text))) {
   throw new Error(`Task gate language leaked to Telegram replies. Calls: ${JSON.stringify(calls, null, 2)}`);
+}
+
+providerMode = "timeout";
+await send("/batch start");
+await send("timeout regression test");
+await send("/batch send");
+
+const timeoutCalls = (await fs.readFile(telegramCalls, "utf8"))
+  .trim()
+  .split("\n")
+  .filter(Boolean)
+  .map((line) => {
+    const [method, chatId, textB64 = ""] = line.split("\t");
+    return {
+      method,
+      chat_id: chatId,
+      text: Buffer.from(textB64, "base64").toString("utf8"),
+    };
+  });
+if (!timeoutCalls.some((call) => /Codex 실행이 600초 안에 최종 응답을 반환하지 않아 중단했습니다/.test(call.text))) {
+  throw new Error(`Did not see provider timeout final message. Calls: ${JSON.stringify(timeoutCalls, null, 2)}`);
+}
+if (timeoutCalls.some((call) => /응답이 지연되어 .*다시 시도합니다/.test(call.text))) {
+  throw new Error(`Provider timeout should not be automatically retried. Calls: ${JSON.stringify(timeoutCalls, null, 2)}`);
 }
 
 console.log(JSON.stringify({
@@ -225,8 +260,10 @@ console.log(JSON.stringify({
   developmentState: /기프티쇼 개발 진행해/.test(developmentCurrent),
   recoveredTodoItems: recoveredActive.length,
   retryOption: 6,
+  timeoutOptionMs: 600000,
   providerCalls: providerCalls.length,
-  telegramSendMessages: calls.filter((call) => call.method === "sendMessage").length,
+  timeoutFinalMessage: true,
+  telegramSendMessages: timeoutCalls.filter((call) => call.method === "sendMessage").length,
 }, null, 2));
 
 process.exit(0);

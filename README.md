@@ -102,7 +102,8 @@ Current command surface implemented in `src/bot.ts`:
 | `/new` | Creates and binds a new session using the saved default mode in a new managed workspace |
 | `/switch <session>` | Rebinds this chat to an existing RemoteAgent session |
 | `/status` | Shows current session, workspace, provider, and sandbox state |
-| `/option retry <count>` | Sets the automatic continuation retry limit and persists it to `~/.remoteagent/.env` |
+| `/option retry <count>` | Sets the automatic continuation turn limit and persists it to `~/.remoteagent/.env` |
+| `/option timeout <seconds>` | Sets the provider execution timeout and persists it to `~/.remoteagent/.env` |
 | `/state` | Shows the session ledger that is injected as provider context |
 | `/state clear` | Clears the current session ledger without deleting the session |
 | `/state note <text>` | Adds an operator note to the session ledger |

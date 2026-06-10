@@ -30,17 +30,17 @@ async function main(): Promise<void> {
 
   const adapters: Partial<Record<Provider, ProviderAdapter>> = {
     codex: config.commands.codex
-      ? new ShellAdapter("codex", config.commands.codex, config.commandTimeoutMs)
+      ? new ShellAdapter("codex", config.commands.codex, () => config.commandTimeoutMs)
       : new CodexAdapter(
         config.codexBin,
-        config.commandTimeoutMs,
+        () => config.commandTimeoutMs,
         config.codexSandboxMode,
       ),
     claude: config.commands.claude
-      ? new ShellAdapter("claude", config.commands.claude, config.commandTimeoutMs)
+      ? new ShellAdapter("claude", config.commands.claude, () => config.commandTimeoutMs)
       : new ClaudeAdapter(
         config.claudeBin,
-        config.commandTimeoutMs,
+        () => config.commandTimeoutMs,
         config.claudePermissionMode,
       ),
   };

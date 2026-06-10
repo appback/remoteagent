@@ -9,7 +9,7 @@ import { spawnWithPlatformShell } from "./windows-shell.js";
 export class CodexAdapter implements ProviderAdapter {
   constructor(
     private readonly codexBin: string,
-    private readonly timeoutMs: number,
+    private readonly timeoutMs: number | (() => number),
     private readonly sandboxMode?: CodexSandboxMode,
   ) {}
 
@@ -150,7 +150,7 @@ export class CodexAdapter implements ProviderAdapter {
     publicSessionId: string | undefined,
     input?: string,
   ): Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean }> {
-    return spawnWithPlatformShell(this.codexBin, args, cwd, this.timeoutMs, input, remoteSessionId, {
+    return spawnWithPlatformShell(this.codexBin, args, cwd, this.currentTimeoutMs(), input, remoteSessionId, {
       REMOTEAGENT_SESSION_ID: remoteSessionId,
       REMOTEAGENT_PUBLIC_SESSION_ID: publicSessionId ?? "",
       REMOTEAGENT_WORKSPACE: cwd,
@@ -310,6 +310,10 @@ export class CodexAdapter implements ProviderAdapter {
   }
 
   private formatTimeoutError(): string {
-    return `Codex timed out after ${Math.round(this.timeoutMs / 1000)}s without returning a final reply.`;
+    return `Codex timed out after ${Math.round(this.currentTimeoutMs() / 1000)}s without returning a final reply.`;
+  }
+
+  private currentTimeoutMs(): number {
+    return typeof this.timeoutMs === "function" ? this.timeoutMs() : this.timeoutMs;
   }
 }
