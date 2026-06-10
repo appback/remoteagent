@@ -1,9 +1,34 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DATA_DIR="${DATA_DIR:-$HOME/.remoteagent}"
 ENV_FILE="$DATA_DIR/.env"
+APP_DIR="${REMOTEAGENT_APP_DIR:-$DATA_DIR/app/remoteagent-src}"
+REMOTEAGENT_REPO_TARBALL="${REMOTEAGENT_REPO_TARBALL:-https://github.com/appback/remoteagent/archive/refs/heads/main.tar.gz}"
+
+SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"
+if [ -n "$SCRIPT_SOURCE" ] && [ -f "$SCRIPT_SOURCE" ]; then
+  ROOT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")/.." && pwd)"
+else
+  ROOT_DIR="$APP_DIR"
+  mkdir -p "$ROOT_DIR"
+  tmp_dir="$(mktemp -d)"
+  cleanup() {
+    rm -rf "$tmp_dir"
+  }
+  trap cleanup EXIT
+  echo "Downloading RemoteAgent source..."
+  curl -fsSL "$REMOTEAGENT_REPO_TARBALL" -o "$tmp_dir/remoteagent.tar.gz"
+  tar -xzf "$tmp_dir/remoteagent.tar.gz" -C "$tmp_dir"
+  extracted_dir="$(find "$tmp_dir" -mindepth 1 -maxdepth 1 -type d | head -1)"
+  if [ -z "$extracted_dir" ]; then
+    echo "Failed to extract RemoteAgent source." >&2
+    exit 1
+  fi
+  rm -rf "$ROOT_DIR"
+  mkdir -p "$ROOT_DIR"
+  cp -a "$extracted_dir"/. "$ROOT_DIR"/
+fi
 
 mkdir -p "$DATA_DIR" "$DATA_DIR/logs"
 
