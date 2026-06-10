@@ -1417,6 +1417,7 @@ async function routeTelegramWorkLoop(
   const retryableErrorDelayMs = config.telegramRetryableErrorDelayMs;
   let emptyResponseRetryCount = 0;
   let retryableErrorCount = 0;
+  let untaggedIntentRetryCount = 0;
   let deliveredProgressCount = 0;
   const ensureStillBound = async (phase: string): Promise<void> => {
     if (!sessionId) {
@@ -1465,6 +1466,7 @@ async function routeTelegramWorkLoop(
       retryableErrorCount = 0;
 
       if (parsed.kind === "progress") {
+        untaggedIntentRetryCount = 0;
         deliveredProgressCount += 1;
         if (currentSession) {
           const progress = await memoryService.recordProgress(currentSession.session, parsed.chunks.join("\n"));
@@ -1491,12 +1493,21 @@ async function routeTelegramWorkLoop(
       }
 
       if (parsed.kind === "result" || parsed.kind === "blocked") {
+        untaggedIntentRetryCount = 0;
         await ensureStillBound(`${turnLabel} final delivery`);
         if (currentSession && parsed.kind === "result") {
           await memoryService.completeTask(currentSession.session, parsed.chunks.join("\n"));
         }
         autoContinue.clear(botId, chatId, sessionId);
         return parsed.chunks;
+      }
+
+      if (looksLikeUntaggedIntentOnlyResponse(parsed.chunks.join("\n")) && untaggedIntentRetryCount < 2) {
+        untaggedIntentRetryCount += 1;
+        const retryMessage = `${turnLabel} returned an untagged intent-only response; asking provider to do concrete work before replying.`;
+        await bridge.logSystem(botId, chatId, retryMessage);
+        prompt = appendManagedContext(formatUntaggedIntentRetryPrompt(parsed.chunks.join("\n")), managedContext);
+        continue;
       }
 
       await bridge.logSystem(botId, chatId, `${turnLabel} returned an untagged response; treating it as final output.`);
@@ -1603,23 +1614,70 @@ function parseReportResponses(
 
   const parsedBlocks = formattedBlocks.map((block) => {
     const lines = block.split(/\r?\n/);
-    const header = lines.shift() ?? "";
-    const first = (lines.shift() ?? "").trim();
-    const match = /^REPORT:(progress|result|blocked)$/i.exec(first);
+    const reportLineIndex = lines.findIndex((line, index) =>
+      index <= 1 && /^REPORT:(progress|result|blocked)$/i.test(line.trim()),
+    );
+    if (reportLineIndex < 0) {
+      return {
+        kind: "unknown" as ReportKind,
+        text: block.trim(),
+      };
+    }
+
+    const header = lines.slice(0, reportLineIndex).join("\n").trim();
+    const reportLine = lines[reportLineIndex]!.trim();
+    const match = /^REPORT:(progress|result|blocked)$/i.exec(reportLine);
     let kind = (match?.[1]?.toLowerCase() as ReportKind | undefined) ?? "unknown";
-    const body = lines.join("\n").trim();
+    const body = lines.slice(reportLineIndex + 1).join("\n").trim();
     if ((kind === "progress" || kind === "result") && looksLikeBlockedBody(body)) {
       kind = "blocked";
     }
     return {
       kind,
-      text: body ? `${header}\n${body}` : "",
+      text: body ? [header, body].filter(Boolean).join("\n") : "",
     };
   });
 
   const kind = parsedBlocks[0]?.kind ?? "unknown";
   const chunks = transform(parsedBlocks.map((item) => item.text));
   return { kind, chunks };
+}
+
+function looksLikeUntaggedIntentOnlyResponse(text: string): boolean {
+  const normalized = text.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  const hasConcreteEvidence = [
+    /REPORT:/i,
+    /(완료|통과|실패|확인 결과|검증 결과|원인|근거|수정했습니다|배포했습니다|커밋|푸시)/,
+    /\b(git status|git diff|npm run|node --check|docker|journalctl|grep|rg)\b/i,
+    /`[^`]+`/,
+    /:\d{1,5}\b/,
+  ].some((pattern) => pattern.test(normalized));
+  if (hasConcreteEvidence) {
+    return false;
+  }
+
+  return [
+    /(하겠습니다|진행하겠습니다|확인하겠습니다|수정하겠습니다|검증하겠습니다|대조하겠습니다|보겠습니다)/,
+    /(진행해서|확인해서|수정해서|검증해서).*(하겠습니다|진행하겠습니다)/,
+    /\b(I will|I'll|I am going to|going to|will continue|will check|will verify)\b/i,
+  ].some((pattern) => pattern.test(normalized));
+}
+
+function formatUntaggedIntentRetryPrompt(lastResponse: string): string {
+  return [
+    "The previous response did not follow the REPORT protocol and only stated intent without concrete evidence.",
+    "Do not repeat the plan or say what you will do.",
+    "Do concrete work now before replying again.",
+    "Reply with exactly one first line: REPORT:progress, REPORT:result, or REPORT:blocked.",
+    "If you cannot continue, use REPORT:blocked and state the exact blocker.",
+    "",
+    "Previous invalid response:",
+    lastResponse.trim(),
+  ].join("\n");
 }
 
 function isEmptyResponseError(message: string): boolean {

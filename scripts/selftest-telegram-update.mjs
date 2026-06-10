@@ -72,11 +72,24 @@ const [{ createBot }, { BridgeService }, { BotManagementService }, { FileStore }
 
 const providerCalls = [];
 let providerMode = "success";
+let untaggedIntentCalls = 0;
 const provider = {
   async send(request) {
     providerCalls.push(request);
     if (providerMode === "timeout") {
       throw new Error("Codex timed out after 600s without returning a final reply.");
+    }
+    if (providerMode === "untagged-intent") {
+      untaggedIntentCalls += 1;
+      return {
+        provider: "codex",
+        sessionId: request.sessionId || "mock-thread",
+        publicSessionId: request.publicSessionId,
+        cwd: request.cwd,
+        output: untaggedIntentCalls === 1
+          ? "계속 진행해서 확인하겠습니다."
+          : "REPORT:result\nuntagged intent recovered",
+      };
     }
     return {
       provider: "codex",
@@ -253,6 +266,33 @@ if (timeoutCalls.some((call) => /응답이 지연되어 .*다시 시도합니다
   throw new Error(`Provider timeout should not be automatically retried. Calls: ${JSON.stringify(timeoutCalls, null, 2)}`);
 }
 
+providerMode = "untagged-intent";
+await send("/batch start");
+await send("untagged intent regression test");
+await send("/batch send");
+
+const untaggedCalls = (await fs.readFile(telegramCalls, "utf8"))
+  .trim()
+  .split("\n")
+  .filter(Boolean)
+  .map((line) => {
+    const [method, chatId, textB64 = ""] = line.split("\t");
+    return {
+      method,
+      chat_id: chatId,
+      text: Buffer.from(textB64, "base64").toString("utf8"),
+    };
+  });
+if (untaggedIntentCalls !== 2) {
+  throw new Error(`Expected untagged intent response to be retried once, got ${untaggedIntentCalls}`);
+}
+if (!untaggedCalls.some((call) => /untagged intent recovered/.test(call.text))) {
+  throw new Error(`Did not see recovered result after untagged intent retry. Calls: ${JSON.stringify(untaggedCalls, null, 2)}`);
+}
+if (untaggedCalls.some((call) => call.method === "sendMessage" && /^계속 진행해서 확인하겠습니다\.$/.test(call.text.trim()))) {
+  throw new Error(`Untagged intent-only response leaked as final Telegram message. Calls: ${JSON.stringify(untaggedCalls, null, 2)}`);
+}
+
 console.log(JSON.stringify({
   ok: true,
   dataDir,
@@ -262,8 +302,9 @@ console.log(JSON.stringify({
   retryOption: 6,
   timeoutOptionMs: 600000,
   providerCalls: providerCalls.length,
+  untaggedIntentCalls,
   timeoutFinalMessage: true,
-  telegramSendMessages: timeoutCalls.filter((call) => call.method === "sendMessage").length,
+  telegramSendMessages: untaggedCalls.filter((call) => call.method === "sendMessage").length,
 }, null, 2));
 
 process.exit(0);
