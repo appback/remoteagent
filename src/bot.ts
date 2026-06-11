@@ -755,7 +755,7 @@ ${bridge.formatStatus(mapping)}`);
     }
     if (action === "set") {
       if (!key || !rest?.trim()) {
-        await reply(ctx, "Usage: `/secret set KEY value`", { parse_mode: "Markdown" });
+        await reply(ctx, formatSecretHelp(), { parse_mode: "Markdown" });
         return;
       }
       await memoryService.setSecret(key, rest.trim());
@@ -764,14 +764,14 @@ ${bridge.formatStatus(mapping)}`);
     }
     if (action === "remove") {
       if (!key) {
-        await reply(ctx, "Usage: `/secret remove KEY`", { parse_mode: "Markdown" });
+        await reply(ctx, formatSecretHelp(), { parse_mode: "Markdown" });
         return;
       }
       const removed = await memoryService.removeSecret(key);
       await reply(ctx, removed ? `Removed secret key ${key}.` : `Secret key was not found: ${key}`);
       return;
     }
-    await reply(ctx, "Usage: `/secret list`, `/secret set KEY value`, or `/secret remove KEY`", { parse_mode: "Markdown" });
+    await reply(ctx, formatSecretHelp(), { parse_mode: "Markdown" });
   });
 
   bot.command("docs", async (ctx) => {
@@ -1935,6 +1935,38 @@ function parseCommand(text: string | undefined, headCount: number): { args: stri
     args,
     rest: remaining || undefined,
   };
+}
+
+function formatSecretHelp(): string {
+  return [
+    "Secret command guide",
+    "",
+    "Store sensitive values without exposing them to agents or chat output.",
+    "",
+    "Commands:",
+    "```text",
+    "/secret set KEY value",
+    "/secret list",
+    "/secret remove KEY",
+    "```",
+    "",
+    "Example:",
+    "```text",
+    "/secret set GIFTISHOW_AUTH_KEY REAL...",
+    "/secret set GIFTISHOW_TOKEN_KEY xNC...",
+    "```",
+    "",
+    "Then tell the agent:",
+    "```text",
+    "기프티쇼 인증 정보는 secret에 저장했어.",
+    "GIFTISHOW_AUTH_KEY, GIFTISHOW_TOKEN_KEY를 사용해서 설정/검증해줘.",
+    "```",
+    "",
+    "Agents only see the key names. They can read values with:",
+    "```text",
+    "node \"$REMOTEAGENT_SECRET_BIN\" get <KEY>",
+    "```",
+  ].join("\n");
 }
 
 function formatRuntimeOptions(): string {
