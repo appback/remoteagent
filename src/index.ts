@@ -19,6 +19,9 @@ import type { Bot } from "grammy";
 import type { UserFromGetMe } from "grammy/types";
 
 const execFileAsync = promisify(execFile);
+const TELEGRAM_GET_UPDATES_HTTP_TIMEOUT_SECONDS = 30;
+const TELEGRAM_GET_UPDATES_CURL_TIMEOUT_SECONDS = 35;
+const TELEGRAM_GET_UPDATES_CHILD_TIMEOUT_MS = 45_000;
 let processLockPath: string | undefined;
 
 async function main(): Promise<void> {
@@ -319,7 +322,7 @@ async function getUpdatesViaCurl(token: string, offset: number): Promise<{
   description?: string;
 }> {
   const url = new URL(`https://api.telegram.org/bot${token}/getUpdates`);
-  url.searchParams.set("timeout", "30");
+  url.searchParams.set("timeout", String(TELEGRAM_GET_UPDATES_HTTP_TIMEOUT_SECONDS));
   url.searchParams.set("limit", "50");
   if (offset > 0) {
     url.searchParams.set("offset", String(offset));
@@ -327,10 +330,15 @@ async function getUpdatesViaCurl(token: string, offset: number): Promise<{
 
   const { stdout, stderr } = await execFileAsync("curl", [
     "-sS",
+    "--connect-timeout",
+    "10",
     "--max-time",
-    "35",
+    String(TELEGRAM_GET_UPDATES_CURL_TIMEOUT_SECONDS),
     url.toString(),
-  ]);
+  ], {
+    killSignal: "SIGKILL",
+    timeout: TELEGRAM_GET_UPDATES_CHILD_TIMEOUT_MS,
+  });
 
   if (stderr?.trim()) {
     console.error(`curl stderr for getUpdates: ${stderr.trim()}`);
