@@ -21,11 +21,13 @@ import type { UserFromGetMe } from "grammy/types";
 const execFileAsync = promisify(execFile);
 const TELEGRAM_GET_UPDATES_HTTP_TIMEOUT_SECONDS = 30;
 const TELEGRAM_GET_UPDATES_CURL_TIMEOUT_SECONDS = 35;
-const TELEGRAM_GET_UPDATES_CHILD_TIMEOUT_MS = 45_000;
 let processLockPath: string | undefined;
+let telegramTransportStatusPath: string | undefined;
+const telegramTransportStatuses: Record<string, Record<string, unknown>> = {};
 
 async function main(): Promise<void> {
   processLockPath = await acquireProcessLock(config.dataDir);
+  telegramTransportStatusPath = path.join(config.dataDir, "telegram-transport.json");
   registerProcessLifecycle();
 
   const store = new FileStore(config.dataDir, config.defaultMode);
@@ -87,19 +89,24 @@ async function main(): Promise<void> {
   const botInfos = config.telegramBotTokens.map((token, index) => buildBotInfo(token, index));
   const bots = config.telegramBotTokens.map((token, index) => createBot(token, bridge, botManagement, botInfos[index]!));
 
-  for (const bot of bots) {
-    const username = bot.botInfo.username;
-    await configureTelegramCommandMenu(bot).catch((error) => {
-      console.error(`Failed to configure command menu for @${username}:`, error);
-    });
-    console.log(`Bot @${username} is ready`);
+  if (config.telegramCommandMenuEnabled) {
+    for (const bot of bots) {
+      const username = bot.botInfo.username;
+      await configureTelegramCommandMenu(bot).catch((error) => {
+        console.error(`Failed to configure command menu for @${username}:`, error);
+      });
+      console.log(`Bot @${username} is ready`);
+    }
+  } else {
+    console.log("Telegram command menu registration is disabled.");
+    for (const bot of bots) {
+      console.log(`Bot @${bot.botInfo.username} is ready`);
+    }
   }
 
   await botManagement.reportPendingOperationResult().catch((error) => {
     console.error("Failed to report pending bot operation result:", error);
   });
-
-  startRemoteAgentWatchdog(config.telegramBotTokens[0]);
 
   await Promise.all(bots.map((bot) => startManualPolling(bot)));
 }
@@ -210,29 +217,23 @@ async function startManualPolling(bot: Bot): Promise<never> {
   };
   let offset = 0;
   let consecutiveFailures = 0;
-  let firstFailureAt: number | undefined;
-  let lastFailureAt: number | undefined;
-  let lastIssue = "unknown error";
-  let lastAlertAttemptAt = 0;
+  let lastFailureLogAt = 0;
   const activeHandlers = new Set<Promise<void>>();
 
   while (true) {
     try {
       const payload = await getUpdatesViaCurl(pollingBot.token, offset);
       if (consecutiveFailures > 0) {
-        await notifyPollingRecoveryIfNeeded(
-          pollingBot.token,
-          pollingBot.botInfo.username,
-          consecutiveFailures,
-          firstFailureAt,
-          lastFailureAt,
-          lastIssue,
-        ).catch(() => undefined);
+        console.warn(`Telegram polling recovered for @${pollingBot.botInfo.username} after ${consecutiveFailures} failure(s).`);
+        await writeTelegramTransportStatus(pollingBot.botInfo.username, {
+          status: "ok",
+          consecutiveFailures: 0,
+          lastRecoveredAt: new Date().toISOString(),
+        }).catch((error) => {
+          console.error(`Failed to write Telegram transport recovery status for @${pollingBot.botInfo.username}:`, error);
+        });
         consecutiveFailures = 0;
-        firstFailureAt = undefined;
-        lastFailureAt = undefined;
-        lastIssue = "unknown error";
-        lastAlertAttemptAt = 0;
+        lastFailureLogAt = 0;
       }
 
       if (payload.result.length === 0) {
@@ -264,30 +265,27 @@ async function startManualPolling(bot: Bot): Promise<never> {
       }
       offset = payload.result[payload.result.length - 1]!.update_id + 1;
     } catch (error) {
-      const issue = classifyTelegramPollingError(error);
       consecutiveFailures += 1;
+      const issue = summarizeTelegramTransportError(error);
+      const delayMs = nextPollingBackoffMs(consecutiveFailures, pollingBot.botInfo.username);
       const now = Date.now();
-      firstFailureAt ??= now;
-      lastFailureAt = now;
-      lastIssue = issue.summary;
-      console.error(`Polling failed for @${pollingBot.botInfo.username}:`, error);
-
-      if (
-        config.telegramOwnerId
-        && consecutiveFailures >= 3
-        && now - lastAlertAttemptAt >= 60_000
-      ) {
-        lastAlertAttemptAt = now;
-        await notifyPollingFailure(
-          pollingBot.token,
-          pollingBot.botInfo.username,
-          consecutiveFailures,
-          firstFailureAt,
-          issue.summary,
-        ).catch(() => undefined);
+      if (consecutiveFailures === 1 || now - lastFailureLogAt >= 60_000) {
+        lastFailureLogAt = now;
+        console.error(
+          `Polling failed for @${pollingBot.botInfo.username}: ${issue}. `
+          + `consecutiveFailures=${consecutiveFailures}; nextRetryIn=${formatDuration(delayMs)}.`,
+        );
       }
-
-      await sleep(nextPollingRetryDelayMs(consecutiveFailures, issue.kind));
+      await writeTelegramTransportStatus(pollingBot.botInfo.username, {
+        status: "degraded",
+        consecutiveFailures,
+        lastIssue: issue,
+        lastFailureAt: new Date().toISOString(),
+        nextRetryAt: new Date(Date.now() + delayMs).toISOString(),
+      }).catch((statusError) => {
+        console.error(`Failed to write Telegram transport failure status for @${pollingBot.botInfo.username}:`, statusError);
+      });
+      await sleep(delayMs);
     }
   }
 }
@@ -318,169 +316,68 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
-type WatchdogCandidate = {
-  pid: number;
-  ppid: number;
-  ageSeconds: number;
-  cpuPercent: number;
-  command: string;
-  botId: string;
-  method: string;
-};
-
-function startRemoteAgentWatchdog(alertBotToken: string | undefined): void {
-  if (!config.remoteagentWatchdogEnabled) {
-    console.log("RemoteAgent watchdog is disabled.");
-    return;
-  }
-
-  console.log(
-    [
-      "RemoteAgent watchdog is enabled.",
-      `interval=${config.remoteagentWatchdogIntervalMs}ms`,
-      `cpu>=${config.remoteagentWatchdogCpuPercent}%`,
-      `age>=${config.remoteagentWatchdogMinAgeMs}ms`,
-    ].join(" "),
+function nextPollingBackoffMs(failureCount: number, username: string | undefined): number {
+  const exponent = Math.max(0, Math.min(failureCount - 1, 10));
+  const baseDelay = Math.min(
+    config.telegramPollingBackoffMaxMs,
+    config.telegramPollingBackoffMinMs * (2 ** exponent),
   );
-
-  const run = () => {
-    void runRemoteAgentWatchdog(alertBotToken).catch((error) => {
-      console.error("RemoteAgent watchdog failed:", error);
-    });
-  };
-
-  run();
-  const timer = setInterval(run, config.remoteagentWatchdogIntervalMs);
-  timer.unref?.();
+  return Math.min(config.telegramPollingBackoffMaxMs, baseDelay + stableJitterMs(username));
 }
 
-async function runRemoteAgentWatchdog(alertBotToken: string | undefined): Promise<void> {
-  const candidates = await listWatchdogCandidates();
-  const minAgeSeconds = Math.ceil(config.remoteagentWatchdogMinAgeMs / 1000);
-  const stuckProcesses = candidates.filter((candidate) => (
-    candidate.ageSeconds >= minAgeSeconds
-    && candidate.cpuPercent >= config.remoteagentWatchdogCpuPercent
-  ));
-
-  for (const processInfo of stuckProcesses) {
-    let killed = false;
-    try {
-      process.kill(processInfo.pid, "SIGKILL");
-      killed = true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
-        console.error(`RemoteAgent watchdog failed to kill pid=${processInfo.pid}:`, error);
-      }
-    }
-
-    if (!killed) {
-      continue;
-    }
-
-    const message = [
-      "RemoteAgent watchdog killed stuck Telegram curl process.",
-      `bot: ${processInfo.botId}`,
-      `method: ${processInfo.method}`,
-      `pid: ${processInfo.pid}`,
-      `age: ${formatDurationSeconds(processInfo.ageSeconds)}`,
-      `cpu: ${processInfo.cpuPercent.toFixed(1)}%`,
-      "action: SIGKILL",
-    ].join("\n");
-
-    console.warn(message);
-    await notifyWatchdogKill(alertBotToken, message).catch((error) => {
-      console.error("RemoteAgent watchdog notification failed:", error);
-    });
+function stableJitterMs(value: string | undefined): number {
+  const source = value || "unknown";
+  let hash = 0;
+  for (const char of source) {
+    hash = ((hash * 31) + char.charCodeAt(0)) >>> 0;
   }
+  return hash % 5000;
 }
 
-async function listWatchdogCandidates(): Promise<WatchdogCandidate[]> {
-  const { stdout } = await execFileAsync("ps", [
-    "-eo",
-    "pid=,ppid=,etimes=,pcpu=,args=",
-  ], {
-    timeout: 10_000,
-    killSignal: "SIGKILL",
-    maxBuffer: 1024 * 1024,
-  });
-
-  return stdout
-    .split(/\r?\n/)
-    .map((line) => parseWatchdogProcessLine(line))
-    .filter((candidate): candidate is WatchdogCandidate => Boolean(candidate));
+function summarizeTelegramTransportError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const stderr = typeof error === "object" && error !== null && "stderr" in error
+    ? String((error as { stderr?: unknown }).stderr ?? "").trim()
+    : "";
+  const combined = [stderr, message].filter(Boolean).join(" ");
+  if (/Could not resolve host|Name or service not known|Temporary failure in name resolution/i.test(combined)) {
+    return "DNS lookup failed for api.telegram.org";
+  }
+  if (/timed out|Operation timed out|Connection timed out|code=28/i.test(combined)) {
+    return "connection to api.telegram.org timed out";
+  }
+  if (/SSL_ERROR_SYSCALL|SSL_read|tls/i.test(combined)) {
+    return "TLS connection to api.telegram.org failed";
+  }
+  return combined.split(/\r?\n/, 1)[0]?.slice(0, 300) || "unknown Telegram transport error";
 }
 
-function parseWatchdogProcessLine(line: string): WatchdogCandidate | undefined {
-  const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+([\d.]+)\s+(.+)$/);
-  if (!match) {
-    return undefined;
-  }
-
-  const pid = Number.parseInt(match[1]!, 10);
-  const ppid = Number.parseInt(match[2]!, 10);
-  const ageSeconds = Number.parseInt(match[3]!, 10);
-  const cpuPercent = Number.parseFloat(match[4]!);
-  const command = match[5]!;
-  if (
-    !Number.isFinite(pid)
-    || !Number.isFinite(ppid)
-    || !Number.isFinite(ageSeconds)
-    || !Number.isFinite(cpuPercent)
-    || ppid !== process.pid
-  ) {
-    return undefined;
-  }
-
-  const botMatch = command.match(/api\.telegram\.org\/bot(\d+):/);
-  const methodMatch = command.match(/\/(getUpdates|sendMessage|editMessageText|sendDocument|deleteMessage|setMyCommands)(?:\s|$|\?)/);
-  if (!botMatch || !methodMatch || !/\bcurl\b/.test(command)) {
-    return undefined;
-  }
-
-  return {
-    pid,
-    ppid,
-    ageSeconds,
-    cpuPercent,
-    command,
-    botId: botMatch[1]!,
-    method: methodMatch[1]!,
-  };
-}
-
-async function notifyWatchdogKill(alertBotToken: string | undefined, message: string): Promise<void> {
-  if (!alertBotToken || !config.telegramOwnerId) {
+async function writeTelegramTransportStatus(
+  username: string | undefined,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  if (!telegramTransportStatusPath) {
     return;
   }
-
-  await execFileAsync("curl", [
-    "-sS",
-    "--connect-timeout",
-    "10",
-    "--max-time",
-    "35",
-    `https://api.telegram.org/bot${alertBotToken}/sendMessage`,
-    "--data-urlencode",
-    `chat_id=${config.telegramOwnerId}`,
-    "--data-urlencode",
-    `text=${message}`,
-  ], {
-    timeout: 45_000,
-    killSignal: "SIGKILL",
-  });
+  const key = username || "unknown_bot";
+  telegramTransportStatuses[key] = {
+    ...(telegramTransportStatuses[key] ?? {}),
+    ...patch,
+    updatedAt: new Date().toISOString(),
+  };
+  const next = {
+    updatedAt: new Date().toISOString(),
+    bots: telegramTransportStatuses,
+  };
+  await fsp.mkdir(path.dirname(telegramTransportStatusPath), { recursive: true });
+  await fsp.writeFile(telegramTransportStatusPath, JSON.stringify(next, null, 2), "utf8");
 }
 
-function formatDurationSeconds(totalSeconds: number): string {
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  if (hours > 0) {
-    return `${hours}h ${minutes}m ${seconds}s`;
-  }
-  if (minutes > 0) {
-    return `${minutes}m ${seconds}s`;
-  }
-  return `${seconds}s`;
+function formatDuration(durationMs: number): string {
+  const seconds = Math.max(1, Math.round(durationMs / 1000));
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return minutes > 0 ? `${minutes}m ${remainingSeconds}s` : `${seconds}s`;
 }
 
 async function getUpdatesViaCurl(token: string, offset: number): Promise<{
@@ -497,15 +394,10 @@ async function getUpdatesViaCurl(token: string, offset: number): Promise<{
 
   const { stdout, stderr } = await execFileAsync("curl", [
     "-sS",
-    "--connect-timeout",
-    "10",
     "--max-time",
     String(TELEGRAM_GET_UPDATES_CURL_TIMEOUT_SECONDS),
     url.toString(),
-  ], {
-    killSignal: "SIGKILL",
-    timeout: TELEGRAM_GET_UPDATES_CHILD_TIMEOUT_MS,
-  });
+  ]);
 
   if (stderr?.trim()) {
     console.error(`curl stderr for getUpdates: ${stderr.trim()}`);
@@ -526,135 +418,6 @@ async function getUpdatesViaCurl(token: string, offset: number): Promise<{
     result: payload.result,
     description: payload.description,
   };
-}
-
-type TelegramPollingIssueKind = "dns" | "timeout" | "ssl" | "http" | "unknown";
-
-function classifyTelegramPollingError(error: unknown): {
-  kind: TelegramPollingIssueKind;
-  summary: string;
-} {
-  const message = error instanceof Error ? error.message : String(error);
-  const stderr = typeof error === "object" && error !== null && "stderr" in error
-    ? String((error as { stderr?: unknown }).stderr ?? "")
-    : "";
-  const combined = `${message}\n${stderr}`;
-
-  if (/Could not resolve host|Name or service not known|Temporary failure in name resolution/i.test(combined)) {
-    return {
-      kind: "dns",
-      summary: "DNS lookup failed for api.telegram.org.",
-    };
-  }
-
-  if (/timed out|Operation timed out|Connection timed out/i.test(combined)) {
-    return {
-      kind: "timeout",
-      summary: "Telegram polling timed out while waiting for api.telegram.org.",
-    };
-  }
-
-  if (/SSL_ERROR_SYSCALL|SSL_read|tls/i.test(combined)) {
-    return {
-      kind: "ssl",
-      summary: "Telegram polling hit an SSL/TLS read error.",
-    };
-  }
-
-  if (/HTTP|status/i.test(combined)) {
-    return {
-      kind: "http",
-      summary: "Telegram polling failed with an HTTP/API error.",
-    };
-  }
-
-  return {
-    kind: "unknown",
-    summary: "Telegram polling failed with an unknown transport error.",
-  };
-}
-
-function nextPollingRetryDelayMs(failureCount: number, kind: TelegramPollingIssueKind): number {
-  const base = kind === "dns" ? 5_000 : 2_000;
-  return Math.min(30_000, base * Math.max(1, Math.min(failureCount, 6)));
-}
-
-async function notifyPollingFailure(
-  token: string,
-  username: string | undefined,
-  consecutiveFailures: number,
-  firstFailureAt: number | undefined,
-  issue: string,
-): Promise<void> {
-  if (!config.telegramOwnerId) {
-    return;
-  }
-
-  const lines = [
-    `RemoteAgent polling warning for @${username ?? "unknown_bot"}`,
-    issue,
-    `consecutiveFailures: ${consecutiveFailures}`,
-    firstFailureAt ? `since: ${new Date(firstFailureAt).toISOString()}` : undefined,
-    "Automatic retries are still running in the background.",
-  ].filter(Boolean);
-
-  await sendTelegramControlMessage(token, config.telegramOwnerId, lines.join("\n"));
-}
-
-async function notifyPollingRecoveryIfNeeded(
-  token: string,
-  username: string | undefined,
-  consecutiveFailures: number,
-  firstFailureAt: number | undefined,
-  lastFailureAt: number | undefined,
-  issue: string,
-): Promise<void> {
-  if (!config.telegramOwnerId || consecutiveFailures < 3) {
-    return;
-  }
-
-  const durationMs = firstFailureAt && lastFailureAt
-    ? Math.max(0, lastFailureAt - firstFailureAt)
-    : undefined;
-
-  const lines = [
-    `RemoteAgent polling recovered for @${username ?? "unknown_bot"}`,
-    `lastIssue: ${issue}`,
-    `consecutiveFailures: ${consecutiveFailures}`,
-    durationMs !== undefined ? `downtime: ${formatDuration(durationMs)}` : undefined,
-  ].filter(Boolean);
-
-  await sendTelegramControlMessage(token, config.telegramOwnerId, lines.join("\n"));
-}
-
-async function sendTelegramControlMessage(token: string, chatId: string, text: string): Promise<void> {
-  const url = `https://api.telegram.org/bot${token}/sendMessage`;
-  const { stdout, stderr } = await execFileAsync("curl", [
-    "-sS",
-    "--max-time",
-    "20",
-    url,
-    "--data-urlencode",
-    `chat_id=${chatId}`,
-    "--data-urlencode",
-    `text=${text}`,
-  ]);
-
-  if (stderr?.trim()) {
-    console.error(`curl stderr for polling alert sendMessage: ${stderr.trim()}`);
-  }
-
-  const payload = JSON.parse(stdout) as { ok?: boolean; description?: string };
-  if (!payload.ok) {
-    throw new Error(payload.description || "Polling alert sendMessage failed.");
-  }
-}
-
-function formatDuration(durationMs: number): string {
-  const totalSeconds = Math.max(1, Math.round(durationMs / 1000));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
 }
 
 function buildBotInfo(token: string, index: number): UserFromGetMe {
