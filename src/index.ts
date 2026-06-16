@@ -99,6 +99,8 @@ async function main(): Promise<void> {
     console.error("Failed to report pending bot operation result:", error);
   });
 
+  startRemoteAgentWatchdog(config.telegramBotTokens[0]);
+
   await Promise.all(bots.map((bot) => startManualPolling(bot)));
 }
 
@@ -314,6 +316,171 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+type WatchdogCandidate = {
+  pid: number;
+  ppid: number;
+  ageSeconds: number;
+  cpuPercent: number;
+  command: string;
+  botId: string;
+  method: string;
+};
+
+function startRemoteAgentWatchdog(alertBotToken: string | undefined): void {
+  if (!config.remoteagentWatchdogEnabled) {
+    console.log("RemoteAgent watchdog is disabled.");
+    return;
+  }
+
+  console.log(
+    [
+      "RemoteAgent watchdog is enabled.",
+      `interval=${config.remoteagentWatchdogIntervalMs}ms`,
+      `cpu>=${config.remoteagentWatchdogCpuPercent}%`,
+      `age>=${config.remoteagentWatchdogMinAgeMs}ms`,
+    ].join(" "),
+  );
+
+  const run = () => {
+    void runRemoteAgentWatchdog(alertBotToken).catch((error) => {
+      console.error("RemoteAgent watchdog failed:", error);
+    });
+  };
+
+  run();
+  const timer = setInterval(run, config.remoteagentWatchdogIntervalMs);
+  timer.unref?.();
+}
+
+async function runRemoteAgentWatchdog(alertBotToken: string | undefined): Promise<void> {
+  const candidates = await listWatchdogCandidates();
+  const minAgeSeconds = Math.ceil(config.remoteagentWatchdogMinAgeMs / 1000);
+  const stuckProcesses = candidates.filter((candidate) => (
+    candidate.ageSeconds >= minAgeSeconds
+    && candidate.cpuPercent >= config.remoteagentWatchdogCpuPercent
+  ));
+
+  for (const processInfo of stuckProcesses) {
+    let killed = false;
+    try {
+      process.kill(processInfo.pid, "SIGKILL");
+      killed = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+        console.error(`RemoteAgent watchdog failed to kill pid=${processInfo.pid}:`, error);
+      }
+    }
+
+    if (!killed) {
+      continue;
+    }
+
+    const message = [
+      "RemoteAgent watchdog killed stuck Telegram curl process.",
+      `bot: ${processInfo.botId}`,
+      `method: ${processInfo.method}`,
+      `pid: ${processInfo.pid}`,
+      `age: ${formatDurationSeconds(processInfo.ageSeconds)}`,
+      `cpu: ${processInfo.cpuPercent.toFixed(1)}%`,
+      "action: SIGKILL",
+    ].join("\n");
+
+    console.warn(message);
+    await notifyWatchdogKill(alertBotToken, message).catch((error) => {
+      console.error("RemoteAgent watchdog notification failed:", error);
+    });
+  }
+}
+
+async function listWatchdogCandidates(): Promise<WatchdogCandidate[]> {
+  const { stdout } = await execFileAsync("ps", [
+    "-eo",
+    "pid=,ppid=,etimes=,pcpu=,args=",
+  ], {
+    timeout: 10_000,
+    killSignal: "SIGKILL",
+    maxBuffer: 1024 * 1024,
+  });
+
+  return stdout
+    .split(/\r?\n/)
+    .map((line) => parseWatchdogProcessLine(line))
+    .filter((candidate): candidate is WatchdogCandidate => Boolean(candidate));
+}
+
+function parseWatchdogProcessLine(line: string): WatchdogCandidate | undefined {
+  const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+([\d.]+)\s+(.+)$/);
+  if (!match) {
+    return undefined;
+  }
+
+  const pid = Number.parseInt(match[1]!, 10);
+  const ppid = Number.parseInt(match[2]!, 10);
+  const ageSeconds = Number.parseInt(match[3]!, 10);
+  const cpuPercent = Number.parseFloat(match[4]!);
+  const command = match[5]!;
+  if (
+    !Number.isFinite(pid)
+    || !Number.isFinite(ppid)
+    || !Number.isFinite(ageSeconds)
+    || !Number.isFinite(cpuPercent)
+    || ppid !== process.pid
+  ) {
+    return undefined;
+  }
+
+  const botMatch = command.match(/api\.telegram\.org\/bot(\d+):/);
+  const methodMatch = command.match(/\/(getUpdates|sendMessage|editMessageText|sendDocument|deleteMessage|setMyCommands)(?:\s|$|\?)/);
+  if (!botMatch || !methodMatch || !/\bcurl\b/.test(command)) {
+    return undefined;
+  }
+
+  return {
+    pid,
+    ppid,
+    ageSeconds,
+    cpuPercent,
+    command,
+    botId: botMatch[1]!,
+    method: methodMatch[1]!,
+  };
+}
+
+async function notifyWatchdogKill(alertBotToken: string | undefined, message: string): Promise<void> {
+  if (!alertBotToken || !config.telegramOwnerId) {
+    return;
+  }
+
+  await execFileAsync("curl", [
+    "-sS",
+    "--connect-timeout",
+    "10",
+    "--max-time",
+    "35",
+    `https://api.telegram.org/bot${alertBotToken}/sendMessage`,
+    "--data-urlencode",
+    `chat_id=${config.telegramOwnerId}`,
+    "--data-urlencode",
+    `text=${message}`,
+  ], {
+    timeout: 45_000,
+    killSignal: "SIGKILL",
+  });
+}
+
+function formatDurationSeconds(totalSeconds: number): string {
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${seconds}s`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+  return `${seconds}s`;
 }
 
 async function getUpdatesViaCurl(token: string, offset: number): Promise<{
