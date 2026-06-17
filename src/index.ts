@@ -20,14 +20,16 @@ import type { UserFromGetMe } from "grammy/types";
 
 const execFileAsync = promisify(execFile);
 const TELEGRAM_GET_UPDATES_HTTP_TIMEOUT_SECONDS = 30;
-const TELEGRAM_GET_UPDATES_CURL_TIMEOUT_SECONDS = 35;
+const TELEGRAM_GET_UPDATES_CURL_TIMEOUT_SECONDS = 60;
 let processLockPath: string | undefined;
 let telegramTransportStatusPath: string | undefined;
 const telegramTransportStatuses: Record<string, Record<string, unknown>> = {};
+let telegramPollingLimiter: AsyncSemaphore;
 
 async function main(): Promise<void> {
   processLockPath = await acquireProcessLock(config.dataDir);
   telegramTransportStatusPath = path.join(config.dataDir, "telegram-transport.json");
+  telegramPollingLimiter = new AsyncSemaphore(config.telegramPollingMaxConcurrency);
   registerProcessLifecycle();
 
   const store = new FileStore(config.dataDir, config.defaultMode);
@@ -108,7 +110,7 @@ async function main(): Promise<void> {
     console.error("Failed to report pending bot operation result:", error);
   });
 
-  await Promise.all(bots.map((bot) => startManualPolling(bot)));
+  await Promise.all(bots.map((bot, index) => startManualPolling(bot, index)));
 }
 
 async function configureTelegramCommandMenu(bot: Bot): Promise<void> {
@@ -162,6 +164,7 @@ async function setTelegramCommandsViaCurl(
   try {
     const result = await execFileAsync("curl", [
       "-sS",
+      "-4",
       "--max-time",
       "20",
       "-H",
@@ -209,7 +212,7 @@ main().catch((error: unknown) => {
   process.exitCode = 1;
 });
 
-async function startManualPolling(bot: Bot): Promise<never> {
+async function startManualPolling(bot: Bot, index: number): Promise<never> {
   const pollingBot = bot as unknown as {
     token: string;
     handleUpdates(updates: TelegramUpdate[]): Promise<void>;
@@ -219,10 +222,15 @@ async function startManualPolling(bot: Bot): Promise<never> {
   let consecutiveFailures = 0;
   let lastFailureLogAt = 0;
   const activeHandlers = new Set<Promise<void>>();
+  const initialDelayMs = Math.min(30_000, index * 3_000 + stableJitterMs(pollingBot.botInfo.username));
+  if (initialDelayMs > 0) {
+    console.log(`Starting polling for @${pollingBot.botInfo.username} in ${formatDuration(initialDelayMs)}.`);
+    await sleep(initialDelayMs);
+  }
 
   while (true) {
     try {
-      const payload = await getUpdatesViaCurl(pollingBot.token, offset);
+      const payload = await telegramPollingLimiter.run(() => getUpdatesViaCurl(pollingBot.token, offset));
       if (consecutiveFailures > 0) {
         console.warn(`Telegram polling recovered for @${pollingBot.botInfo.username} after ${consecutiveFailures} failure(s).`);
         await writeTelegramTransportStatus(pollingBot.botInfo.username, {
@@ -267,7 +275,10 @@ async function startManualPolling(bot: Bot): Promise<never> {
     } catch (error) {
       consecutiveFailures += 1;
       const issue = summarizeTelegramTransportError(error);
-      const delayMs = nextPollingBackoffMs(consecutiveFailures, pollingBot.botInfo.username);
+      const delayMs = Math.max(
+        nextPollingBackoffMs(consecutiveFailures, pollingBot.botInfo.username),
+        getRetryAfterMs(error) ?? 0,
+      );
       const now = Date.now();
       if (consecutiveFailures === 1 || now - lastFailureLogAt >= 60_000) {
         lastFailureLogAt = now;
@@ -352,6 +363,13 @@ function summarizeTelegramTransportError(error: unknown): string {
   return combined.split(/\r?\n/, 1)[0]?.slice(0, 300) || "unknown Telegram transport error";
 }
 
+function getRetryAfterMs(error: unknown): number | undefined {
+  if (error instanceof TelegramPollingError && error.retryAfterMs !== undefined) {
+    return error.retryAfterMs;
+  }
+  return undefined;
+}
+
 async function writeTelegramTransportStatus(
   username: string | undefined,
   patch: Record<string, unknown>,
@@ -394,6 +412,7 @@ async function getUpdatesViaCurl(token: string, offset: number): Promise<{
 
   const { stdout, stderr } = await execFileAsync("curl", [
     "-sS",
+    "-4",
     "--max-time",
     String(TELEGRAM_GET_UPDATES_CURL_TIMEOUT_SECONDS),
     url.toString(),
@@ -407,10 +426,18 @@ async function getUpdatesViaCurl(token: string, offset: number): Promise<{
     ok?: boolean;
     result?: TelegramUpdate[];
     description?: string;
+    parameters?: {
+      retry_after?: number;
+    };
   };
 
   if (!payload.ok || !Array.isArray(payload.result)) {
-    throw new Error(payload.description || "getUpdates returned an invalid payload.");
+    throw new TelegramPollingError(
+      payload.description || "getUpdates returned an invalid payload.",
+      typeof payload.parameters?.retry_after === "number"
+        ? payload.parameters.retry_after * 1000
+        : undefined,
+    );
   }
 
   return {
@@ -418,6 +445,49 @@ async function getUpdatesViaCurl(token: string, offset: number): Promise<{
     result: payload.result,
     description: payload.description,
   };
+}
+
+class TelegramPollingError extends Error {
+  constructor(message: string, readonly retryAfterMs?: number) {
+    super(message);
+    this.name = "TelegramPollingError";
+  }
+}
+
+class AsyncSemaphore {
+  private active = 0;
+  private readonly waiters: Array<() => void> = [];
+
+  constructor(private readonly maxConcurrency: number) {}
+
+  async run<T>(task: () => Promise<T>): Promise<T> {
+    await this.acquire();
+    try {
+      return await task();
+    } finally {
+      this.release();
+    }
+  }
+
+  private async acquire(): Promise<void> {
+    if (this.active < this.maxConcurrency) {
+      this.active += 1;
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      this.waiters.push(resolve);
+    });
+    this.active += 1;
+  }
+
+  private release(): void {
+    this.active = Math.max(0, this.active - 1);
+    const next = this.waiters.shift();
+    if (next) {
+      next();
+    }
+  }
 }
 
 function buildBotInfo(token: string, index: number): UserFromGetMe {

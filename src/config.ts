@@ -171,6 +171,7 @@ export const config = {
   telegramCommandMenuEnabled: readBoolean("TELEGRAM_COMMAND_MENU_ENABLED", false),
   telegramPollingBackoffMinMs: readTimeout("TELEGRAM_POLLING_BACKOFF_MIN_MS", 60_000),
   telegramPollingBackoffMaxMs: readTimeout("TELEGRAM_POLLING_BACKOFF_MAX_MS", 900_000),
+  telegramPollingMaxConcurrency: readTimeout("TELEGRAM_POLLING_MAX_CONCURRENCY", 3),
   telegramOwnerId: readOptional("TELEGRAM_OWNER_ID"),
   telegramMessageBatchMs: readNonNegativeTimeout("TELEGRAM_MESSAGE_BATCH_MS", 1500),
   telegramAutoProgressMaxTurns: readOptionalNonNegativeInteger("TELEGRAM_AUTO_PROGRESS_MAX_TURNS") ?? 6,
