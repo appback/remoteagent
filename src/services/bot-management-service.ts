@@ -91,7 +91,7 @@ export class BotManagementService {
   async formatCurrentBotSummary(currentBotId: string): Promise<string> {
     const env = await this.readEnvConfig();
     const bots = this.zipBots(env.tokens, env.usernames);
-    const current = bots.find((bot) => String(bot.id) === currentBotId);
+    const current = this.resolveBotSelector(bots, currentBotId);
     const main = this.resolveMainBot(bots, env.mainBotId);
     const currentLabel = current ? `@${current.username} (${current.id})` : currentBotId;
     const mainLabel = main ? `@${main.username} (${main.id})` : "not configured";

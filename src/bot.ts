@@ -889,6 +889,10 @@ ${bridge.formatStatus(mapping)}`);
     if (text && isRecognizedSlashCommand(text, botId)) {
       return;
     }
+    if (text && isUnsupportedSlashCommand(text, botId)) {
+      await reply(ctx, `Unsupported command: ${text.split(/\s+/, 1)[0]}\nRun /help for available commands.`);
+      return;
+    }
 
     const mapping = await bridge.status(botId, chatId).catch(() => undefined);
     if (autoContinue.isSuppressingNewWork(botId, chatId, mapping?.session.sessionId)) {
@@ -1976,6 +1980,20 @@ function isRecognizedSlashCommand(text: string, botId: string): boolean {
   return RECOGNIZED_COMMANDS.has(name.toLowerCase());
 }
 
+function isUnsupportedSlashCommand(text: string, botId: string): boolean {
+  if (!text.startsWith("/") || isRemoteShellMessage(text)) {
+    return false;
+  }
+
+  const token = text.slice(1).split(/\s+/, 1)[0]?.trim();
+  if (!token || token.includes("/")) {
+    return false;
+  }
+
+  const [, mention] = token.split("@", 2);
+  return !mention || mention.toLowerCase() === botId.toLowerCase();
+}
+
 function parseRemoteShellRequest(text: string): { kind: "native" | "cmd" | "bash"; command: string } | undefined {
   const body = text.slice(2).trim();
   if (!body) {
@@ -2505,11 +2523,19 @@ async function sendTelegramMessage(
   text: string,
   extra?: TelegramMessageOptions,
 ): Promise<TelegramMessageResult> {
-  return callTelegramApi<TelegramMessageResult>(botToken, "sendMessage", {
-    chat_id: String(chatId),
-    text,
-    parse_mode: extra?.parse_mode,
-  });
+  const startedAt = Date.now();
+  try {
+    return await callTelegramApi<TelegramMessageResult>(botToken, "sendMessage", {
+      chat_id: String(chatId),
+      text,
+      parse_mode: extra?.parse_mode,
+    });
+  } finally {
+    const elapsedMs = Date.now() - startedAt;
+    if (elapsedMs >= 3000) {
+      console.warn(`[telegram-sendMessage-slow] chat=${chatId} elapsedMs=${elapsedMs} chars=${text.length}`);
+    }
+  }
 }
 
 async function editTelegramMessageText(
