@@ -14,6 +14,7 @@ import { BridgeService } from "./services/bridge-service.js";
 import { BotManagementService } from "./services/bot-management-service.js";
 import { LocalUiService } from "./services/local-ui-service.js";
 import { AgentMemoryService } from "./services/agent-memory-service.js";
+import { terminateAllSpawnedExecutions } from "./adapters/windows-shell.js";
 import type { ProviderAdapter } from "./adapters/provider-adapter.js";
 import type { Provider } from "./types.js";
 import type { Bot } from "grammy";
@@ -618,12 +619,14 @@ function registerProcessLifecycle(): void {
 
   process.once("SIGINT", () => {
     console.error("Received SIGINT, shutting down RemoteAgent.");
+    stopActiveProviderExecutionsForShutdown();
     releaseProcessLockSync();
     process.exit(0);
   });
 
   process.once("SIGTERM", () => {
     console.error("Received SIGTERM, shutting down RemoteAgent.");
+    stopActiveProviderExecutionsForShutdown();
     releaseProcessLockSync();
     process.exit(0);
   });
@@ -631,6 +634,13 @@ function registerProcessLifecycle(): void {
   process.once("exit", () => {
     releaseProcessLockSync();
   });
+}
+
+function stopActiveProviderExecutionsForShutdown(): void {
+  const stopped = terminateAllSpawnedExecutions();
+  if (stopped > 0) {
+    console.error(`Stopped ${stopped} active provider execution(s) during RemoteAgent shutdown.`);
+  }
 }
 
 function releaseProcessLockSync(): void {

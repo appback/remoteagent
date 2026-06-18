@@ -69,7 +69,10 @@ const REPORT_PROTOCOL_PROMPT = [
   "Do not claim that a Telegram message or file was sent unless RemoteAgent explicitly confirmed that delivery step.",
   "If REPORT:result claims code, DB, deploy, commit, push, file delivery, or verification work is complete, include concrete evidence such as file paths, commands, logs, commit IDs, digests, or line references.",
   "If you want RemoteAgent to send a file, include a separate line exactly like: TELEGRAM_FILE: /absolute/path/to/file",
-  "Do not call Telegram APIs directly or use bot credentials even if they appear to exist in the environment.",
+  "Do not use removed local reporting scripts for Telegram delivery.",
+  "Do not use raw Telegram tokens or TELEGRAM_* environment variables.",
+  "Telegram sends are allowed only when the user explicitly instructed that flow and the bot token is retrieved through `node \"$REMOTEAGENT_SECRET_BIN\" get <KEY>`. Never print or persist the token.",
+  "Do not claim Telegram message delivery unless RemoteAgent handled `TELEGRAM_FILE` delivery or you include concrete API response evidence from an explicit secret-managed Telegram send.",
   "REMOTEAGENT_SESSION_ID and REMOTEAGENT_PUBLIC_SESSION_ID are available during provider execution. For cron, persist the literal public session id in the cron command instead of assuming the env will still exist later.",
 ].join("\n");
 const RECOGNIZED_COMMANDS = new Set([

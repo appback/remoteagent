@@ -96,6 +96,17 @@ export function stopSpawnedExecution(executionKey: string): boolean {
   return terminateProcessTree(command);
 }
 
+export function terminateAllSpawnedExecutions(): number {
+  let stopped = 0;
+  for (const [key, command] of activeCommands.entries()) {
+    if (terminateProcessTree(command)) {
+      stopped += 1;
+    }
+    activeCommands.delete(key);
+  }
+  return stopped;
+}
+
 function terminateProcessTree(command: ChildProcess): boolean {
   if (!command.pid) {
     return false;
