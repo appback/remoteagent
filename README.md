@@ -99,6 +99,7 @@ Current command surface implemented in `src/bot.ts`:
 | `/start [codex|claude]` | Starts a fresh fixed-mode session in a new managed workspace under `WORKSPACE_ROOT` |
 | `/help` | Shows the current command list |
 | `/list` | Lists recent sessions |
+| `/list -a` | Lists all sessions with active/unused status, managed workspace size, and last update time |
 | `/new` | Creates and binds a new session using the saved default mode in a new managed workspace |
 | `/switch <session>` | Rebinds this chat to an existing RemoteAgent session |
 | `/status` | Shows current session, workspace, provider, and sandbox state |

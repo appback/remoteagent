@@ -84,6 +84,14 @@ export class FileStore {
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 
+  async listActiveSessionIds(botId?: string): Promise<Set<string>> {
+    const state = await this.readState();
+    const sessionIds = Object.values(state.chats)
+      .filter((binding) => !botId || binding.botId === botId)
+      .map((binding) => binding.sessionId);
+    return new Set(sessionIds);
+  }
+
   async getSession(sessionId: string): Promise<SessionRecord | undefined> {
     const state = await this.readState();
     return state.sessions[sessionId];

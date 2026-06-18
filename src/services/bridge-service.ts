@@ -260,6 +260,10 @@ export class BridgeService {
     return this.store.listSessions(botId);
   }
 
+  async listActiveSessionIds(botId?: string): Promise<Set<string>> {
+    return this.store.listActiveSessionIds(botId);
+  }
+
   async sessionEvents(sessionId: string, limit?: number): Promise<LogEntry[]> {
     const session = await this.store.getSession(sessionId);
     if (!session) {
@@ -465,6 +469,35 @@ export class BridgeService {
 
     return [
       `Sessions (${Math.min(limit, sessions.length)}/${sessions.length})`,
+      ...rows,
+    ].join("\n");
+  }
+
+  async formatSessionListDetailed(
+    sessions: SessionRecord[],
+    currentSessionId: string | undefined,
+    activeSessionIds: Set<string>,
+  ): Promise<string> {
+    if (sessions.length === 0) {
+      return "No sessions found.";
+    }
+
+    const rows: string[] = [];
+    for (const [index, session] of sessions.entries()) {
+      const marker = session.sessionId === currentSessionId ? "*" : " ";
+      const status = activeSessionIds.has(session.sessionId) ? "active" : "unused";
+      const workspaceSize = await this.workspaceSizeLabel(session);
+      rows.push([
+        `${marker} ${index + 1}. [${session.publicId}] ${this.workspaceLabel(session.workspace)}`,
+        `   status: ${status}`,
+        `   mode: ${session.mode}`,
+        `   size: ${workspaceSize}`,
+        `   updatedAt: ${session.updatedAt}`,
+      ].join("\n"));
+    }
+
+    return [
+      `Sessions (${sessions.length}/${sessions.length})`,
       ...rows,
     ].join("\n");
   }
@@ -923,6 +956,54 @@ export class BridgeService {
     const normalized = workspace.replace(/\\/g, "/").replace(/\/+$/, "");
     const parts = normalized.split("/");
     return parts[parts.length - 1] || workspace;
+  }
+
+  private async workspaceSizeLabel(session: SessionRecord): Promise<string> {
+    if (!session.workspaceUid || !this.isManagedWorkspace(session.workspace)) {
+      return "external";
+    }
+
+    const bytes = await this.directorySize(session.workspace).catch(() => undefined);
+    return bytes === undefined ? "unknown" : this.formatBytes(bytes);
+  }
+
+  private isManagedWorkspace(workspace: string): boolean {
+    const relative = path.relative(this.workspaceRoot, workspace);
+    return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
+  }
+
+  private async directorySize(directory: string): Promise<number> {
+    const stat = await fs.stat(directory);
+    if (!stat.isDirectory()) {
+      return stat.size;
+    }
+
+    let total = 0;
+    const entries = await fs.readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isSymbolicLink()) {
+        continue;
+      }
+      if (entry.isDirectory()) {
+        total += await this.directorySize(entryPath);
+      } else if (entry.isFile()) {
+        total += (await fs.stat(entryPath)).size;
+      }
+    }
+    return total;
+  }
+
+  private formatBytes(bytes: number): string {
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let value = bytes;
+    let unitIndex = 0;
+    while (value >= 1024 && unitIndex < units.length - 1) {
+      value /= 1024;
+      unitIndex += 1;
+    }
+    const digits = value >= 10 || unitIndex === 0 ? 0 : 1;
+    return `${value.toFixed(digits)}${units[unitIndex]}`;
   }
 
   private async ensureWorkspaceExists(cwd: string): Promise<void> {

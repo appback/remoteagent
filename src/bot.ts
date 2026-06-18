@@ -22,7 +22,7 @@ const HELP_TEXT = [
   "Commands:",
   "/start [codex|claude]",
   "/help",
-  "/list",
+  "/list [-a]",
   "/new",
   "/switch <session>",
   "/batch start|send|cancel|status",
@@ -371,12 +371,23 @@ ${bridge.formatStatus(mapping)}`);
 
     const botId = getBotId();
     const chatId = String(ctx.chat.id);
+    const { args } = parseCommand(ctx.message?.text, 1);
+    const showAll = args[0] === "-a" || args[0] === "--all";
     const [mapping, sessions] = await Promise.all([
       bridge.status(botId, chatId),
       bridge.listSessions(),
     ]);
     const botSummary = await botManagement.formatCurrentBotSummary(botId);
-    await reply(ctx, `${bridge.formatSessionList(sessions, mapping?.session.sessionId)}\n\n${botSummary}`);
+    const sessionList = showAll
+      ? await bridge.formatSessionListDetailed(
+        sessions,
+        mapping?.session.sessionId,
+        await bridge.listActiveSessionIds(),
+      )
+      : bridge.formatSessionList(sessions, mapping?.session.sessionId);
+    for (const chunk of flattenChunks([`${sessionList}\n\n${botSummary}`], 3900)) {
+      await reply(ctx, chunk);
+    }
   };
 
   bot.command("list", async (ctx) => {
