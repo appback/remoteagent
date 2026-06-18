@@ -72,12 +72,14 @@ export class AgentMemoryService {
   private readonly artifactsPath: string;
   private readonly secretsPath: string;
   private readonly docsPath: string;
+  private readonly telegramUploadsDir: string;
 
   constructor(private readonly dataDir: string) {
     this.rootDir = path.join(dataDir, "managed");
     this.artifactsPath = path.join(this.rootDir, "artifacts.json");
     this.secretsPath = path.join(this.rootDir, "secrets.json");
     this.docsPath = path.join(this.rootDir, "docs-index.json");
+    this.telegramUploadsDir = path.join(dataDir, "uploads", "telegram");
   }
 
   async recordInstruction(session: SessionRecord, instruction: string): Promise<void> {
@@ -270,6 +272,7 @@ export class AgentMemoryService {
     const artifacts = await this.readJson<ArtifactRecord[]>(this.artifactsPath, []);
     const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
     const kept: ArtifactRecord[] = [];
+    const keptPaths = new Set<string>();
     let removedFiles = 0;
     let removedRecords = 0;
 
@@ -277,6 +280,7 @@ export class AgentMemoryService {
       const created = Date.parse(artifact.createdAt);
       if (artifact.keep || !Number.isFinite(created) || created >= cutoff) {
         kept.push(artifact);
+        keptPaths.add(path.resolve(artifact.path));
         continue;
       }
       await fs.rm(artifact.path, { force: true }).then(() => {
@@ -286,7 +290,15 @@ export class AgentMemoryService {
     }
 
     await this.writeJson(this.artifactsPath, kept);
-    return `Artifact cleanup finished. removedRecords=${removedRecords}, removedFiles=${removedFiles}, kept=${kept.length}`;
+    const orphanResult = await this.cleanupOrphanTelegramUploads(cutoff, keptPaths);
+    return [
+      "Artifact cleanup finished.",
+      `removedRecords=${removedRecords}`,
+      `removedIndexedFiles=${removedFiles}`,
+      `removedOrphanFiles=${orphanResult.removedFiles}`,
+      `scannedUploadFiles=${orphanResult.scannedFiles}`,
+      `kept=${kept.length}`,
+    ].join(" ");
   }
 
   async setSecret(key: string, value: string): Promise<void> {
@@ -775,6 +787,72 @@ export class AgentMemoryService {
     } catch {
       return fallback;
     }
+  }
+
+  private async cleanupOrphanTelegramUploads(cutoff: number, keptPaths: Set<string>): Promise<{ scannedFiles: number; removedFiles: number }> {
+    let scannedFiles = 0;
+    let removedFiles = 0;
+    const files = await this.listFilesRecursive(this.telegramUploadsDir);
+
+    for (const filePath of files) {
+      scannedFiles += 1;
+      const resolved = path.resolve(filePath);
+      if (keptPaths.has(resolved)) {
+        continue;
+      }
+
+      const stat = await fs.stat(filePath).catch(() => undefined);
+      if (!stat?.isFile() || stat.mtimeMs >= cutoff) {
+        continue;
+      }
+
+      await fs.rm(filePath, { force: true }).then(() => {
+        removedFiles += 1;
+      }).catch(() => undefined);
+    }
+
+    await this.removeEmptyDirectories(this.telegramUploadsDir);
+    return { scannedFiles, removedFiles };
+  }
+
+  private async listFilesRecursive(root: string): Promise<string[]> {
+    const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
+    const files: string[] = [];
+
+    for (const entry of entries) {
+      const entryPath = path.join(root, entry.name);
+      if (entry.isDirectory()) {
+        files.push(...await this.listFilesRecursive(entryPath));
+      } else if (entry.isFile()) {
+        files.push(entryPath);
+      }
+    }
+
+    return files;
+  }
+
+  private async removeEmptyDirectories(root: string): Promise<boolean> {
+    const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
+    let empty = entries.length === 0;
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        empty = false;
+        continue;
+      }
+
+      const childPath = path.join(root, entry.name);
+      const childEmpty = await this.removeEmptyDirectories(childPath);
+      if (!childEmpty) {
+        empty = false;
+      }
+    }
+
+    if (empty && root !== this.telegramUploadsDir) {
+      await fs.rmdir(root).catch(() => undefined);
+    }
+
+    return empty;
   }
 
   private async writeJson(filePath: string, value: unknown): Promise<void> {

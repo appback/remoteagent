@@ -176,7 +176,9 @@ Current Claude behavior:
 
 ### 5. Telegram attachments
 
-Telegram attachments are written into the local runtime under `~/.remoteagent/uploads/telegram/...` and then routed through the active session.
+Telegram attachments are written into the local runtime under `~/.remoteagent/uploads/telegram/<bot>/<chat>/...` and then routed through the active session. Artifact metadata is indexed at `~/.remoteagent/managed/artifacts.json`.
+
+Attachments can be inspected with `/artifacts list` and cleaned manually with `/artifacts cleanup <days>`. RemoteAgent also runs periodic artifact cleanup when `ARTIFACT_CLEANUP_ENABLED=true`; by default it keeps 30 days and also removes old unindexed files under `uploads/telegram`.
 
 Current supported attachment classes:
 
@@ -274,6 +276,9 @@ Recommended Linux hooks in this repo:
 - `WORKSPACE_ROOT`
 - `COMMAND_TIMEOUT_MS`
 - `SETUP_COMMAND_TIMEOUT_MS`
+- `ARTIFACT_CLEANUP_ENABLED`
+- `ARTIFACT_RETENTION_DAYS`
+- `ARTIFACT_CLEANUP_INTERVAL_MS`
 - `CODEX_BIN`
 - `CODEX_SANDBOX_MODE`
 - `CODEX_INSTALL_COMMAND`

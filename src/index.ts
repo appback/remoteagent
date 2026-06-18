@@ -13,6 +13,7 @@ import { FileStore } from "./store/file-store.js";
 import { BridgeService } from "./services/bridge-service.js";
 import { BotManagementService } from "./services/bot-management-service.js";
 import { LocalUiService } from "./services/local-ui-service.js";
+import { AgentMemoryService } from "./services/agent-memory-service.js";
 import type { ProviderAdapter } from "./adapters/provider-adapter.js";
 import type { Provider } from "./types.js";
 import type { Bot } from "grammy";
@@ -77,6 +78,7 @@ async function main(): Promise<void> {
     config.botRestartServiceName,
     config.botRestartHelperPath,
   );
+  startArtifactCleanupSchedule(new AgentMemoryService(config.dataDir));
   if (config.localUiEnabled) {
     const localUi = new LocalUiService(bridge, config.localUiHost, config.localUiPort);
     await localUi.start()
@@ -111,6 +113,35 @@ async function main(): Promise<void> {
   });
 
   await Promise.all(bots.map((bot, index) => startManualPolling(bot, index)));
+}
+
+function startArtifactCleanupSchedule(memoryService: AgentMemoryService): void {
+  if (!config.artifactCleanupEnabled) {
+    console.log("Artifact cleanup schedule is disabled.");
+    return;
+  }
+
+  const run = async (): Promise<void> => {
+    try {
+      const result = await memoryService.cleanupArtifacts(config.artifactRetentionDays);
+      console.log(`[artifact-cleanup] ${result}`);
+    } catch (error) {
+      console.error("[artifact-cleanup] failed:", error);
+    }
+  };
+
+  console.log(
+    `Artifact cleanup schedule enabled: retention=${config.artifactRetentionDays}d interval=${config.artifactCleanupIntervalMs}ms`,
+  );
+  const initial = setTimeout(() => {
+    void run();
+  }, 60_000);
+  initial.unref();
+
+  const interval = setInterval(() => {
+    void run();
+  }, config.artifactCleanupIntervalMs);
+  interval.unref();
 }
 
 async function configureTelegramCommandMenu(bot: Bot): Promise<void> {
