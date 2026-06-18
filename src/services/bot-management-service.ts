@@ -12,7 +12,7 @@ type ManagedBot = {
   username: string;
 };
 
-type PendingBotOperationAction = "add" | "remove" | "reload";
+type PendingBotOperationAction = "add" | "remove" | "reload" | "doctor";
 type PendingBotOperationStatus = "pending" | "rolled_back";
 
 type PendingBotOperation = {
@@ -28,6 +28,10 @@ type PendingBotOperation = {
     id: number;
     username: string;
   };
+  targets?: Array<{
+    id: number;
+    username: string;
+  }>;
   backupEnvPath: string;
   reason?: string;
 };
@@ -82,6 +86,23 @@ export class BotManagementService {
     }
 
     return this.formatBots(bots, env.mainBotId);
+  }
+
+  async formatCurrentBotSummary(currentBotId: string): Promise<string> {
+    const env = await this.readEnvConfig();
+    const bots = this.zipBots(env.tokens, env.usernames);
+    const current = bots.find((bot) => String(bot.id) === currentBotId);
+    const main = this.resolveMainBot(bots, env.mainBotId);
+    const currentLabel = current ? `@${current.username} (${current.id})` : currentBotId;
+    const mainLabel = main ? `@${main.username} (${main.id})` : "not configured";
+    const role = current && main && current.id === main.id ? "main" : "sub";
+
+    return [
+      `bot: ${currentLabel}${current ? ` [${role}]` : ""}`,
+      `mainBot: ${mainLabel}`,
+      `botCount: ${bots.length}`,
+      "sleep: awake",
+    ].join("\n");
   }
 
   async getPendingOperationNotice(): Promise<PendingBotOperationNotice | undefined> {
@@ -254,6 +275,92 @@ export class BotManagementService {
     };
   }
 
+  async doctorBots(sourceBotId: string, sourceBotToken: string, chatId: number): Promise<BotCommandResult> {
+    await this.ensureSupported();
+    await this.assertNoPendingOperation();
+
+    const env = await this.readEnvConfig();
+    const bots = this.zipBots(env.tokens, env.usernames);
+    if (bots.length === 0) {
+      return { message: "No Telegram bots are configured." };
+    }
+
+    const alive: ManagedBot[] = [];
+    const dead: ManagedBot[] = [];
+    const transient: Array<{ bot: ManagedBot; reason: string }> = [];
+
+    for (const bot of bots) {
+      try {
+        await this.fetchBotIdentity(bot.token);
+        alive.push(bot);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        if (this.isDeadBotError(reason)) {
+          dead.push(bot);
+        } else {
+          transient.push({ bot, reason });
+          alive.push(bot);
+        }
+      }
+    }
+
+    if (dead.length === 0) {
+      return {
+        message: [
+          "Bot doctor completed. No dead bots were removed.",
+          `alive: ${alive.length}`,
+          transient.length > 0 ? `temporary issues: ${transient.length}` : undefined,
+          ...transient.map(({ bot, reason }) => `- @${bot.username} (${bot.id}): ${reason}`),
+        ].filter(Boolean).join("\n"),
+      };
+    }
+
+    if (alive.length === 0) {
+      throw new Error("Bot doctor found every configured bot dead. Refusing to remove the last usable bot.");
+    }
+
+    const tokens = alive.map((bot) => bot.token);
+    const usernames = alive.map((bot) => bot.username);
+    const mainBotId = this.resolveMainBotId(alive, env.mainBotId);
+    const replyToken = tokens.includes(sourceBotToken) ? sourceBotToken : tokens[0]!;
+    const notifyViaUsername = alive.find((bot) => bot.token === replyToken)?.username;
+    const backupEnvPath = await this.backupEnv();
+    const pending: PendingBotOperation = {
+      version: 1,
+      action: "doctor",
+      status: "pending",
+      requestedAt: new Date().toISOString(),
+      chatId,
+      replyToken,
+      notifyViaUsername,
+      sourceBotId,
+      targets: dead.map((bot) => ({
+        id: bot.id,
+        username: bot.username,
+      })),
+      backupEnvPath,
+    };
+
+    try {
+      await this.writePendingOperation(pending);
+      await this.writeEnvConfig(env.lines, tokens, usernames, mainBotId);
+      await this.launchRestartJob();
+    } catch (error) {
+      await this.restoreBackup(backupEnvPath).catch(() => undefined);
+      await this.clearPendingOperation().catch(() => undefined);
+      throw error;
+    }
+
+    return {
+      message: [
+        `Bot doctor removed ${dead.length} dead bot(s).`,
+        ...dead.map((bot) => `- @${bot.username} (${bot.id})`),
+        transient.length > 0 ? `Temporary issues were kept: ${transient.length}` : undefined,
+        "The runtime will restart once and then report the result.",
+      ].filter(Boolean).join("\n"),
+    };
+  }
+
   async reloadBots(sourceBotId: string, sourceBotToken: string, chatId: number): Promise<BotCommandResult> {
     await this.ensureSupported();
     await this.assertNoPendingOperation();
@@ -301,6 +408,7 @@ export class BotManagementService {
         "Bot configuration failed and was rolled back.",
         `Action: ${pending.action}`,
         pending.target ? `Target: @${pending.target.username} (${pending.target.id})` : undefined,
+        this.formatPendingTargets(pending),
         pending.reason ? `Reason: ${pending.reason}` : undefined,
         "Current configured bots:",
         ...listLines,
@@ -309,6 +417,7 @@ export class BotManagementService {
         "Bot configuration applied successfully.",
         `Action: ${pending.action}`,
         pending.target ? `Target: @${pending.target.username} (${pending.target.id})` : undefined,
+        this.formatPendingTargets(pending),
         "Current configured bots:",
         ...listLines,
       ];
@@ -336,12 +445,14 @@ export class BotManagementService {
     const targetLine = pending.target
       ? `Target: @${pending.target.username} (${pending.target.id})`
       : undefined;
+    const targetsLine = this.formatPendingTargets(pending);
 
     if (pending.status === "rolled_back") {
       return [
         "The last bot configuration change failed and was rolled back.",
         actionLine,
         targetLine,
+        targetsLine,
         pending.reason ? `Reason: ${pending.reason}` : undefined,
       ].filter(Boolean).join("\n");
     }
@@ -350,8 +461,17 @@ export class BotManagementService {
       "A bot configuration change is still being applied.",
       actionLine,
       targetLine,
+      targetsLine,
       "Wait for the \"Bot configuration applied successfully.\" message, then try again.",
     ].filter(Boolean).join("\n");
+  }
+
+  private formatPendingTargets(pending: PendingBotOperation): string | undefined {
+    if (!pending.targets || pending.targets.length === 0) {
+      return undefined;
+    }
+
+    return `Targets: ${pending.targets.map((target) => `@${target.username} (${target.id})`).join(", ")}`;
   }
 
   private async ensureSupported(): Promise<void> {
@@ -402,6 +522,12 @@ export class BotManagementService {
     return /sudo: a password is required/i.test(message)
       || /command not found/i.test(message)
       || /systemd-run/i.test(message);
+  }
+
+  private isDeadBotError(reason: string): boolean {
+    return /unauthorized/i.test(reason)
+      || /not found/i.test(reason)
+      || /invalid token/i.test(reason);
   }
 
   private async fetchBotIdentity(token: string): Promise<ManagedBot> {

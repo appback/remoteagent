@@ -39,6 +39,7 @@ const HELP_TEXT = [
   "/docs pin|find|list|remove",
   "/bots",
   "/bot add <token>",
+  "/bot doctor",
   "/bot main <number|@username|id>",
   "/bot remove <username|id>",
   "/bot reload",
@@ -374,7 +375,8 @@ ${bridge.formatStatus(mapping)}`);
       bridge.status(botId, chatId),
       bridge.listSessions(),
     ]);
-    await reply(ctx, bridge.formatSessionList(sessions, mapping?.session.sessionId));
+    const botSummary = await botManagement.formatCurrentBotSummary(botId);
+    await reply(ctx, `${bridge.formatSessionList(sessions, mapping?.session.sessionId)}\n\n${botSummary}`);
   };
 
   bot.command("list", async (ctx) => {
@@ -756,8 +758,8 @@ ${bridge.formatStatus(mapping)}`);
     const { args, rest } = parseCommand(ctx.message?.text, 2);
     const action = args[0]?.toLowerCase();
 
-    if (!action || !["add", "main", "remove", "reload"].includes(action)) {
-      await reply(ctx, "Usage: `/bot add <token>`, `/bot main <number|@username|id>`, `/bot remove <username|id>`, or `/bot reload`", {
+    if (!action || !["add", "doctor", "main", "remove", "reload"].includes(action)) {
+      await reply(ctx, "Usage: `/bot add <token>`, `/bot doctor`, `/bot main <number|@username|id>`, `/bot remove <username|id>`, or `/bot reload`", {
         parse_mode: "Markdown",
       });
       return;
@@ -775,6 +777,12 @@ ${bridge.formatStatus(mapping)}`);
       }
 
       const result = await botManagement.addBot(token, sourceBotId, sourceBotToken, ctx.chat.id);
+      await reply(ctx, result.message);
+      return;
+    }
+
+    if (action === "doctor") {
+      const result = await botManagement.doctorBots(sourceBotId, sourceBotToken, ctx.chat.id);
       await reply(ctx, result.message);
       return;
     }
