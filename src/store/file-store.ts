@@ -11,7 +11,6 @@ import type {
   ProviderSession,
   SessionRecord,
   TelegramContact,
-  TelegramReportTarget,
 } from "../types.js";
 
 type LegacyChatMapping = {
@@ -248,19 +247,6 @@ export class FileStore {
     return Object.values(state.telegramContacts).sort((left, right) => right.lastSeenAt.localeCompare(left.lastSeenAt));
   }
 
-  async setReportTargetForChat(
-    botId: string,
-    chatId: string,
-    reportTarget?: TelegramReportTarget,
-  ): Promise<ChatSession> {
-    const state = await this.readState();
-    const exact = this.mustResolveChatSession(state, botId, chatId);
-    exact.session.reportTarget = reportTarget;
-    exact.session.updatedAt = new Date().toISOString();
-    await this.writeState(state);
-    return this.mustResolveChatSession(state, botId, chatId);
-  }
-
   async appendLog(remoteSessionId: string, line: string): Promise<void> {
     const eventFile = this.sessionEventsPath(remoteSessionId);
     await fs.mkdir(path.dirname(eventFile), { recursive: true });
@@ -294,7 +280,7 @@ export class FileStore {
     await fs.mkdir(this.sessionsDir, { recursive: true });
     await fs.mkdir(this.telegramChannelsDir, { recursive: true });
 
-    await fs.writeFile(this.stateFile, JSON.stringify(state, null, 2), "utf8");
+    await this.writeJsonFileAtomic(this.stateFile, state);
     await this.writeSessions(state.sessions);
     await this.writeChannelBindings(state.chats);
   }
@@ -348,7 +334,7 @@ export class FileStore {
   private async readLegacyState(): Promise<BridgeState> {
     try {
       const raw = await fs.readFile(this.stateFile, "utf8");
-      const { state } = this.normalizeState(JSON.parse(raw) as BridgeState | LegacyBridgeState);
+      const { state } = this.normalizeState(this.parseJsonObject(raw, this.stateFile) as BridgeState | LegacyBridgeState);
       return state;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -363,11 +349,7 @@ export class FileStore {
       const normalized = this.normalizeSession(session);
       const sessionDir = this.sessionDirPath(session.sessionId);
       await fs.mkdir(sessionDir, { recursive: true });
-      await fs.writeFile(
-        path.join(sessionDir, "session.json"),
-        JSON.stringify(normalized, null, 2),
-        "utf8",
-      );
+      await this.writeJsonFileAtomic(path.join(sessionDir, "session.json"), normalized);
     }
   }
 
@@ -382,7 +364,7 @@ export class FileStore {
       const filePath = this.channelFilePath(binding.botId, binding.chatId);
       desiredFiles.add(filePath);
       await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.writeFile(filePath, JSON.stringify(binding, null, 2), "utf8");
+      await this.writeJsonFileAtomic(filePath, binding);
     }
 
     const existingFiles = await this.listChannelFiles();
@@ -451,10 +433,83 @@ export class FileStore {
     }
 
     try {
-      return JSON.parse(raw) as T;
+      return this.parseJsonObject(raw, filePath) as T;
     } catch {
       return undefined;
     }
+  }
+
+  private parseJsonObject(raw: string, source: string): unknown {
+    try {
+      return JSON.parse(raw);
+    } catch (error) {
+      const end = this.findJsonObjectEnd(raw);
+      if (!end) {
+        throw error;
+      }
+
+      const trailing = raw.slice(end).trim();
+      if (!trailing) {
+        throw error;
+      }
+
+      console.warn(`[store] ${source} has ${trailing.length} trailing character(s) after the first JSON object; ignoring trailing data.`);
+      return JSON.parse(raw.slice(0, end));
+    }
+  }
+
+  private findJsonObjectEnd(raw: string): number | undefined {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let started = false;
+
+    for (let index = 0; index < raw.length; index += 1) {
+      const char = raw[index];
+
+      if (!started) {
+        if (/\s/.test(char)) {
+          continue;
+        }
+        if (char !== "{") {
+          return undefined;
+        }
+        started = true;
+        depth = 1;
+        continue;
+      }
+
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (char === "\\") {
+          escaped = true;
+        } else if (char === "\"") {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (char === "\"") {
+        inString = true;
+      } else if (char === "{") {
+        depth += 1;
+      } else if (char === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          return index + 1;
+        }
+      }
+    }
+
+    return undefined;
+  }
+
+  private async writeJsonFileAtomic(filePath: string, value: unknown): Promise<void> {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+    await fs.writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    await fs.rename(temporaryPath, filePath);
   }
 
   private normalizeState(rawState: BridgeState | LegacyBridgeState): { state: BridgeState; migrated: boolean } {
@@ -586,9 +641,6 @@ export class FileStore {
     session.publicId = session.publicId || "";
     session.workspace = session.workspace || session.codex?.cwd || session.claude?.cwd || this.dataDir;
     session.workspaceUid = typeof session.workspaceUid === "string" && session.workspaceUid.trim() ? session.workspaceUid.trim() : undefined;
-    if (session.reportTarget?.transport !== "telegram" || !session.reportTarget.botId || !session.reportTarget.chatId) {
-      delete session.reportTarget;
-    }
     session.createdAt = session.createdAt || session.updatedAt || new Date().toISOString();
     session.updatedAt = session.updatedAt || session.createdAt;
 

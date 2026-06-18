@@ -1,6 +1,5 @@
 export type Provider = "codex" | "claude";
 export type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
-export type TelegramBotRole = "general" | "report";
 
 export type BridgeMode = Provider;
 
@@ -12,14 +11,6 @@ export type ProviderSession = {
   model?: string;
   lastUsedAt?: string;
   sandboxMode?: CodexSandboxMode;
-};
-
-export type TelegramReportTarget = {
-  transport: "telegram";
-  botId: string;
-  chatId: string;
-  username?: string;
-  setAt: string;
 };
 
 export type TelegramContact = {
@@ -42,7 +33,6 @@ export type SessionRecord = {
   mode: BridgeMode;
   workspace: string;
   workspaceUid?: string;
-  reportTarget?: TelegramReportTarget;
   codex?: ProviderSession;
   claude?: ProviderSession;
   createdAt: string;

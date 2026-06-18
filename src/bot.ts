@@ -33,14 +33,12 @@ const HELP_TEXT = [
   "/sandbox codex <read-only|workspace-write|danger-full-access>",
   "/status",
   "/option [retry <count>|timeout <seconds>|intent <count>]",
-  "/reportbot list|set <target>|status|test|send|clear",
   "/state [clear|note <text>]",
   "/artifacts list|cleanup <days>",
   "/secret set|list|remove",
   "/docs pin|find|list|remove",
   "/bots",
   "/bot add <token>",
-  "/bot addreport <token>",
   "/bot remove <username|id>",
   "/bot reload",
   "/install codex|claude",
@@ -70,7 +68,6 @@ const REPORT_PROTOCOL_PROMPT = [
   "If REPORT:result claims code, DB, deploy, commit, push, file delivery, or verification work is complete, include concrete evidence such as file paths, commands, logs, commit IDs, digests, or line references.",
   "If you want RemoteAgent to send a file, include a separate line exactly like: TELEGRAM_FILE: /absolute/path/to/file",
   "Do not call Telegram APIs directly or use bot credentials even if they appear to exist in the environment.",
-  "If this session has an approved Telegram report target, background jobs may report through the helper command: node \"$REMOTEAGENT_REPORT_BIN\" --session \"$REMOTEAGENT_PUBLIC_SESSION_ID\" \"message\"",
   "REMOTEAGENT_SESSION_ID and REMOTEAGENT_PUBLIC_SESSION_ID are available during provider execution. For cron, persist the literal public session id in the cron command instead of assuming the env will still exist later.",
 ].join("\n");
 const RECOGNIZED_COMMANDS = new Set([
@@ -86,7 +83,6 @@ const RECOGNIZED_COMMANDS = new Set([
   "sandbox",
   "status",
   "option",
-  "reportbot",
   "state",
   "artifacts",
   "secret",
@@ -615,77 +611,6 @@ ${bridge.formatStatus(mapping)}`);
     await reply(ctx, `Set provider execution timeout to ${formatTimeoutSeconds(config.commandTimeoutMs)}.\n\nSaved: COMMAND_TIMEOUT_MS=${config.commandTimeoutMs}`);
   });
 
-  bot.command("reportbot", async (ctx) => {
-    await ensureOwnerControlAccess(ctx);
-    const botId = getBotId();
-    const chatId = String(ctx.chat.id);
-    const { args, rest } = parseCommand(ctx.message?.text, 1);
-    const action = args[0]?.toLowerCase();
-    const target = rest?.trim();
-    if (!action || !["list", "set", "status", "test", "send", "clear"].includes(action)) {
-      await reply(ctx, "Usage: `/reportbot list`, `/reportbot set <number|@bot_username>`, `/reportbot status`, `/reportbot test [message]`, `/reportbot send <message>`, or `/reportbot clear`", {
-        parse_mode: "Markdown",
-      });
-      return;
-    }
-
-    if (action === "list") {
-      const pendingNotice = await botManagement.getPendingOperationNotice();
-      if (pendingNotice?.pending) {
-        await reply(ctx, pendingNotice.message);
-        return;
-      }
-      const reportBots = await botManagement.listBotSummaries("report");
-      await reply(ctx, bridge.formatTelegramReportBots(reportBots));
-      return;
-    }
-
-    if (action === "status") {
-      const mapping = await bridge.status(botId, chatId);
-      await reply(ctx, mapping ? bridge.formatCurrentSession(mapping) : "No paired session for this chat yet.");
-      return;
-    }
-
-    if (action === "clear") {
-      const mapping = await bridge.clearTelegramReportTarget(botId, chatId);
-      await reply(ctx, `Cleared the Telegram report target for ${mapping.session.publicId}.\n\n${bridge.formatCurrentSession(mapping)}`);
-      return;
-    }
-
-    if (action === "test" || action === "send") {
-      const message = target || `[RemoteAgent reportbot test] ${new Date().toISOString()}`;
-      if (action === "send" && !target) {
-        await reply(ctx, "Usage: `/reportbot send <message>`", {
-          parse_mode: "Markdown",
-        });
-        return;
-      }
-
-      const result = await sendTelegramReportForCurrentSession(bridge, botId, chatId, message);
-      await reply(ctx, result);
-      return;
-    }
-
-    if (!target) {
-      await reply(ctx, "Usage: `/reportbot set <number|@bot_username>`", {
-        parse_mode: "Markdown",
-      });
-      return;
-    }
-
-    const reportBots = await botManagement.listBotSummaries("report");
-    const mapping = await bridge.setTelegramReportBotForChat(
-      botId,
-      chatId,
-      target,
-      reportBots,
-    );
-    await reply(
-      ctx,
-      `Saved the report delivery bot for ${mapping.session.publicId}.\n\n${bridge.formatCurrentSession(mapping)}`,
-    );
-  });
-
   bot.command("state", async (ctx) => {
     const botId = getBotId();
     const chatId = String(ctx.chat.id);
@@ -830,33 +755,25 @@ ${bridge.formatStatus(mapping)}`);
     const { args, rest } = parseCommand(ctx.message?.text, 2);
     const action = args[0]?.toLowerCase();
 
-    if (!action || !["add", "addreport", "remove", "reload"].includes(action)) {
-      await reply(ctx, "Usage: `/bot add <token>`, `/bot addreport <token>`, `/bot remove <username|id>`, or `/bot reload`", {
+    if (!action || !["add", "remove", "reload"].includes(action)) {
+      await reply(ctx, "Usage: `/bot add <token>`, `/bot remove <username|id>`, or `/bot reload`", {
         parse_mode: "Markdown",
       });
       return;
     }
 
-    if (action === "add" || action === "addreport") {
+    if (action === "add") {
       const rawSecond = args[1]?.trim();
-      const hasLegacyRolePrefix = action === "add" && (rawSecond === "general" || rawSecond === "report");
-      const role = action === "addreport"
-        ? "report"
-        : hasLegacyRolePrefix
-          ? rawSecond as "general" | "report"
-          : "general";
-      const token = hasLegacyRolePrefix
-        ? (rest?.trim() ?? "")
-        : (rawSecond ?? rest?.trim() ?? "");
+      const token = rawSecond ?? rest?.trim() ?? "";
 
       if (!token) {
-        await reply(ctx, action === "addreport" ? "Usage: `/bot addreport <token>`" : "Usage: `/bot add <token>`", {
+        await reply(ctx, "Usage: `/bot add <token>`", {
           parse_mode: "Markdown",
         });
         return;
       }
 
-      const result = await botManagement.addBot(role, token, sourceBotId, sourceBotToken, ctx.chat.id);
+      const result = await botManagement.addBot(token, sourceBotId, sourceBotToken, ctx.chat.id);
       await reply(ctx, result.message);
       return;
     }
@@ -1282,9 +1199,6 @@ class TelegramMessageBatcher {
 
 function sanitizeLoggedTelegramText(text: string): string {
   const trimmed = text.trim();
-  if (/^\/bot\s+addreport\s+/i.test(trimmed)) {
-    return "/bot addreport [redacted]";
-  }
   if (/^\/bot\s+add\s+/i.test(trimmed)) {
     return "/bot add [redacted]";
   }
@@ -1371,36 +1285,6 @@ async function runWithPendingAnimation(
   } finally {
     clearInterval(pendingLoop);
   }
-}
-
-async function sendTelegramReportForCurrentSession(
-  bridge: BridgeService,
-  botId: string,
-  chatId: string,
-  message: string,
-): Promise<string> {
-  const mapping = await bridge.status(botId, chatId);
-  if (!mapping) {
-    return "No paired session for this chat yet. Run `/start` first.";
-  }
-
-  if (!mapping.session.reportTarget) {
-    return `No report delivery bot is configured for ${mapping.session.publicId}. Run \`/reportbot set <number|@bot_username>\` first.`;
-  }
-
-  const helperPath = path.resolve(process.cwd(), "dist", "report-telegram.js");
-  const { stdout, stderr } = await execFileAsync(
-    process.execPath,
-    [helperPath, "--session", mapping.session.publicId, message],
-    { timeout: 30_000 },
-  );
-
-  if (stderr?.trim()) {
-    console.error(`reportbot helper stderr: ${stderr.trim()}`);
-  }
-
-  const delivered = stdout.trim() || `Delivered report message for ${mapping.session.publicId}.`;
-  return `${delivered}\n\n${bridge.formatCurrentSession(mapping)}`;
 }
 
 async function routeTelegramWorkLoop(

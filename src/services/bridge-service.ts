@@ -13,7 +13,6 @@ import type {
   ProviderSession,
   SessionRecord,
   TelegramContact,
-  TelegramReportTarget,
 } from "../types.js";
 import { FileStore } from "../store/file-store.js";
 import { stopSpawnedExecution } from "../adapters/windows-shell.js";
@@ -208,73 +207,8 @@ export class BridgeService {
     }, chatSession.session.workspace);
   }
 
-  async clearTelegramReportTarget(botId: string, chatId: string): Promise<ChatSession> {
-    await this.requireChat(botId, chatId);
-    return this.store.setReportTargetForChat(botId, chatId, undefined);
-  }
-
   async rememberTelegramContact(contact: TelegramContact): Promise<void> {
     await this.store.rememberTelegramContact(contact);
-  }
-
-  async listTelegramReportTargets(ownerUserId?: string, allowedBotIds?: string[]): Promise<TelegramContact[]> {
-    const contacts = await this.store.listTelegramContacts();
-    const allowed = allowedBotIds ? new Set(allowedBotIds.map((value) => value.toLowerCase())) : undefined;
-    return contacts
-      .filter((contact) =>
-      contact.transport === "telegram"
-      && contact.chatType === "private"
-      && (!ownerUserId || contact.ownerUserId === ownerUserId),
-      )
-      .filter((contact) => !allowed || allowed.has(contact.botId.toLowerCase()) || (contact.botUsername && allowed.has(contact.botUsername.toLowerCase())));
-  }
-
-  async setTelegramReportTargetBySelector(
-    botId: string,
-    chatId: string,
-    selector: string,
-    ownerUserId?: string,
-    allowedBotIds?: string[],
-  ): Promise<ChatSession> {
-    await this.requireChat(botId, chatId);
-    const contacts = await this.listTelegramReportTargets(ownerUserId, allowedBotIds);
-    const target = this.resolveTelegramReportSelector(contacts, selector);
-    if (!target) {
-      throw new Error(this.formatUnknownReportTarget(selector, contacts));
-    }
-
-    const reportTarget: TelegramReportTarget = {
-      transport: "telegram",
-      botId: target.botId,
-      chatId: target.chatId,
-      username: target.botUsername ?? target.botId,
-      setAt: new Date().toISOString(),
-    };
-
-    return this.store.setReportTargetForChat(botId, chatId, reportTarget);
-  }
-
-  async setTelegramReportBotForChat(
-    botId: string,
-    chatId: string,
-    selector: string,
-    reportBots: Array<{ id: number; username: string }>,
-  ): Promise<ChatSession> {
-    await this.requireChat(botId, chatId);
-    const target = this.resolveTelegramReportBotSelector(reportBots, selector);
-    if (!target) {
-      throw new Error(this.formatUnknownReportBot(selector, reportBots));
-    }
-
-    const reportTarget: TelegramReportTarget = {
-      transport: "telegram",
-      botId: String(target.id),
-      chatId,
-      username: target.username,
-      setAt: new Date().toISOString(),
-    };
-
-    return this.store.setReportTargetForChat(botId, chatId, reportTarget);
   }
 
   async setModel(botId: string, chatId: string, model: string): Promise<ChatSession> {
@@ -484,7 +418,6 @@ export class BridgeService {
       `chat: ${chatSession.chatId}`,
       `mode: ${session.mode}`,
       `workspace: ${session.workspace}`,
-      `reportTarget: ${this.describeReportTarget(session)}`,
       ...this.describeEffectiveAccess(session),
       codex,
       claude,
@@ -513,7 +446,6 @@ export class BridgeService {
       `chat: ${chatSession.chatId}`,
       `mode: ${session.mode}`,
       `workspace: ${session.workspace}`,
-      `reportTarget: ${this.describeReportTarget(session)}`,
       ...this.describeEffectiveAccess(session),
       `updatedAt: ${session.updatedAt}`,
     ].join("\n");
@@ -870,62 +802,6 @@ export class BridgeService {
     return next?.trim() || current || this.defaultWorkspace;
   }
 
-  formatTelegramReportTargets(
-    contacts: TelegramContact[],
-    configuredReportBots: Array<{ id: number; username: string }> = [],
-  ): string {
-    if (contacts.length === 0 && configuredReportBots.length === 0) {
-      return [
-        "No report targets are available yet.",
-        "1. Add the report bot with `/bot addreport <token>`.",
-        "2. Open a private chat with that bot and send any message once.",
-        "3. Run `/reportbot set <number|@bot_username>` from the work session chat.",
-      ].join("\n");
-    }
-
-    if (contacts.length === 0) {
-      return [
-        `Configured report bots (${configuredReportBots.length})`,
-        ...configuredReportBots.map((bot, index) => `${index + 1}. @${bot.username} (${bot.id})`),
-        "",
-        "No report target chat has been seen yet.",
-        "1. Open a private chat with one of the bots above.",
-        "2. Send any message once to that bot.",
-        "3. Run `/reportbot list` again.",
-        "4. Then run `/reportbot set <number|@bot_username>` from the work session chat.",
-      ].join("\n");
-    }
-
-    return [
-      `Report targets (${contacts.length})`,
-      ...contacts.map((contact, index) => {
-        const label = contact.botUsername ? `@${contact.botUsername}` : contact.botId;
-        const chatLabel = this.describeTelegramContactChat(contact);
-        return `${index + 1}. ${label}\n   chat: ${chatLabel}\n   lastSeenAt: ${contact.lastSeenAt}`;
-      }),
-      "",
-      "Use `/reportbot set <number|@bot_username>` to assign one to the current session.",
-    ].join("\n");
-  }
-
-  formatTelegramReportBots(reportBots: Array<{ id: number; username: string }>): string {
-    if (reportBots.length === 0) {
-      return [
-        "No report bots are configured.",
-        "Add one with `/bot addreport <token>`.",
-      ].join("\n");
-    }
-
-    return [
-      `Report delivery bots (${reportBots.length})`,
-      ...reportBots.map((bot, index) => `${index + 1}. @${bot.username} (${bot.id})`),
-      "",
-      "Use `/reportbot set <number|@bot_username>` to send this session's reports through one of these bots.",
-      "This only selects the delivery bot. It does not attach an agent session to that bot.",
-      "Telegram may reject delivery until your Telegram account has opened that bot at least once.",
-    ].join("\n");
-  }
-
   private defaultModelFor(provider: Provider): string {
     return provider === "codex" ? "gpt-5.5" : "sonnet";
   }
@@ -958,16 +834,6 @@ export class BridgeService {
     return "/tmp only";
   }
 
-  private describeReportTarget(session: SessionRecord): string {
-    if (!session.reportTarget) {
-      return "not configured";
-    }
-
-    const target = session.reportTarget;
-    const label = target.username ? `@${target.username}` : target.botId;
-    return `${label} -> chat ${target.chatId}`;
-  }
-
   private describeTelegramContactChat(contact: TelegramContact): string {
     if (contact.chatType === "private") {
       const parts = [contact.firstName, contact.lastName].filter(Boolean);
@@ -981,76 +847,6 @@ export class BridgeService {
     }
 
     return `${contact.chatType} ${contact.title ? `${contact.title} ` : ""}(${contact.chatId})`.trim();
-  }
-
-  private resolveTelegramReportSelector(contacts: TelegramContact[], selector: string): TelegramContact | undefined {
-    const trimmed = selector.trim();
-    if (!trimmed) {
-      return undefined;
-    }
-
-    if (/^\d+$/.test(trimmed)) {
-      const index = Number.parseInt(trimmed, 10);
-      if (index >= 1 && index <= contacts.length) {
-        return contacts[index - 1];
-      }
-    }
-
-    const normalized = trimmed.startsWith("@") ? trimmed.slice(1).toLowerCase() : trimmed.toLowerCase();
-    const matches = contacts.filter((contact) =>
-      contact.botId.toLowerCase() === normalized
-      || (contact.botUsername?.toLowerCase() === normalized)
-      || contact.chatId === trimmed,
-    );
-
-    if (matches.length === 1) {
-      return matches[0];
-    }
-
-    return undefined;
-  }
-
-  private resolveTelegramReportBotSelector(
-    reportBots: Array<{ id: number; username: string }>,
-    selector: string,
-  ): { id: number; username: string } | undefined {
-    const trimmed = selector.trim();
-    if (!trimmed) {
-      return undefined;
-    }
-
-    if (/^\d+$/.test(trimmed)) {
-      const index = Number.parseInt(trimmed, 10);
-      if (index >= 1 && index <= reportBots.length) {
-        return reportBots[index - 1];
-      }
-    }
-
-    const normalized = trimmed.startsWith("@") ? trimmed.slice(1).toLowerCase() : trimmed.toLowerCase();
-    return reportBots.find((bot) =>
-      bot.username.toLowerCase() === normalized
-      || String(bot.id) === normalized,
-    );
-  }
-
-  private formatUnknownReportBot(selector: string, reportBots: Array<{ id: number; username: string }>): string {
-    return [
-      `Report delivery bot was not found: ${selector}`,
-      "",
-      this.formatTelegramReportBots(reportBots),
-    ].join("\n");
-  }
-
-  private formatUnknownReportTarget(selector: string, contacts: TelegramContact[]): string {
-    if (contacts.length === 0) {
-      return this.formatTelegramReportTargets(contacts);
-    }
-
-    return [
-      `Report target was not found: ${selector}`,
-      "",
-      this.formatTelegramReportTargets(contacts),
-    ].join("\n");
   }
 
   private resolveSelectableModel(provider: Provider, input: string): string {

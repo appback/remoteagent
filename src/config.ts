@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import dotenv from "dotenv";
-import type { BridgeMode, Provider, TelegramBotRole } from "./types.js";
+import type { BridgeMode, Provider } from "./types.js";
 
 dotenv.config();
 
@@ -52,21 +52,6 @@ function readTelegramBotUsernames(): string[] {
     .split(/[\r\n,]+/)
     .map((value) => value.trim())
     .filter(Boolean);
-}
-
-function readTelegramBotRoles(count: number): TelegramBotRole[] {
-  const raw = process.env.TELEGRAM_BOT_ROLES?.trim();
-  const parsed = raw
-    ? raw
-      .split(/[\r\n,]+/)
-      .map((value) => value.trim().toLowerCase())
-      .filter(Boolean)
-    : [];
-
-  return Array.from({ length: count }, (_, index) => {
-    const role = parsed[index];
-    return role === "report" ? "report" : "general";
-  });
 }
 
 function readOptional(name: string): string | undefined {
@@ -162,12 +147,10 @@ const codexCommand = readOptional("CODEX_COMMAND");
 const claudeCommand = readOptional("CLAUDE_COMMAND");
 const telegramBotTokens = readTelegramBotTokens();
 const telegramBotUsernames = readTelegramBotUsernames();
-const telegramBotRoles = readTelegramBotRoles(telegramBotTokens.length);
 
 export const config = {
   telegramBotTokens,
   telegramBotUsernames,
-  telegramBotRoles,
   telegramCommandMenuEnabled: readBoolean("TELEGRAM_COMMAND_MENU_ENABLED", false),
   telegramPollingBackoffMinMs: readTimeout("TELEGRAM_POLLING_BACKOFF_MIN_MS", 60_000),
   telegramPollingBackoffMaxMs: readTimeout("TELEGRAM_POLLING_BACKOFF_MAX_MS", 900_000),

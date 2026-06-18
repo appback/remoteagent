@@ -108,13 +108,8 @@ Current command surface implemented in `src/bot.ts`:
 | `/state` | Shows the session ledger that is injected as provider context |
 | `/state clear` | Clears the current session ledger without deleting the session |
 | `/state note <text>` | Adds an operator note to the session ledger |
-| `/reportbot list` | Lists available report targets discovered from owner private chats across registered bots |
-| `/reportbot set <number\|@bot_username>` | Assigns a separate Telegram bot/chat as the report target for this session |
-| `/reportbot status` | Shows whether this session has a Telegram report target |
-| `/reportbot clear` | Removes the saved Telegram report target from this session |
-| `/bots` | Lists the currently configured Telegram bots with their roles |
-| `/bot add <token>` | Adds a normal conversation bot, restarts the runtime, and confirms the result after restart |
-| `/bot addreport <token>` | Adds a report-only candidate bot, restarts the runtime, and confirms the result after restart |
+| `/bots` | Lists the currently configured Telegram bots |
+| `/bot add <token>` | Adds a conversation bot, restarts the runtime, and confirms the result after restart |
 | `/bot remove <username\|id>` | Removes a configured Telegram bot, restarts the runtime, and confirms the result after restart |
 | `/bot reload` | Restarts the runtime and confirms the result after restart |
 | `/install codex\|claude` | Runs the configured provider install or update command for the bot owner |
@@ -160,7 +155,6 @@ Current Codex behavior:
 - attach to existing `thread_id`
 - continue the same Codex session across turns
 - per-session sandbox selection
-- optional background reporting through `node "$REMOTEAGENT_REPORT_BIN" --session "$REMOTEAGENT_PUBLIC_SESSION_ID" "message"` after `/reportbot set ...`
 
 ### 4. Telegram and Claude Code
 

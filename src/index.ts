@@ -124,7 +124,6 @@ async function configureTelegramCommandMenu(bot: Bot): Promise<void> {
     { command: "model", description: "Show or change provider model" },
     { command: "stop", description: "Stop active work and clear queued messages" },
     { command: "batch", description: "Collect and send a multi-message batch" },
-    { command: "reportbot", description: "Configure report delivery bot" },
     { command: "install", description: "Install or update Codex or Claude" },
     { command: "login", description: "Run provider login flow" },
     { command: "reset", description: "Clear this chat binding" },
