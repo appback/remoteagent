@@ -2,14 +2,15 @@
 
 ## Source of truth
 
-RemoteAgent is currently operated from one canonical checkout only:
+RemoteAgent production is operated from one canonical Git history:
 
-- host: server 30
-- repo path: `/home/au2223/projects/remoteagent`
-- branch used for production changes: `main`
+- source of truth: `origin/main` on GitHub
+- production runtime host: server 30
+- production app path: `/home/au2223/.remoteagent/app/remoteagent-src`
+- branch used for production releases: `main`
 
-Do not use local WSL worktrees or duplicate checkouts as an editing source for this project.
-If code must change, change it in the server 30 checkout, build it there, and push from there.
+Do not treat stale server paths or duplicate worktrees as authoritative.
+Code changes should be committed and pushed to `origin/main`, then server 30 should be updated from that exact commit.
 
 ## Product shape in operations
 
@@ -51,9 +52,9 @@ Current policy:
 Server 30 runs RemoteAgent as a `systemd` service.
 
 - unit: `remoteagent.service`
-- working directory: `/home/au2223/projects/remoteagent`
+- working directory: `/home/au2223/.remoteagent/app/remoteagent-src`
 - runtime data: `/home/au2223/.remoteagent`
-- service entrypoint: `/home/au2223/.local/bin/node /home/au2223/projects/remoteagent/dist/index.js`
+- service entrypoint: `/home/au2223/.local/bin/node /home/au2223/.remoteagent/app/remoteagent-src/dist/index.js`
 
 The service environment is loaded from:
 
@@ -95,7 +96,7 @@ journalctl -u remoteagent -f
 Restart after build:
 
 ```bash
-cd /home/au2223/projects/remoteagent
+cd /home/au2223/.remoteagent/app/remoteagent-src
 /home/au2223/.local/bin/npm run build
 sudo systemctl restart remoteagent
 ```
@@ -110,22 +111,25 @@ cat /home/au2223/.remoteagent/remoteagent.lock
 
 The intended workflow is:
 
-1. edit on server 30
+1. edit in the active development checkout
 2. choose `patch`, `minor`, or `major` for the current deployment
 3. bump the package version before deployment
 4. run `npm run check`
 5. run `npm run build`
-6. restart `remoteagent.service` when runtime code changed
-7. verify logs or a Telegram/local UI path
-8. commit on `main`
-9. push `main` to `origin/main`
-10. update machine 21's npm-installed RemoteAgent runtime when the runtime package changed
+6. commit on `main`
+7. push `main` to `origin/main`
+8. update server 30's production app path to the pushed commit
+9. run `/home/au2223/.local/bin/npm ci`
+10. run `/home/au2223/.local/bin/npm run build`
+11. restart `remoteagent.service` when runtime code changed
+12. verify logs or a Telegram/local UI path
+13. update any other installed RemoteAgent runtime, such as machine 21, when it is intentionally running a separate runtime
 
 Avoid side branches and extra worktrees unless there is a strong reason.
-If a temporary branch is unavoidable, merge it back on server 30 and return production work to `main` immediately.
+If a temporary branch is unavoidable, merge it back to `main`, push it, and deploy from `origin/main`.
 
 A task is not done until commit and push both happened.
-A deployment is not done until machine 21 has also been updated when the package/runtime changed.
+A production deployment is not done until server 30 is running the pushed version and the runtime path has been verified.
 
 See `docs/RELEASING.md` for the detailed versioning rules.
 

@@ -26,14 +26,16 @@ A release is only considered complete when all of the following are done in orde
 2. Bump the version in `package.json` and `package-lock.json`
 3. Run `npm run check`
 4. Run `npm run build`
-5. Restart `remoteagent.service` on server 30 if runtime code changed
-6. Verify the relevant runtime path, logs, or Telegram behavior
-7. Commit the completed work
-8. Push `main` to `origin/main`
-9. Update machine 21's npm-installed runtime after server 30 deployment
+5. Commit the completed work
+6. Push `main` to `origin/main`
+7. Update server 30's production app path to the pushed commit
+8. Run `/home/au2223/.local/bin/npm ci` and `/home/au2223/.local/bin/npm run build` on server 30
+9. Restart `remoteagent.service` on server 30 if runtime code changed
+10. Verify the relevant runtime path, logs, or Telegram behavior
+11. Update any other installed RemoteAgent runtime when that machine intentionally runs one
 
-If step 7 or step 8 is missing, the work is not done.
-If server 30 was updated but machine 21 was not updated, the deployment is incomplete.
+If commit or push is missing, the work is not done.
+If server 30 is not running the pushed version, the production deployment is incomplete.
 
 ## Commands
 
@@ -53,24 +55,38 @@ npm run version:minor
 npm run version:major
 ```
 
-Typical release sequence on server 30:
+Typical local release sequence:
 
 ```bash
-cd /home/au2223/projects/remoteagent
-./scripts/bump-version.sh minor
-/home/au2223/.local/bin/npm run check
-/home/au2223/.local/bin/npm run build
-sudo systemctl restart remoteagent
+./scripts/bump-version.sh patch
+npm run check
+npm run build
 git status
 git add -A
-git commit -m "Release 0.2.0"
+git commit -m "Release 0.12.3"
 git push origin main
 ```
 
-## Machine 21 follow-up
+Typical server 30 deployment sequence:
 
-Server 30 is the source of truth.
-After a deployment on server 30, machine 21 must refresh its npm-installed runtime before the release can be treated as finished.
+```bash
+APP=/home/au2223/.remoteagent/app/remoteagent-src
+cd "$APP"
+git fetch origin main
+git reset --hard origin/main
+git clean -fd -e node_modules
+export PATH=/home/au2223/.local/bin:/home/au2223/.nvm/versions/node/v22.22.0/bin:$PATH
+npm ci
+npm run build
+sudo systemctl restart remoteagent
+systemctl is-active remoteagent
+journalctl -u remoteagent --since "2 minutes ago" --no-pager
+```
 
-At minimum, the operator should run the local install/update flow again and verify the process comes back up cleanly.
-For GitHub-based npm installs, the package now builds `dist/` during `prepare`, so a clean reinstall on machine 21 should produce a runnable package without a separate manual build step.
+## Other Runtime Follow-up
+
+Server 30 is the production runtime.
+Machine 21 or any other host should be updated only when it intentionally runs a separate RemoteAgent service.
+
+At minimum, the operator should run the install/update flow again and verify the process comes back up cleanly.
+For GitHub-based installs, the package builds `dist/` during `prepare`, so a clean reinstall should produce a runnable package without a separate manual build step.
