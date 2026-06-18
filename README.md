@@ -110,6 +110,7 @@ Current command surface implemented in `src/bot.ts`:
 | `/state note <text>` | Adds an operator note to the session ledger |
 | `/bots` | Lists the currently configured Telegram bots |
 | `/bot add <token>` | Adds a conversation bot, restarts the runtime, and confirms the result after restart |
+| `/bot main <number\|@username\|id>` | Selects the main bot. If no valid main is configured, the oldest configured bot is used |
 | `/bot remove <username\|id>` | Removes a configured Telegram bot, restarts the runtime, and confirms the result after restart |
 | `/bot reload` | Restarts the runtime and confirms the result after restart |
 | `/install codex\|claude` | Runs the configured provider install or update command for the bot owner |

@@ -39,6 +39,7 @@ const HELP_TEXT = [
   "/docs pin|find|list|remove",
   "/bots",
   "/bot add <token>",
+  "/bot main <number|@username|id>",
   "/bot remove <username|id>",
   "/bot reload",
   "/install codex|claude",
@@ -755,8 +756,8 @@ ${bridge.formatStatus(mapping)}`);
     const { args, rest } = parseCommand(ctx.message?.text, 2);
     const action = args[0]?.toLowerCase();
 
-    if (!action || !["add", "remove", "reload"].includes(action)) {
-      await reply(ctx, "Usage: `/bot add <token>`, `/bot remove <username|id>`, or `/bot reload`", {
+    if (!action || !["add", "main", "remove", "reload"].includes(action)) {
+      await reply(ctx, "Usage: `/bot add <token>`, `/bot main <number|@username|id>`, `/bot remove <username|id>`, or `/bot reload`", {
         parse_mode: "Markdown",
       });
       return;
@@ -774,6 +775,12 @@ ${bridge.formatStatus(mapping)}`);
       }
 
       const result = await botManagement.addBot(token, sourceBotId, sourceBotToken, ctx.chat.id);
+      await reply(ctx, result.message);
+      return;
+    }
+
+    if (action === "main") {
+      const result = await botManagement.setMainBot(rest?.trim() ?? args[1]?.trim() ?? "");
       await reply(ctx, result.message);
       return;
     }
