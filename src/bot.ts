@@ -1247,22 +1247,30 @@ async function runWithPendingAnimation(
   chatId: number,
   task: (helpers: PendingAnimationHelpers) => Promise<{ chunks: string[]; parseMode?: "HTML" | "MarkdownV2" }>,
 ): Promise<void> {
-  let pending: TelegramMessageResult;
-  try {
-    pending = await sendTelegramMessage(botToken, chatId, "Working.");
-  } catch (error) {
-    if (isTelegramForbiddenError(error)) {
-      console.warn(`[telegram-delivery] chat=${chatId} skipped pending animation: ${error instanceof Error ? error.message : String(error)}`);
+  let typingStopped = false;
+  let typingTimer: ReturnType<typeof setTimeout> | undefined;
+  const typingStartedAt = Date.now();
+  const pulseTyping = (): void => {
+    if (typingStopped) {
       return;
     }
-    throw error;
-  }
-  const pendingFrames = ["Working.", "Working..", "Working...", "Working...."];
-  let pendingIndex = 0;
-  const pendingLoop = setInterval(() => {
-    pendingIndex = (pendingIndex + 1) % pendingFrames.length;
-    void editTelegramMessageText(botToken, chatId, pending.message_id, pendingFrames[pendingIndex]).catch(() => undefined);
-  }, 3000);
+
+    void sendTelegramChatAction(botToken, chatId, "typing").catch((error) => {
+      if (isTelegramForbiddenError(error)) {
+        console.warn(`[telegram-delivery] chat=${chatId} skipped typing action: ${error instanceof Error ? error.message : String(error)}`);
+        typingStopped = true;
+        return;
+      }
+      console.warn(`[telegram-chat-action] chat=${chatId} failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+
+    const elapsedMs = Date.now() - typingStartedAt;
+    const nextDelayMs = elapsedMs < 60_000 ? 4_000 : 30_000;
+    typingTimer = setTimeout(pulseTyping, nextDelayMs);
+    typingTimer.unref?.();
+  };
+
+  pulseTyping();
 
   try {
     const helpers: PendingAnimationHelpers = {
@@ -1274,14 +1282,12 @@ async function runWithPendingAnimation(
         }
 
         const extra = parseMode ? { parse_mode: parseMode } : undefined;
-        await deleteTelegramMessage(botToken, chatId, pending.message_id).catch(() => undefined);
         for (const chunk of progressChunks) {
           await sendTelegramMessage(botToken, chatId, chunk, extra);
         }
         if (normalized.documents.length > 0) {
           await sendTelegramDocuments(botToken, chatId, normalized.documents);
         }
-        pending = await sendTelegramMessage(botToken, chatId, "Working.");
       },
     };
 
@@ -1291,11 +1297,10 @@ async function runWithPendingAnimation(
     const extra = result.parseMode ? { parse_mode: result.parseMode } : undefined;
 
     if (chunks.length === 0 && normalized.documents.length === 0) {
-      await editTelegramMessageText(botToken, chatId, pending.message_id, "Response was empty.");
+      await sendTelegramMessage(botToken, chatId, "Response was empty.");
       return;
     }
 
-    await deleteTelegramMessage(botToken, chatId, pending.message_id).catch(() => undefined);
     for (const chunk of chunks) {
       await sendTelegramMessage(botToken, chatId, chunk, extra);
     }
@@ -1304,16 +1309,16 @@ async function runWithPendingAnimation(
     }
   } catch (error) {
     if (error instanceof SilentTelegramAbort) {
-      await deleteTelegramMessage(botToken, chatId, pending.message_id).catch(() => undefined);
       return;
     }
     const message = error instanceof Error ? error.message : "An unexpected error occurred.";
     console.error(`[telegram-pending] chat=${chatId} failed: ${message}`, error);
-    await editTelegramMessageText(botToken, chatId, pending.message_id, message).catch(async () => {
-      await sendTelegramMessage(botToken, chatId, message);
-    });
+    await sendTelegramMessage(botToken, chatId, message).catch(() => undefined);
   } finally {
-    clearInterval(pendingLoop);
+    typingStopped = true;
+    if (typingTimer) {
+      clearTimeout(typingTimer);
+    }
   }
 }
 
@@ -2549,25 +2554,14 @@ async function sendTelegramMessage(
   }
 }
 
-async function editTelegramMessageText(
+async function sendTelegramChatAction(
   botToken: string,
   chatId: number,
-  messageId: number,
-  text: string,
-  extra?: TelegramMessageOptions,
+  action: "typing",
 ): Promise<void> {
-  await callTelegramApi(botToken, "editMessageText", {
+  await callTelegramApi<boolean>(botToken, "sendChatAction", {
     chat_id: String(chatId),
-    message_id: String(messageId),
-    text,
-    parse_mode: extra?.parse_mode,
-  });
-}
-
-async function deleteTelegramMessage(botToken: string, chatId: number, messageId: number): Promise<void> {
-  await callTelegramApi(botToken, "deleteMessage", {
-    chat_id: String(chatId),
-    message_id: String(messageId),
+    action,
   });
 }
 
