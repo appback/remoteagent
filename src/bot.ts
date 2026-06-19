@@ -1895,6 +1895,10 @@ function formatSecretHelp(): string {
     "```text",
     "node \"$REMOTEAGENT_SECRET_BIN\" get <KEY>",
     "```",
+    "If an agent obtains a new secret value such as an OAuth refresh token, it can delegate storage without printing the value:",
+    "```text",
+    "printf '%s' \"$VALUE\" | node \"$REMOTEAGENT_SECRET_BIN\" set <KEY>",
+    "```",
   ].join("\n");
 }
 

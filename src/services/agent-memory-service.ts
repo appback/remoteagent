@@ -430,8 +430,16 @@ export class AgentMemoryService {
         ? ["Document index:", ...docs.map((doc) => `- ${doc.keyword}: ${doc.targetPath}${doc.note ? ` (${doc.note})` : ""}`)].join("\n")
         : undefined,
       secrets.length > 0
-        ? ["Secret keys available through `node \"$REMOTEAGENT_SECRET_BIN\" get <KEY>`:", ...secrets.map((key) => `- ${key}`)].join("\n")
-        : undefined,
+        ? [
+            "Secret keys available through `node \"$REMOTEAGENT_SECRET_BIN\" get <KEY>`:",
+            ...secrets.map((key) => `- ${key}`),
+            "If you generate a new secret value such as an OAuth refresh token, store it without printing it:",
+            "`printf '%s' \"$VALUE\" | node \"$REMOTEAGENT_SECRET_BIN\" set <KEY>`",
+          ].join("\n")
+        : [
+            "Secrets can be stored without printing values:",
+            "`printf '%s' \"$VALUE\" | node \"$REMOTEAGENT_SECRET_BIN\" set <KEY>`",
+          ].join("\n"),
       artifacts.length > 0
         ? ["Recent session artifacts:", ...artifacts.map((artifact) => `- ${artifact.id} ${artifact.kind}: ${artifact.path}`)].join("\n")
         : undefined,
@@ -876,5 +884,37 @@ export function readSecretValue(dataDir: string, key: string): string | undefine
     return secrets[key]?.value;
   } catch {
     return undefined;
+  }
+}
+
+export function writeSecretValue(dataDir: string, key: string, value: string): void {
+  if (!/^[A-Z0-9_.-]{1,80}$/.test(key)) {
+    throw new Error("Secret key must be 1-80 chars using A-Z, 0-9, dot, underscore, or dash.");
+  }
+
+  const filePath = path.join(dataDir, "managed", "secrets.json");
+  fsSync.mkdirSync(path.dirname(filePath), { recursive: true });
+
+  let secrets: Record<string, SecretRecord> = {};
+  try {
+    const raw = fsSync.readFileSync(filePath, "utf8");
+    secrets = JSON.parse(raw) as Record<string, SecretRecord>;
+  } catch {
+    secrets = {};
+  }
+
+  const now = new Date().toISOString();
+  secrets[key] = {
+    key,
+    value,
+    createdAt: secrets[key]?.createdAt ?? now,
+    updatedAt: now,
+  };
+
+  fsSync.writeFileSync(filePath, `${JSON.stringify(secrets, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  try {
+    fsSync.chmodSync(filePath, 0o600);
+  } catch {
+    // Best effort only; some platforms do not support chmod.
   }
 }
