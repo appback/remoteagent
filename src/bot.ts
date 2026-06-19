@@ -1252,13 +1252,12 @@ async function runWithPendingAnimation(
 ): Promise<void> {
   let typingStopped = false;
   let typingTimer: ReturnType<typeof setTimeout> | undefined;
-  const typingStartedAt = Date.now();
-  const pulseTyping = (): void => {
+  const pulseTyping = async (): Promise<void> => {
     if (typingStopped) {
       return;
     }
 
-    void sendTelegramChatAction(botToken, chatId, "typing").catch((error) => {
+    await sendTelegramChatAction(botToken, chatId, "typing").catch((error) => {
       if (isTelegramForbiddenError(error)) {
         console.warn(`[telegram-delivery] chat=${chatId} skipped typing action: ${error instanceof Error ? error.message : String(error)}`);
         typingStopped = true;
@@ -1267,13 +1266,15 @@ async function runWithPendingAnimation(
       console.warn(`[telegram-chat-action] chat=${chatId} failed: ${error instanceof Error ? error.message : String(error)}`);
     });
 
-    const elapsedMs = Date.now() - typingStartedAt;
-    const nextDelayMs = elapsedMs < 60_000 ? 4_000 : 30_000;
-    typingTimer = setTimeout(pulseTyping, nextDelayMs);
+    typingTimer = setTimeout(() => {
+      void pulseTyping();
+    }, config.telegramTypingIntervalMs);
     typingTimer.unref?.();
   };
 
-  pulseTyping();
+  await withTimeout(pulseTyping(), 1500).catch((error) => {
+    console.warn(`[telegram-chat-action] chat=${chatId} initial typing action was not confirmed: ${error instanceof Error ? error.message : String(error)}`);
+  });
 
   try {
     const helpers: PendingAnimationHelpers = {
@@ -1776,6 +1777,23 @@ function formatProviderTimeoutFinalMessage(message: string): string {
 
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Timed out after ${timeoutMs}ms`)), timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
 }
 
 async function ensureOwnerControlAccess(ctx: Context): Promise<void> {
