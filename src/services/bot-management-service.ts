@@ -291,8 +291,8 @@ export class BotManagementService {
 
     for (const bot of bots) {
       try {
-        await this.fetchBotIdentity(bot.token);
-        alive.push(bot);
+        const identity = await this.fetchBotIdentity(bot.token);
+        alive.push({ ...identity, index: bot.index });
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         if (this.isDeadBotError(reason)) {
@@ -563,7 +563,8 @@ export class BotManagementService {
       : singleTokenLine
         ? [singleTokenLine.slice("TELEGRAM_BOT_TOKEN=".length).trim()].filter(Boolean)
         : [];
-    const usernames = usernameLine ? this.parseCsv(usernameLine.slice("TELEGRAM_BOT_USERNAMES=".length)) : [];
+    const configuredUsernames = usernameLine ? this.parseCsv(usernameLine.slice("TELEGRAM_BOT_USERNAMES=".length)) : [];
+    const usernames = await this.normalizeUsernamesFromTelegram(tokens, configuredUsernames);
 
     return {
       lines,
@@ -574,7 +575,7 @@ export class BotManagementService {
   }
 
   private async writeEnvConfig(originalLines: string[], tokens: string[], usernames: string[], mainBotId?: string): Promise<void> {
-    const normalizedUsernames = this.normalizeUsernames(tokens, usernames);
+    const normalizedUsernames = await this.normalizeUsernamesFromTelegram(tokens, usernames);
     const normalizedMainBotId = this.resolveMainBotId(this.zipBots(tokens, normalizedUsernames), mainBotId);
     const nextLines: string[] = [];
     let hasMulti = false;
@@ -626,7 +627,24 @@ export class BotManagementService {
   }
 
   private normalizeUsernames(tokens: string[], usernames: string[]): string[] {
-    return tokens.map((token, index) => usernames[index]?.trim() || `bot_${this.tokenId(token)}`);
+    return tokens.map((token, index) => usernames[index]?.trim() || this.fallbackUsername(token));
+  }
+
+  private async normalizeUsernamesFromTelegram(tokens: string[], usernames: string[]): Promise<string[]> {
+    const normalized: string[] = [];
+    for (const token of tokens) {
+      try {
+        const identity = await this.fetchBotIdentity(token);
+        normalized.push(identity.username);
+      } catch {
+        normalized.push(this.fallbackUsername(token));
+      }
+    }
+    return normalized;
+  }
+
+  private fallbackUsername(token: string): string {
+    return `bot_${this.tokenId(token)}`;
   }
 
   private zipBots(tokens: string[], usernames: string[]): ManagedBot[] {

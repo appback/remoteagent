@@ -91,7 +91,7 @@ async function main(): Promise<void> {
       });
   }
 
-  const botInfos = config.telegramBotTokens.map((token, index) => buildBotInfo(token, index));
+  const botInfos = await Promise.all(config.telegramBotTokens.map((token, index) => resolveBotInfo(token, index)));
   const bots = config.telegramBotTokens.map((token, index) => createBot(token, bridge, botManagement, botInfos[index]!));
 
   if (config.telegramCommandMenuEnabled) {
@@ -523,11 +523,53 @@ class AsyncSemaphore {
   }
 }
 
-function buildBotInfo(token: string, index: number): UserFromGetMe {
+type TelegramGetMeResponse = {
+  ok?: boolean;
+  description?: string;
+  result?: {
+    id?: number;
+    username?: string;
+    first_name?: string;
+  };
+};
+
+async function resolveBotInfo(token: string, index: number): Promise<UserFromGetMe> {
+  try {
+    const { stdout } = await execFileAsync("curl", [
+      "-sS",
+      "-4",
+      "--max-time",
+      "10",
+      `https://api.telegram.org/bot${token}/getMe`,
+    ]);
+    const payload = JSON.parse(stdout) as TelegramGetMeResponse;
+    if (payload.ok && payload.result?.id && payload.result.username) {
+      return buildBotInfoFromIdentity(payload.result.id, payload.result.username, payload.result.first_name);
+    }
+    console.warn(`Telegram getMe failed for bot ${tokenIdLabel(token)}: ${payload.description || "missing bot identity"}`);
+  } catch (error) {
+    console.warn(`Telegram getMe failed for bot ${tokenIdLabel(token)}: ${summarizeTelegramIdentityError(error)}`);
+  }
+
+  return buildFallbackBotInfo(token, index);
+}
+
+function buildBotInfoFromIdentity(id: number, username: string, firstName?: string): UserFromGetMe {
+  return {
+    id,
+    is_bot: true,
+    first_name: firstName || username,
+    username,
+    can_join_groups: false,
+    can_read_all_group_messages: false,
+    supports_inline_queries: false,
+  } as UserFromGetMe;
+}
+
+function buildFallbackBotInfo(token: string, index: number): UserFromGetMe {
   const id = Number.parseInt(token.split(":", 1)[0] ?? "", 10);
-  const configuredUsername = config.telegramBotUsernames[index];
   const fallbackUsername = knownBotUsername(id);
-  const username = configuredUsername || fallbackUsername || `bot_${Number.isFinite(id) ? id : index + 1}`;
+  const username = fallbackUsername || `bot_${Number.isFinite(id) ? id : index + 1}`;
 
   return {
     id: Number.isFinite(id) ? id : index + 1,
@@ -538,6 +580,22 @@ function buildBotInfo(token: string, index: number): UserFromGetMe {
     can_read_all_group_messages: false,
     supports_inline_queries: false,
   } as UserFromGetMe;
+}
+
+function tokenIdLabel(token: string): string {
+  return token.split(":", 1)[0] || "unknown";
+}
+
+function summarizeTelegramIdentityError(error: unknown): string {
+  if (!(error instanceof Error)) {
+    return String(error);
+  }
+  const code = typeof error === "object" && error !== null && "code" in error
+    ? String((error as { code?: unknown }).code ?? "")
+    : "";
+  return [code, error.message.replace(/bot\d+:[A-Za-z0-9_-]+/g, "bot[redacted]")]
+    .filter(Boolean)
+    .join(" ");
 }
 
 function knownBotUsername(id: number): string | undefined {
