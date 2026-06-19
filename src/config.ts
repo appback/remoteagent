@@ -157,7 +157,7 @@ export const config = {
   telegramPollingMaxConcurrency: readTimeout("TELEGRAM_POLLING_MAX_CONCURRENCY", 3),
   telegramOwnerId: readOptional("TELEGRAM_OWNER_ID"),
   telegramMessageBatchMs: readNonNegativeTimeout("TELEGRAM_MESSAGE_BATCH_MS", 1500),
-  telegramTypingIntervalMs: readTimeout("TELEGRAM_TYPING_INTERVAL_MS", 4_000),
+  telegramTypingIntervalMs: readTimeout("TELEGRAM_TYPING_INTERVAL_MS", 10_000),
   telegramAutoProgressMaxTurns: readOptionalNonNegativeInteger("TELEGRAM_AUTO_PROGRESS_MAX_TURNS") ?? 6,
   telegramEmptyResponseRetries: readOptionalNonNegativeInteger("TELEGRAM_EMPTY_RESPONSE_RETRIES") ?? 1,
   telegramRetryableErrorRetries: readOptionalNonNegativeInteger("TELEGRAM_RETRYABLE_ERROR_RETRIES") ?? 2,

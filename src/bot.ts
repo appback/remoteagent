@@ -1252,29 +1252,35 @@ async function runWithPendingAnimation(
 ): Promise<void> {
   let typingStopped = false;
   let typingTimer: ReturnType<typeof setTimeout> | undefined;
-  const pulseTyping = async (): Promise<void> => {
+  let typingInFlight = false;
+  const pulseTyping = (): void => {
     if (typingStopped) {
       return;
     }
 
-    await sendTelegramChatAction(botToken, chatId, "typing").catch((error) => {
-      if (isTelegramForbiddenError(error)) {
-        console.warn(`[telegram-delivery] chat=${chatId} skipped typing action: ${error instanceof Error ? error.message : String(error)}`);
-        typingStopped = true;
-        return;
-      }
-      console.warn(`[telegram-chat-action] chat=${chatId} failed: ${error instanceof Error ? error.message : String(error)}`);
-    });
+    if (!typingInFlight) {
+      typingInFlight = true;
+      void sendTelegramChatAction(botToken, chatId, "typing")
+        .catch((error) => {
+          if (isTelegramForbiddenError(error)) {
+            console.warn(`[telegram-delivery] chat=${chatId} skipped typing action: ${error instanceof Error ? error.message : String(error)}`);
+            typingStopped = true;
+            return;
+          }
+          console.warn(`[telegram-chat-action] chat=${chatId} failed: ${error instanceof Error ? error.message : String(error)}`);
+        })
+        .finally(() => {
+          typingInFlight = false;
+        });
+    }
 
     typingTimer = setTimeout(() => {
-      void pulseTyping();
+      pulseTyping();
     }, config.telegramTypingIntervalMs);
     typingTimer.unref?.();
   };
 
-  await withTimeout(pulseTyping(), 1500).catch((error) => {
-    console.warn(`[telegram-chat-action] chat=${chatId} initial typing action was not confirmed: ${error instanceof Error ? error.message : String(error)}`);
-  });
+  pulseTyping();
 
   try {
     const helpers: PendingAnimationHelpers = {
@@ -1777,23 +1783,6 @@ function formatProviderTimeoutFinalMessage(message: string): string {
 
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`Timed out after ${timeoutMs}ms`)), timeoutMs);
-        timer.unref?.();
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
 }
 
 async function ensureOwnerControlAccess(ctx: Context): Promise<void> {
