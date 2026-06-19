@@ -515,7 +515,7 @@ export class FileStore {
 
   private async writeJsonFileAtomic(filePath: string, value: unknown): Promise<void> {
     await fs.mkdir(path.dirname(filePath), { recursive: true });
-    const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+    const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
     await fs.writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
     await fs.rename(temporaryPath, filePath);
   }
