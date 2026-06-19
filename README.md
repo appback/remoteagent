@@ -300,13 +300,25 @@ Recommended Linux hooks in this repo:
 ### Linux / macOS
 
 ```bash
-./scripts/install.sh
-./scripts/start.sh
+npm install -g appback-remoteagent
+remoteagent-install
+remoteagent-start
 ```
 
-`./scripts/install.sh` now seeds provider install/login hook paths into `~/.remoteagent/.env` automatically, so `/install codex` and `/install claude` work on a fresh machine without manual hook wiring.
+`remoteagent-install` seeds provider install/login hook paths into `~/.remoteagent/.env` automatically, so `/install codex` and `/install claude` work on a fresh machine without manual hook wiring.
+
+For one-line installs on a fresh machine:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/appback/remoteagent/main/scripts/install.sh | bash
+remoteagent-start
+```
+
+The piped installer installs `appback-remoteagent` from npm. It does not deploy a Git checkout as the runtime.
 
 ### Windows PowerShell
+
+Native Windows service packaging is not finalized yet. For now, use WSL/Linux for production runtimes, or run the repository-local PowerShell scripts during development:
 
 ```powershell
 .\scripts\install.ps1

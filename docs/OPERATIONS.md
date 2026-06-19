@@ -6,11 +6,11 @@ RemoteAgent production is operated from one canonical Git history:
 
 - source of truth: `origin/main` on GitHub
 - production runtime host: server 30
-- production app path: `/home/au2223/.remoteagent/app/remoteagent-src`
+- production package: `appback-remoteagent`
 - branch used for production releases: `main`
 
 Do not treat stale server paths or duplicate worktrees as authoritative.
-Code changes should be committed and pushed to `origin/main`, then server 30 should be updated from that exact commit.
+Code changes should be committed and pushed to `origin/main`, published to npm, and then server 30/26 should be updated from that npm version.
 
 ## Product shape in operations
 
@@ -52,9 +52,9 @@ Current policy:
 Server 30 runs RemoteAgent as a `systemd` service.
 
 - unit: `remoteagent.service`
-- working directory: `/home/au2223/.remoteagent/app/remoteagent-src`
+- working directory: the installed `appback-remoteagent` package root
 - runtime data: `/home/au2223/.remoteagent`
-- service entrypoint: `/home/au2223/.local/bin/node /home/au2223/.remoteagent/app/remoteagent-src/dist/index.js`
+- service entrypoint: `remoteagent` or `node <installed-package-root>/dist/index.js`
 
 The service environment is loaded from:
 
@@ -96,8 +96,7 @@ journalctl -u remoteagent -f
 Restart after build:
 
 ```bash
-cd /home/au2223/.remoteagent/app/remoteagent-src
-/home/au2223/.local/bin/npm run build
+sudo npm install -g appback-remoteagent@<version>
 sudo systemctl restart remoteagent
 ```
 
@@ -118,18 +117,16 @@ The intended workflow is:
 5. run `npm run build`
 6. commit on `main`
 7. push `main` to `origin/main`
-8. update server 30's production app path to the pushed commit
-9. run `/home/au2223/.local/bin/npm ci`
-10. run `/home/au2223/.local/bin/npm run build`
-11. restart `remoteagent.service` when runtime code changed
-12. verify logs or a Telegram/local UI path
-13. update any other installed RemoteAgent runtime, such as machine 21, when it is intentionally running a separate runtime
+8. publish `appback-remoteagent@<version>` to npm
+9. install that exact npm version on server 30 and server 26
+10. restart `remoteagent.service` when runtime code changed
+11. verify logs or a Telegram/local UI path on each target
 
 Avoid side branches and extra worktrees unless there is a strong reason.
 If a temporary branch is unavoidable, merge it back to `main`, push it, and deploy from `origin/main`.
 
 A task is not done until commit and push both happened.
-A production deployment is not done until server 30 is running the pushed version and the runtime path has been verified.
+A production deployment is not done until server 30 and server 26 are running the published npm version and the runtime path has been verified.
 
 See `docs/RELEASING.md` for the detailed versioning rules.
 

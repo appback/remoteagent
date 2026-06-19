@@ -28,14 +28,13 @@ A release is only considered complete when all of the following are done in orde
 4. Run `npm run build`
 5. Commit the completed work
 6. Push `main` to `origin/main`
-7. Update server 30's production app path to the pushed commit
-8. Run `/home/au2223/.local/bin/npm ci` and `/home/au2223/.local/bin/npm run build` on server 30
-9. Restart `remoteagent.service` on server 30 if runtime code changed
-10. Verify the relevant runtime path, logs, or Telegram behavior
-11. Update any other installed RemoteAgent runtime when that machine intentionally runs one
+7. Publish `appback-remoteagent@<version>` to npm
+8. Install that exact npm version on server 30 and server 26
+9. Restart `remoteagent.service` on each target if runtime code changed
+10. Verify the relevant runtime path, logs, or Telegram behavior on each target
 
 If commit or push is missing, the work is not done.
-If server 30 is not running the pushed version, the production deployment is incomplete.
+If server 30 or server 26 is not running the published npm version, the production deployment is incomplete.
 
 ## Commands
 
@@ -65,19 +64,15 @@ git status
 git add -A
 git commit -m "Release 0.12.3"
 git push origin main
+npm publish
 ```
 
-Typical server 30 deployment sequence:
+Typical target deployment sequence for server 30 and server 26:
 
 ```bash
-APP=/home/au2223/.remoteagent/app/remoteagent-src
-cd "$APP"
-git fetch origin main
-git reset --hard origin/main
-git clean -fd -e node_modules
-export PATH=/home/au2223/.local/bin:/home/au2223/.nvm/versions/node/v22.22.0/bin:$PATH
-npm ci
-npm run build
+VERSION=0.13.0
+npm install -g appback-remoteagent@$VERSION
+remoteagent-install
 sudo systemctl restart remoteagent
 systemctl is-active remoteagent
 journalctl -u remoteagent --since "2 minutes ago" --no-pager
@@ -85,8 +80,8 @@ journalctl -u remoteagent --since "2 minutes ago" --no-pager
 
 ## Other Runtime Follow-up
 
-Server 30 is the production runtime.
+Server 30 and server 26 are production runtime targets.
 Machine 21 or any other host should be updated only when it intentionally runs a separate RemoteAgent service.
 
 At minimum, the operator should run the install/update flow again and verify the process comes back up cleanly.
-For GitHub-based installs, the package builds `dist/` during `prepare`, so a clean reinstall should produce a runnable package without a separate manual build step.
+For npm installs, the package contains `dist/`, so the target machine should not need a repository checkout or a separate manual build step.

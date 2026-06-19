@@ -3,31 +3,44 @@ set -euo pipefail
 
 DATA_DIR="${DATA_DIR:-$HOME/.remoteagent}"
 ENV_FILE="$DATA_DIR/.env"
-APP_DIR="${REMOTEAGENT_APP_DIR:-$DATA_DIR/app/remoteagent-src}"
-REMOTEAGENT_REPO_TARBALL="${REMOTEAGENT_REPO_TARBALL:-https://github.com/appback/remoteagent/archive/refs/heads/main.tar.gz}"
+PACKAGE_NAME="${REMOTEAGENT_PACKAGE_NAME:-appback-remoteagent}"
+PACKAGE_VERSION="${REMOTEAGENT_VERSION:-latest}"
+
+script_dir() {
+  local source="$1"
+  while [ -L "$source" ]; do
+    local dir
+    dir="$(cd -P "$(dirname "$source")" && pwd)"
+    source="$(readlink "$source")"
+    case "$source" in
+      /*) ;;
+      *) source="$dir/$source" ;;
+    esac
+  done
+  cd -P "$(dirname "$source")" && pwd
+}
+
+find_global_package_root() {
+  local global_root
+  global_root="$(npm root -g)"
+  if [ -d "$global_root/$PACKAGE_NAME" ]; then
+    printf '%s\n' "$global_root/$PACKAGE_NAME"
+    return 0
+  fi
+  return 1
+}
 
 SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"
 if [ -n "$SCRIPT_SOURCE" ] && [ -f "$SCRIPT_SOURCE" ]; then
-  ROOT_DIR="$(cd "$(dirname "$SCRIPT_SOURCE")/.." && pwd)"
+  ROOT_DIR="$(cd "$(script_dir "$SCRIPT_SOURCE")/.." && pwd)"
 else
-  ROOT_DIR="$APP_DIR"
-  mkdir -p "$ROOT_DIR"
-  tmp_dir="$(mktemp -d)"
-  cleanup() {
-    rm -rf "$tmp_dir"
-  }
-  trap cleanup EXIT
-  echo "Downloading RemoteAgent source..."
-  curl -fsSL "$REMOTEAGENT_REPO_TARBALL" -o "$tmp_dir/remoteagent.tar.gz"
-  tar -xzf "$tmp_dir/remoteagent.tar.gz" -C "$tmp_dir"
-  extracted_dir="$(find "$tmp_dir" -mindepth 1 -maxdepth 1 -type d | head -1)"
-  if [ -z "$extracted_dir" ]; then
-    echo "Failed to extract RemoteAgent source." >&2
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "npm is required to install RemoteAgent." >&2
     exit 1
   fi
-  rm -rf "$ROOT_DIR"
-  mkdir -p "$ROOT_DIR"
-  cp -a "$extracted_dir"/. "$ROOT_DIR"/
+  echo "Installing $PACKAGE_NAME@$PACKAGE_VERSION from npm..."
+  npm install -g "$PACKAGE_NAME@$PACKAGE_VERSION"
+  ROOT_DIR="$(find_global_package_root)"
 fi
 
 mkdir -p "$DATA_DIR" "$DATA_DIR/logs"
@@ -67,12 +80,22 @@ upsert_env "CODEX_INSTALL_COMMAND" "$ROOT_DIR/scripts/install-codex.sh"
 upsert_env "CLAUDE_INSTALL_COMMAND" "$ROOT_DIR/scripts/install-claude.sh"
 upsert_env "CLAUDE_LOGIN_START_COMMAND" "$ROOT_DIR/scripts/start-claude-login.sh"
 upsert_env "CLAUDE_LOGIN_FINISH_COMMAND" "$ROOT_DIR/scripts/finish-claude-login.sh"
+upsert_env "BOT_RESTART_HELPER_PATH" "$ROOT_DIR/scripts/restart-after-bot-op.sh"
 
-npm --prefix "$ROOT_DIR" install
-npm --prefix "$ROOT_DIR" run build
+cat > "$DATA_DIR/start-remoteagent.sh" <<EOF
+#!/usr/bin/env bash
+DATA_DIR="$DATA_DIR" "$ROOT_DIR/scripts/start.sh"
+EOF
+chmod +x "$DATA_DIR/start-remoteagent.sh"
+
+cat > "$DATA_DIR/stop-remoteagent.sh" <<EOF
+#!/usr/bin/env bash
+DATA_DIR="$DATA_DIR" "$ROOT_DIR/scripts/stop.sh"
+EOF
+chmod +x "$DATA_DIR/stop-remoteagent.sh"
 
 echo
 echo "RemoteAgent is installed."
 echo "Provider install/login hooks were configured in $ENV_FILE"
 echo "Set TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKENS in $ENV_FILE"
-echo "Start with: $ROOT_DIR/scripts/start.sh"
+echo "Start with: remoteagent-start"
