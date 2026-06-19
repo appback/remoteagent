@@ -151,7 +151,7 @@ const telegramBotUsernames = readTelegramBotUsernames();
 export const config = {
   telegramBotTokens,
   telegramBotUsernames,
-  telegramCommandMenuEnabled: readBoolean("TELEGRAM_COMMAND_MENU_ENABLED", false),
+  telegramCommandMenuEnabled: readBoolean("TELEGRAM_COMMAND_MENU_ENABLED", true),
   telegramPollingBackoffMinMs: readTimeout("TELEGRAM_POLLING_BACKOFF_MIN_MS", 60_000),
   telegramPollingBackoffMaxMs: readTimeout("TELEGRAM_POLLING_BACKOFF_MAX_MS", 900_000),
   telegramPollingMaxConcurrency: readTimeout("TELEGRAM_POLLING_MAX_CONCURRENCY", 3),

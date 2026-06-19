@@ -15,6 +15,7 @@ import { BotManagementService } from "./services/bot-management-service.js";
 import { LocalUiService } from "./services/local-ui-service.js";
 import { AgentMemoryService } from "./services/agent-memory-service.js";
 import { terminateAllSpawnedExecutions } from "./adapters/windows-shell.js";
+import { setTelegramCommandMenu } from "./telegram-command-menu.js";
 import type { ProviderAdapter } from "./adapters/provider-adapter.js";
 import type { Provider } from "./types.js";
 import type { Bot } from "grammy";
@@ -146,24 +147,6 @@ function startArtifactCleanupSchedule(memoryService: AgentMemoryService): void {
 }
 
 async function configureTelegramCommandMenu(bot: Bot): Promise<void> {
-  const commands = [
-    { command: "start", description: "Start a new Codex or Claude session" },
-    { command: "list", description: "List sessions" },
-    { command: "switch", description: "Switch to a session" },
-    { command: "status", description: "Show current session status" },
-    { command: "state", description: "Show or edit session state notes" },
-    { command: "option", description: "Show or change runtime options" },
-    { command: "model", description: "Show or change provider model" },
-    { command: "stop", description: "Stop active work and clear queued messages" },
-    { command: "batch", description: "Collect and send a multi-message batch" },
-    { command: "bots", description: "List configured Telegram bots" },
-    { command: "bot", description: "Manage Telegram bots" },
-    { command: "install", description: "Install or update Codex or Claude" },
-    { command: "login", description: "Run provider login flow" },
-    { command: "reset", description: "Clear this chat binding" },
-    { command: "help", description: "Show command help" },
-  ];
-
   const token = (bot as unknown as { token?: string }).token;
   if (!token) {
     throw new Error("Telegram bot token is unavailable for command menu registration.");
@@ -172,7 +155,7 @@ async function configureTelegramCommandMenu(bot: Bot): Promise<void> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
-      await setTelegramCommandsViaCurl(token, commands);
+      await setTelegramCommandMenu(token);
       return;
     } catch (error) {
       lastError = error;
@@ -183,60 +166,6 @@ async function configureTelegramCommandMenu(bot: Bot): Promise<void> {
   }
 
   throw lastError;
-}
-
-async function setTelegramCommandsViaCurl(
-  token: string,
-  commands: Array<{ command: string; description: string }>,
-): Promise<void> {
-  const url = `https://api.telegram.org/bot${token}/setMyCommands`;
-  const payload = JSON.stringify({ commands });
-  let stdout: string;
-  let stderr: string | undefined;
-
-  try {
-    const result = await execFileAsync("curl", [
-      "-sS",
-      "-4",
-      "--max-time",
-      "20",
-      "-H",
-      "Content-Type: application/json",
-      "-d",
-      payload,
-      url,
-    ]);
-    stdout = result.stdout;
-    stderr = result.stderr;
-  } catch (error) {
-    throw new Error(`Telegram setMyCommands curl failed: ${formatCurlError(error)}`);
-  }
-
-  if (stderr?.trim()) {
-    console.error(`curl stderr for setMyCommands: ${stderr.trim()}`);
-  }
-
-  const parsed = JSON.parse(stdout) as { ok?: boolean; description?: string };
-  if (!parsed.ok) {
-    throw new Error(parsed.description || "Telegram setMyCommands failed.");
-  }
-}
-
-function formatCurlError(error: unknown): string {
-  if (!(error instanceof Error)) {
-    return String(error);
-  }
-
-  const code = typeof error === "object" && error !== null && "code" in error
-    ? String((error as { code?: unknown }).code ?? "")
-    : "";
-  const stderr = typeof error === "object" && error !== null && "stderr" in error
-    ? String((error as { stderr?: unknown }).stderr ?? "").trim()
-    : "";
-
-  return [code ? `code=${code}` : undefined, stderr || error.message]
-    .filter(Boolean)
-    .join(" ");
 }
 
 main().catch((error: unknown) => {

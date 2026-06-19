@@ -13,6 +13,7 @@ import { BotManagementService } from "./services/bot-management-service.js";
 import { ProviderSetupService } from "./services/provider-setup-service.js";
 import { RemoteShellService } from "./services/remote-shell-service.js";
 import { AgentMemoryService } from "./services/agent-memory-service.js";
+import { deleteTelegramCommandMenu, setTelegramCommandMenu } from "./telegram-command-menu.js";
 import type { ChatSession, CodexSandboxMode, Provider } from "./types.js";
 import type { UserFromGetMe } from "grammy/types";
 
@@ -32,7 +33,7 @@ const HELP_TEXT = [
   "/stop",
   "/sandbox codex <read-only|workspace-write|danger-full-access>",
   "/status",
-  "/option [retry <count>|timeout <seconds>|intent <count>]",
+  "/option [retry <count>|timeout <seconds>|intent <count>|command-menu <on|off|refresh>]",
   "/state [clear|note <text>]",
   "/artifacts list|cleanup <days>",
   "/secret set|list|remove",
@@ -568,8 +569,8 @@ ${bridge.formatStatus(mapping)}`);
       return;
     }
 
-    if (option !== "retry" && option !== "timeout" && option !== "intent") {
-      await reply(ctx, "Usage: `/option retry <count>`, `/option timeout <seconds>`, or `/option intent <count>`\n\n`retry` controls automatic continuation turns. `timeout` controls one provider execution limit. `intent` controls retries for untagged intent-only provider replies.", {
+    if (option !== "retry" && option !== "timeout" && option !== "intent" && option !== "command-menu") {
+      await reply(ctx, "Usage: `/option retry <count>`, `/option timeout <seconds>`, `/option intent <count>`, or `/option command-menu <on|off|refresh>`\n\n`retry` controls automatic continuation turns. `timeout` controls one provider execution limit. `intent` controls retries for untagged intent-only provider replies. `command-menu` controls Telegram slash-command autocomplete for all configured bots.", {
         parse_mode: "Markdown",
       });
       return;
@@ -580,10 +581,42 @@ ${bridge.formatStatus(mapping)}`);
         ? `Current automatic continuation retry limit: ${formatRetryLimit(config.telegramAutoProgressMaxTurns)}\n\nUsage: \`/option retry <count>\``
         : option === "intent"
           ? `Current untagged intent retry limit: ${formatRetryLimit(config.telegramUntaggedIntentRetries)}\n\nUsage: \`/option intent <count>\``
-          : `Current provider execution timeout: ${formatTimeoutSeconds(config.commandTimeoutMs)}\n\nUsage: \`/option timeout <seconds>\``;
+          : option === "command-menu"
+            ? `Current Telegram command menu: ${config.telegramCommandMenuEnabled ? "on" : "off"}\n\nUsage: \`/option command-menu on\`, \`/option command-menu off\`, or \`/option command-menu refresh\``
+            : `Current provider execution timeout: ${formatTimeoutSeconds(config.commandTimeoutMs)}\n\nUsage: \`/option timeout <seconds>\``;
       await reply(ctx, current, {
         parse_mode: "Markdown",
       });
+      return;
+    }
+
+    if (option === "command-menu") {
+      const action = value.toLowerCase();
+      if (!["on", "off", "refresh"].includes(action)) {
+        await reply(ctx, "Invalid command-menu option. Use `/option command-menu on`, `/option command-menu off`, or `/option command-menu refresh`.", {
+          parse_mode: "Markdown",
+        });
+        return;
+      }
+
+      const enabled = action === "refresh" ? config.telegramCommandMenuEnabled : action === "on";
+      const result = await applyTelegramCommandMenuOption(enabled);
+      if (action !== "refresh") {
+        config.telegramCommandMenuEnabled = enabled;
+        await upsertInstalledEnvValue("TELEGRAM_COMMAND_MENU_ENABLED", String(enabled));
+      }
+      await bridge.logSystem(botId, chatId, `Runtime option TELEGRAM_COMMAND_MENU_ENABLED ${action === "refresh" ? "refreshed" : `set to ${enabled}`}. ${result.summary}`);
+      await reply(
+        ctx,
+        [
+          action === "refresh"
+            ? `Refreshed Telegram command menu for configured bots.`
+            : `Set Telegram command menu to ${enabled ? "on" : "off"}.`,
+          "",
+          result.summary,
+          action === "refresh" ? "" : `Saved: TELEGRAM_COMMAND_MENU_ENABLED=${enabled}`,
+        ].filter(Boolean).join("\n"),
+      );
       return;
     }
 
@@ -1908,14 +1941,17 @@ function formatRuntimeOptions(): string {
     `- retry: ${formatRetryLimit(config.telegramAutoProgressMaxTurns)} (TELEGRAM_AUTO_PROGRESS_MAX_TURNS)`,
     `- timeout: ${formatTimeoutSeconds(config.commandTimeoutMs)} (COMMAND_TIMEOUT_MS)`,
     `- intent: ${formatRetryLimit(config.telegramUntaggedIntentRetries)} (TELEGRAM_UNTAGGED_INTENT_RETRIES)`,
+    `- command-menu: ${config.telegramCommandMenuEnabled ? "on" : "off"} (TELEGRAM_COMMAND_MENU_ENABLED)`,
     "",
     "Usage:",
     "/option retry <count>",
     "/option timeout <seconds>",
     "/option intent <count>",
+    "/option command-menu <on|off|refresh>",
     "",
     "`retry 0` disables the automatic continuation limit.",
     "`intent 0` disables untagged intent-only response retries.",
+    "`command-menu refresh` reapplies Telegram slash-command autocomplete without changing the saved option.",
   ].join("\n");
 }
 
@@ -1947,6 +1983,36 @@ async function upsertInstalledEnvValue(key: string, value: string): Promise<void
     next.push(`${key}=${value}`);
   }
   await fs.writeFile(envPath, `${next.join("\n").replace(/\n+$/u, "")}\n`, "utf8");
+}
+
+async function applyTelegramCommandMenuOption(enabled: boolean): Promise<{ summary: string }> {
+  let applied = 0;
+  const failures: string[] = [];
+
+  for (const token of config.telegramBotTokens) {
+    const botLabel = await resolveTelegramBotLabel(token).catch(() => "unknown-bot");
+    try {
+      if (enabled) {
+        await setTelegramCommandMenu(token);
+      } else {
+        await deleteTelegramCommandMenu(token);
+      }
+      applied += 1;
+    } catch (error) {
+      failures.push(`${botLabel}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  const parts = [`applied=${applied}/${config.telegramBotTokens.length}`];
+  if (failures.length > 0) {
+    parts.push(`failed=${failures.length}`, ...failures.map((failure) => `- ${failure}`));
+  }
+  return { summary: parts.join("\n") };
+}
+
+async function resolveTelegramBotLabel(token: string): Promise<string> {
+  const payload = await callTelegramApi<UserFromGetMe>(token, "getMe", {});
+  return payload.username ? `@${payload.username}` : String(payload.id);
 }
 
 function chunkMessage(text: string, size: number): string[] {
