@@ -138,6 +138,60 @@ export class AgentMemoryService {
     ].filter(Boolean).join("\n");
   }
 
+  async formatLocalStatusQuestion(session: SessionRecord, question: string): Promise<string | undefined> {
+    if (!this.looksLikeLocalStatusQuestion(question)) {
+      return undefined;
+    }
+
+    const current = await this.currentTaskText(session);
+    const todo = await this.readTodo(session);
+    const active = this.activeTodoItems(todo);
+    const history = await this.readRecentHistory(session, 8);
+    const workHistory = await this.readRecentWorkHistory(session, 6);
+    const latestInstruction = this.extractLatestInstructionFromCurrent(current);
+    const currentIsStatusOnly = latestInstruction ? this.looksLikeLocalStatusQuestion(latestInstruction) : false;
+    const hasCurrentWork = Boolean(current.trim()) && !currentIsStatusOnly;
+
+    const lines = [
+      `Session ${session.publicId} local state`,
+      "",
+      `workspace: ${session.workspace}`,
+      `memory: ${this.sessionDir(session)}`,
+      "",
+    ];
+
+    if (!hasCurrentWork && active.length === 0 && workHistory.length === 0) {
+      lines.push(
+        "현재 하네스 기준으로 진행 중이거나 완료된 작업 기록이 없습니다.",
+        "이 세션은 깨끗한 상태로 보입니다.",
+      );
+    } else {
+      if (hasCurrentWork) {
+        lines.push("Current note:", this.summarizeCurrentTask(current), "");
+      } else {
+        lines.push("Current note: none", "");
+      }
+
+      if (active.length > 0) {
+        lines.push("Active TODO:", this.formatTodoSummary(todo, false), "");
+      } else {
+        lines.push("Active TODO: none", "");
+      }
+
+      if (workHistory.length > 0) {
+        lines.push("Recent work history:", ...workHistory.map((entry) => `- ${entry}`));
+      } else {
+        lines.push("Recent work history: none");
+      }
+    }
+
+    if (history.length > 0) {
+      lines.push("", "Recent raw history:", ...history.map((entry) => `- ${entry}`));
+    }
+
+    return lines.join("\n");
+  }
+
   async clearSessionState(session: SessionRecord, summary: string): Promise<void> {
     const dir = this.sessionDir(session);
     const currentPath = path.join(dir, "current.md");
@@ -455,6 +509,19 @@ export class AgentMemoryService {
   }
 
   private async readRecentHistory(session: SessionRecord, limit: number): Promise<string[]> {
+    return (await this.readHistoryEntries(session, limit))
+      .slice(-limit)
+      .map((entry) => this.formatHistoryEntry(entry));
+  }
+
+  private async readRecentWorkHistory(session: SessionRecord, limit: number): Promise<string[]> {
+    return (await this.readHistoryEntries(session, 80))
+      .filter((entry) => ["progress", "completed", "archived", "note"].includes(String(entry.type ?? "")))
+      .slice(-limit)
+      .map((entry) => this.formatHistoryEntry(entry));
+  }
+
+  private async readHistoryEntries(session: SessionRecord, limit: number): Promise<Array<Record<string, unknown>>> {
     const historyPath = path.join(this.sessionDir(session), "history.ndjson");
     const raw = await fs.readFile(historyPath, "utf8").catch(() => "");
     return raw
@@ -464,14 +531,23 @@ export class AgentMemoryService {
       .slice(-limit)
       .map((line) => {
         try {
-          const entry = JSON.parse(line) as { type?: string; at?: string; mode?: string; text?: string; summary?: string; reason?: string };
-          const kind = entry.mode ? `${entry.type ?? "event"}:${entry.mode}` : entry.type ?? "event";
-          const body = entry.summary ?? entry.text ?? entry.reason ?? "";
-          return `${entry.at ?? "unknown"} ${kind}: ${this.truncate(body.replace(/\s+/g, " ").trim(), 220)}`;
+          return JSON.parse(line) as Record<string, unknown>;
         } catch {
-          return this.truncate(line.replace(/\s+/g, " ").trim(), 220);
+          return { type: "raw", text: line };
         }
       });
+  }
+
+  private formatHistoryEntry(entry: Record<string, unknown>): string {
+    const type = typeof entry.type === "string" ? entry.type : "event";
+    const mode = typeof entry.mode === "string" ? entry.mode : undefined;
+    const at = typeof entry.at === "string" ? entry.at : "unknown";
+    const text = typeof entry.text === "string" ? entry.text : "";
+    const summary = typeof entry.summary === "string" ? entry.summary : "";
+    const reason = typeof entry.reason === "string" ? entry.reason : "";
+    const kind = mode ? `${type}:${mode}` : type;
+    const body = summary || text || reason || "";
+    return `${at} ${kind}: ${this.truncate(body.replace(/\s+/g, " ").trim(), 220)}`;
   }
 
   private todoPath(session: SessionRecord): string {
@@ -693,11 +769,36 @@ export class AgentMemoryService {
   }
 
   private summarizeCurrentTask(current: string): string {
+    const latestInstruction = this.extractLatestInstructionFromCurrent(current);
+    if (latestInstruction) {
+      return this.truncate(latestInstruction, 700);
+    }
     const instructionIndex = current.indexOf("## Instruction");
     const body = instructionIndex >= 0 ? current.slice(instructionIndex + "## Instruction".length) : current;
     const immediateRuleIndex = body.indexOf("## Immediate Rule");
     const instruction = (immediateRuleIndex >= 0 ? body.slice(0, immediateRuleIndex) : body).trim();
     return this.truncate(instruction || current.trim(), 700);
+  }
+
+  private extractLatestInstructionFromCurrent(current: string): string | undefined {
+    const match = /## Latest User Instruction\s*\n([\s\S]*?)(?:\n## |\s*$)/.exec(current);
+    return match?.[1]?.trim() || undefined;
+  }
+
+  private looksLikeLocalStatusQuestion(text: string): boolean {
+    const normalized = text.trim();
+    if (!normalized) {
+      return false;
+    }
+    return [
+      /최근\s*(작업|진행|히스토리|기록)/,
+      /현재\s*(작업|진행|상태|세션)/,
+      /(뭐|무엇)\s*(하고|하는)\s*(있어|중|거야)?/,
+      /작업\s*(상태|히스토리|기록|있어|없어)/,
+      /세션\s*(상태|히스토리|기록)/,
+      /진행\s*(상태|중인\s*작업)/,
+      /\b(status|current work|recent work|what are you doing|session state)\b/i,
+    ].some((pattern) => pattern.test(normalized));
   }
 
   private formatTodoSummary(todo: TodoState, includeDone = false, detailed = false): string {
