@@ -56,6 +56,16 @@ Responsibilities:
 - accept attachments and route them to the active session
 - gate privileged commands such as remote shell
 
+### Telegram delivery ownership
+
+RemoteAgent owns delivery for the conversation it is handling.
+
+- normal provider text is sent by RemoteAgent to the current incoming bot and chat
+- provider attachments are sent by RemoteAgent when the provider includes `TELEGRAM_FILE: /absolute/path/to/file`
+- the provider does not choose a bot token or chat id for RemoteAgent replies or files
+- product or service code Telegram notifications are separate application behavior and should use that project's own secret/config path
+- Telegram tokens and other credentials must stay in secrets/config and must not be printed in provider output
+
 ### Telegram Mini App layer
 
 Responsibilities:

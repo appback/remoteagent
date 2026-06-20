@@ -67,13 +67,11 @@ const REPORT_PROTOCOL_PROMPT = [
   "Do not say 'I will continue' or 'I can continue after you do X' unless the first line is REPORT:blocked.",
   "After the first line, write only the user-facing report.",
   "Do not stop at intent like 'I will' or 'I am going to'. Do the work first, then report progress/result, or report blocked.",
-  "Do not claim that a Telegram message or file was sent unless RemoteAgent explicitly confirmed that delivery step.",
   "If REPORT:result claims code, DB, deploy, commit, push, file delivery, or verification work is complete, include concrete evidence such as file paths, commands, logs, commit IDs, digests, or line references.",
-  "If you want RemoteAgent to send a file, include a separate line exactly like: TELEGRAM_FILE: /absolute/path/to/file",
-  "Do not use removed local reporting scripts for Telegram delivery.",
-  "Do not use raw Telegram tokens or TELEGRAM_* environment variables.",
-  "Telegram sends are allowed only when the user explicitly instructed that flow and the bot token is retrieved through `node \"$REMOTEAGENT_SECRET_BIN\" get <KEY>`. Never print or persist the token.",
-  "Do not claim Telegram message delivery unless RemoteAgent handled `TELEGRAM_FILE` delivery or you include concrete API response evidence from an explicit secret-managed Telegram send.",
+  "RemoteAgent owns conversational delivery: return text normally and RemoteAgent sends it to the current incoming chat.",
+  "RemoteAgent owns attachment delivery: include a separate line exactly like `TELEGRAM_FILE: /absolute/path/to/file` and RemoteAgent sends that file to the current incoming chat.",
+  "Product/service Telegram notifications are product code behavior; use the project's secret/config path and keep tokens out of output.",
+  "Use project secrets or `node \"$REMOTEAGENT_SECRET_BIN\" get <KEY>` for sensitive runtime values, and never print secret values.",
   "REMOTEAGENT_SESSION_ID and REMOTEAGENT_PUBLIC_SESSION_ID are available during provider execution. For cron, persist the literal public session id in the cron command instead of assuming the env will still exist later.",
 ].join("\n");
 const RECOGNIZED_COMMANDS = new Set([
@@ -2537,13 +2535,8 @@ async function normalizeTelegramDelivery(chunks: string[]): Promise<{ chunks: st
     return kept.join("\n").trim();
   }));
 
-  const nonEmptyChunks = normalizedChunks.filter(Boolean);
-  if (documents.size === 0 && nonEmptyChunks.some((chunk) => mentionsTelegramDeliveryClaim(chunk))) {
-    throw new Error("\ubaa8\ub378\uc774 \ud154\ub808\uadf8\ub7a8 \uc804\uc1a1 \uc644\ub8cc\ub97c \uc8fc\uc7a5\ud588\uc9c0\ub9cc, RemoteAgent\uac00 \ud655\uc778\ud55c \ud30c\uc77c \uc804\uc1a1 \uc9c0\uc2dc(`TELEGRAM_FILE: /absolute/path/to/file`)\ub294 \ud3ec\ud568\ub418\uc9c0 \uc54a\uc558\uc2b5\ub2c8\ub2e4. \ud30c\uc77c\uc744 \ubcf4\ub0b4\ub824\uba74 \ud574\ub2f9 \ud615\uc2dd\uc73c\ub85c \uc808\ub300 \uacbd\ub85c\ub97c \uba85\uc2dc\ud574\uc57c \ud569\ub2c8\ub2e4.");
-  }
-
   return {
-    chunks: nonEmptyChunks,
+    chunks: normalizedChunks.filter(Boolean),
     documents: [...documents.values()],
   };
 }
@@ -2559,10 +2552,6 @@ async function isReadableTelegramDocument(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-function mentionsTelegramDeliveryClaim(text: string): boolean {
-  return /(telegram).*(sent|delivered|delivery)|((sent|delivered|delivery).*(telegram))/i.test(text);
 }
 
 async function sendTelegramDocuments(

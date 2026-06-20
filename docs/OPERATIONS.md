@@ -161,8 +161,9 @@ As of the latest stabilization work:
 - Telegram image download works
 - files are saved under `/home/au2223/.remoteagent/uploads/telegram/...`
 - duplicate runtime startup has been blocked
-- cross-bot direct Telegram token leakage to provider subprocesses has been blocked
-- official runtime-mediated file sending is available only through confirmed RemoteAgent transfer paths
+- RemoteAgent-mediated file sending uses `TELEGRAM_FILE: /absolute/path/to/file`
+- RemoteAgent sends conversation replies and `TELEGRAM_FILE` attachments only to the current incoming bot and chat
+- product/service Telegram notifications are not RemoteAgent conversation delivery; they belong in that project's code and should use that project's secret/config path
 
 Remaining work is still needed on attachment response policy and richer file UX.
 The transport/runtime stability issue and the user-facing attachment response quality issue are separate concerns.
@@ -176,6 +177,6 @@ The deeper issues were runtime ownership and transport discipline:
 - service-managed and manually-started processes overlapped
 - PID state and actual live processes diverged
 - Telegram responses could come from an unexpected process generation
-- provider subprocesses had to be prevented from directly using Telegram bot tokens
+- RemoteAgent conversation delivery needed a single current incoming bot/chat owner
 
-The single-instance lock, `systemd`-first lifecycle, and runtime-mediated file transfer rules were added specifically to stop that class of bug from recurring.
+The single-instance lock, `systemd`-first lifecycle, and runtime-owned conversation delivery rules were added specifically to stop that class of bug from recurring.
