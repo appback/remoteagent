@@ -1322,8 +1322,9 @@ async function runWithPendingAnimation(
           return;
         }
 
-        const extra = parseMode ? { parse_mode: parseMode } : undefined;
-        for (const chunk of progressChunks) {
+        const rendered = formatProviderTelegramChunks(progressChunks, parseMode);
+        const extra = rendered.parseMode ? { parse_mode: rendered.parseMode } : undefined;
+        for (const chunk of rendered.chunks) {
           await sendTelegramMessage(botToken, chatId, chunk, extra);
         }
         if (normalized.documents.length > 0) {
@@ -1335,14 +1336,15 @@ async function runWithPendingAnimation(
     const result = await task(helpers);
     const normalized = await normalizeTelegramDelivery(result.chunks);
     const chunks = flattenChunks(normalized.chunks, 3900);
-    const extra = result.parseMode ? { parse_mode: result.parseMode } : undefined;
 
     if (chunks.length === 0 && normalized.documents.length === 0) {
       await sendTelegramMessage(botToken, chatId, "Response was empty.");
       return;
     }
 
-    for (const chunk of chunks) {
+    const rendered = formatProviderTelegramChunks(chunks, result.parseMode);
+    const extra = rendered.parseMode ? { parse_mode: rendered.parseMode } : undefined;
+    for (const chunk of rendered.chunks) {
       await sendTelegramMessage(botToken, chatId, chunk, extra);
     }
     if (normalized.documents.length > 0) {
@@ -1644,6 +1646,68 @@ function parseReportResponses(
   const kind = parsedBlocks[0]?.kind ?? "unknown";
   const chunks = transform(parsedBlocks.map((item) => item.text));
   return { kind, chunks };
+}
+
+function formatProviderTelegramChunks(
+  chunks: string[],
+  explicitParseMode?: "HTML" | "MarkdownV2",
+): { chunks: string[]; parseMode?: "HTML" | "MarkdownV2" } {
+  if (explicitParseMode) {
+    return { chunks, parseMode: explicitParseMode };
+  }
+
+  return {
+    chunks: chunks.map((chunk) => renderTelegramHtml(chunk)),
+    parseMode: "HTML",
+  };
+}
+
+function renderTelegramHtml(text: string): string {
+  const lines = text.split(/\r?\n/);
+  const rendered: string[] = [];
+  let codeFence: string[] | undefined;
+
+  for (const line of lines) {
+    if (/^```\w*\s*$/.test(line.trim())) {
+      if (codeFence) {
+        rendered.push(`<pre>${escapeTelegramHtml(codeFence.join("\n"))}</pre>`);
+        codeFence = undefined;
+      } else {
+        codeFence = [];
+      }
+      continue;
+    }
+
+    if (codeFence) {
+      codeFence.push(line);
+      continue;
+    }
+
+    rendered.push(renderTelegramInlineHtml(line));
+  }
+
+  if (codeFence) {
+    rendered.push(`<pre>${escapeTelegramHtml(codeFence.join("\n"))}</pre>`);
+  }
+
+  return rendered.join("\n");
+}
+
+function renderTelegramInlineHtml(line: string): string {
+  const parts = line.split(/(`[^`\n]+`)/g);
+  return parts.map((part) => {
+    if (part.startsWith("`") && part.endsWith("`") && part.length >= 2) {
+      return `<code>${escapeTelegramHtml(part.slice(1, -1))}</code>`;
+    }
+    return escapeTelegramHtml(part);
+  }).join("");
+}
+
+function escapeTelegramHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 function looksLikeUntaggedIntentOnlyResponse(text: string): boolean {
