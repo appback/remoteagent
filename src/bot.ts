@@ -1063,15 +1063,6 @@ ${bridge.formatStatus(mapping)}`);
       return;
     }
 
-    if (mapping) {
-      const localStatus = await memoryService.formatLocalStatusQuestion(mapping.session, text);
-      if (localStatus) {
-        await bridge.logSystem(botId, chatId, "Answered local session status without provider execution.");
-        await reply(ctx, localStatus);
-        return;
-      }
-    }
-
     if (isRemoteShellMessage(text)) {
       const shellRequest = parseRemoteShellRequest(text);
       if (!shellRequest) {
