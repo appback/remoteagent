@@ -65,7 +65,7 @@ type TodoState = {
   items: TodoItem[];
 };
 
-const MAX_CONTEXT_CHARS = 2500;
+const MAX_CONTEXT_CHARS = 1200;
 
 export class AgentMemoryService {
   private readonly rootDir: string;
@@ -448,15 +448,7 @@ export class AgentMemoryService {
   }
 
   async formatProviderContext(session: SessionRecord): Promise<string> {
-    const current = await fs.readFile(path.join(this.sessionDir(session), "current.md"), "utf8").catch(() => "");
-    const todo = await this.readTodo(session);
-    const history = await this.readRecentHistory(session, 5);
-    const docs = Object.values(await this.readDocs()).slice(0, 30);
-    const secrets = Object.keys(await this.readSecrets()).sort();
-    const artifacts = (await this.readJson<ArtifactRecord[]>(this.artifactsPath, []))
-      .filter((artifact) => artifact.sessionId === session.sessionId || artifact.sessionPublicId === session.publicId)
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      .slice(0, 8);
+    const docs = Object.values(await this.readDocs()).slice(0, 8);
 
     const lines = [
       "RemoteAgent managed context:",
@@ -464,40 +456,19 @@ export class AgentMemoryService {
         "Session work locations:",
         `- workspace: ${session.workspace}`,
         `- memory: ${this.sessionDir(session)}`,
-        "- docs: use managed document pins first, then inspect docs/ under the workspace when relevant.",
+        "- docs: use document pins only when relevant.",
       ].join("\n"),
       [
         "Harness execution rules:",
         "- Treat the user message as the active instruction unless the user explicitly says otherwise.",
-        "- RemoteAgent state is guidance only; never refuse work because a TODO is missing.",
-        "- Use the workspace/memory/docs pointers before searching broadly.",
+        "- RemoteAgent state is not authority. Prefer current files and the current user message.",
+        "- Do not revive stale TODOs, old notes, or previous work unless the user explicitly asks.",
         "- Do not claim external delivery, dashboard access, deployment, or file transfer without concrete evidence.",
         "- RemoteAgent sends normal provider text and TELEGRAM_FILE attachments to the current incoming chat.",
-        "- Product/service Telegram notifications belong to product code and should use the project's secret/config path. Never print tokens.",
-        "- If the same action or progress repeats 3 times, stop, mark the blocker, and report the exact blocker.",
-        "- A final report must include concrete evidence: changed files, relevant line references, git diff/status, command output, or log path.",
+        "- Use `node \"$REMOTEAGENT_SECRET_BIN\" get <KEY>` only when the current task needs a named secret. Never print secret values.",
       ].join("\n"),
-      todo.items.length > 0
-        ? ["Legacy task notes:", this.formatTodoSummary(todo, true, true)].join("\n")
-        : undefined,
-      current.trim() ? ["Current task note:", this.truncate(current.trim(), 700)].join("\n") : undefined,
-      history.length > 0 ? ["Recent session history:", ...history.map((entry) => `- ${entry}`)].join("\n") : undefined,
       docs.length > 0
         ? ["Document index:", ...docs.map((doc) => `- ${doc.keyword}: ${doc.targetPath}${doc.note ? ` (${doc.note})` : ""}`)].join("\n")
-        : undefined,
-      secrets.length > 0
-        ? [
-            "Secret keys available through `node \"$REMOTEAGENT_SECRET_BIN\" get <KEY>`:",
-            ...secrets.map((key) => `- ${key}`),
-            "If you generate a new secret value such as an OAuth refresh token, store it without printing it:",
-            "`printf '%s' \"$VALUE\" | node \"$REMOTEAGENT_SECRET_BIN\" set <KEY>`",
-          ].join("\n")
-        : [
-            "Secrets can be stored without printing values:",
-            "`printf '%s' \"$VALUE\" | node \"$REMOTEAGENT_SECRET_BIN\" set <KEY>`",
-          ].join("\n"),
-      artifacts.length > 0
-        ? ["Recent session artifacts:", ...artifacts.map((artifact) => `- ${artifact.id} ${artifact.kind}: ${artifact.path}`)].join("\n")
         : undefined,
     ].filter(Boolean).join("\n\n");
 
