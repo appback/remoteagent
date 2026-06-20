@@ -761,6 +761,12 @@ export class AgentMemoryService {
     if (!normalized) {
       return false;
     }
+    if (normalized.length > 80 || /[\r\n]/.test(normalized)) {
+      return false;
+    }
+    if (/(진행|정리|구현|수정|제거|삭제|추가|작성|테스트|검증|커밋|푸시|배포|문서로|완료되면|필수|전담|담당|작업\s*폴더)/.test(normalized)) {
+      return false;
+    }
     return [
       /최근\s*(작업|진행|히스토리|기록)/,
       /현재\s*(작업|진행|상태|세션)/,
