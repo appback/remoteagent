@@ -1670,7 +1670,7 @@ function renderTelegramHtml(text: string): string {
   for (const line of lines) {
     if (/^```\w*\s*$/.test(line.trim())) {
       if (codeFence) {
-        rendered.push(`<pre>${escapeTelegramHtml(codeFence.join("\n"))}</pre>`);
+        rendered.push(renderTelegramCodeFenceHtml(codeFence.join("\n")));
         codeFence = undefined;
       } else {
         codeFence = [];
@@ -1687,10 +1687,17 @@ function renderTelegramHtml(text: string): string {
   }
 
   if (codeFence) {
-    rendered.push(`<pre>${escapeTelegramHtml(codeFence.join("\n"))}</pre>`);
+    rendered.push(renderTelegramCodeFenceHtml(codeFence.join("\n")));
   }
 
   return rendered.join("\n");
+}
+
+function renderTelegramCodeFenceHtml(content: string): string {
+  if (containsUrl(content)) {
+    return content.split(/\r?\n/).map((line) => renderTelegramInlineHtml(line)).join("\n");
+  }
+  return `<pre>${escapeTelegramHtml(content)}</pre>`;
 }
 
 function renderTelegramInlineHtml(line: string): string {
@@ -1699,8 +1706,21 @@ function renderTelegramInlineHtml(line: string): string {
     if (part.startsWith("`") && part.endsWith("`") && part.length >= 2) {
       return `<code>${escapeTelegramHtml(part.slice(1, -1))}</code>`;
     }
-    return escapeTelegramHtml(part);
+    return renderTelegramTextLinks(part);
   }).join("");
+}
+
+function renderTelegramTextLinks(value: string): string {
+  return value.replace(/https?:\/\/[^\s<>"']+/g, (url) => {
+    const trailingMatch = /[),.;!?]+$/.exec(url);
+    const trailing = trailingMatch?.[0] ?? "";
+    const cleanUrl = trailing ? url.slice(0, -trailing.length) : url;
+    return `<a href="${escapeTelegramHtmlAttribute(cleanUrl)}">${escapeTelegramHtml(cleanUrl)}</a>${escapeTelegramHtml(trailing)}`;
+  });
+}
+
+function containsUrl(value: string): boolean {
+  return /https?:\/\/[^\s<>"']+/.test(value);
 }
 
 function escapeTelegramHtml(value: string): string {
@@ -1708,6 +1728,10 @@ function escapeTelegramHtml(value: string): string {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+}
+
+function escapeTelegramHtmlAttribute(value: string): string {
+  return escapeTelegramHtml(value).replace(/"/g, "&quot;");
 }
 
 function looksLikeUntaggedIntentOnlyResponse(text: string): boolean {
