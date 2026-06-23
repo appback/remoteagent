@@ -115,6 +115,8 @@ Current command surface implemented in `src/bot.ts`:
 | `/bot main <number\|@username\|id>` | Selects the main bot. If no valid main is configured, the oldest configured bot is used |
 | `/bot remove <username\|id>` | Removes a configured Telegram bot, restarts the runtime, and confirms the result after restart |
 | `/bot reload` | Restarts the runtime and confirms the result after restart |
+| `/sleep [bot]` | Puts a sub bot into deep sleep without removing its configuration |
+| `/wake <bot>` | Wakes a sleeping sub bot |
 | `/install codex\|claude` | Runs the configured provider install or update command for the bot owner |
 | `/login codex` | Starts the Codex device-auth login flow and returns a browser URL when available |
 | `/login claude [token]` | Starts or finishes the configured Claude Code login flow for the bot owner |
@@ -124,6 +126,8 @@ Current command surface implemented in `src/bot.ts`:
 | `/batch done` | Alias for `/batch send` |
 | `/batch cancel` | Discards the current batch |
 | `/batch status` | Shows current batch state |
+
+Bot sleep keeps long-idle sub bots configured while stopping their polling load. See [docs/BOT_SLEEP.md](./docs/BOT_SLEEP.md).
 
 ### 2. Terminal control
 

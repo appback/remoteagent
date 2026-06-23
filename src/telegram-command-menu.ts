@@ -15,6 +15,8 @@ export const TELEGRAM_COMMAND_MENU = [
   { command: "batch", description: "Collect and send a multi-message batch" },
   { command: "bots", description: "List configured Telegram bots" },
   { command: "bot", description: "Manage Telegram bots" },
+  { command: "sleep", description: "Deep sleep a sub bot" },
+  { command: "wake", description: "Wake a sleeping sub bot" },
   { command: "install", description: "Install or update Codex or Claude" },
   { command: "login", description: "Run provider login flow" },
   { command: "reset", description: "Clear this chat binding" },

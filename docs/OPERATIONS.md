@@ -35,6 +35,10 @@ Current production bot ownership is intentionally split:
 Do not run the same Telegram bot token from multiple runtimes at the same time.
 Bot polling conflicts are treated as incidents, not harmless warnings.
 
+When a runtime has more than three configured Telegram bots, polling pressure can become operationally visible.
+Bot sleep is the planned mitigation: keep one main bot reachable and let long-idle sub bots stop polling without removing their configuration.
+See [BOT_SLEEP.md](./BOT_SLEEP.md).
+
 ## Workspace policy
 
 Default fresh sessions should not use a broad parent folder like `/home/au2223/projects` as their direct working directory.

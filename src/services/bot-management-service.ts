@@ -4,6 +4,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { promisify } from "node:util";
+import { BotPollingStateService } from "./bot-polling-state-service.js";
+import type { BotPollingState } from "./bot-polling-state-service.js";
 
 type ManagedBot = {
   index: number;
@@ -72,6 +74,7 @@ export class BotManagementService {
     private readonly dataDir: string,
     private readonly serviceName: string,
     private readonly restartHelperPath: string,
+    private readonly pollingState = new BotPollingStateService(dataDir),
   ) {
     this.envPath = path.join(this.dataDir, ".env");
     this.pendingPath = path.join(this.dataDir, "pending-bot-operation.json");
@@ -85,7 +88,7 @@ export class BotManagementService {
       return "No Telegram bots are configured.";
     }
 
-    return this.formatBots(bots, env.mainBotId);
+    return this.formatBots(bots, env.mainBotId, await this.pollingState.list());
   }
 
   async formatCurrentBotSummary(currentBotId: string): Promise<string> {
@@ -97,12 +100,49 @@ export class BotManagementService {
     const mainLabel = main ? `@${main.username} (${main.id})` : "not configured";
     const role = current && main && current.id === main.id ? "main" : "sub";
 
+    const states = await this.pollingState.list();
+    const currentState = current ? states[String(current.id)] : undefined;
     return [
       `bot: ${currentLabel}${current ? ` [${role}]` : ""}`,
       `mainBot: ${mainLabel}`,
       `botCount: ${bots.length}`,
-      "sleep: awake",
+      `sleep: ${this.pollingState.formatMode(String(current?.id ?? currentBotId), role === "main", currentState)}`,
     ].join("\n");
+  }
+
+  async sleepBot(selector: string, currentBotId: string): Promise<BotCommandResult> {
+    const env = await this.readEnvConfig();
+    const bots = this.zipBots(env.tokens, env.usernames);
+    if (bots.length === 0) {
+      throw new Error("No Telegram bots are configured.");
+    }
+    const mainBotId = this.resolveMainBotId(bots, env.mainBotId);
+    const target = selector.trim()
+      ? this.resolveBotSelector(bots, selector)
+      : this.resolveBotSelector(bots, currentBotId);
+    if (!target) {
+      throw new Error("Usage: /sleep <bot>");
+    }
+    if (String(target.id) === mainBotId) {
+      throw new Error(`@${target.username} is the main bot and cannot enter deep sleep.`);
+    }
+    await this.pollingState.setSleepMode(String(target.id), "deep", target.username);
+    return {
+      message: `Set @${target.username} to deep sleep.\n\nIt remains configured. RemoteAgent will stop polling it until /wake is used from an awake bot.`,
+    };
+  }
+
+  async wakeBot(selector: string): Promise<BotCommandResult> {
+    const env = await this.readEnvConfig();
+    const bots = this.zipBots(env.tokens, env.usernames);
+    const target = this.resolveBotSelector(bots, selector);
+    if (!target) {
+      throw new Error("Usage: /wake <bot>");
+    }
+    await this.pollingState.setSleepMode(String(target.id), "awake", target.username);
+    return {
+      message: `Woke @${target.username}. It will be polled again.`,
+    };
   }
 
   async getPendingOperationNotice(): Promise<PendingBotOperationNotice | undefined> {
@@ -673,23 +713,61 @@ export class BotManagementService {
     );
   }
 
-  private formatBots(bots: ManagedBot[], mainBotId?: string): string {
+  private formatBots(
+    bots: ManagedBot[],
+    mainBotId?: string,
+    states: Record<string, BotPollingState> = {},
+  ): string {
     if (bots.length === 0) {
       return "No Telegram bots are configured.";
     }
 
     return [
       `Configured bots (${bots.length})`,
-      ...this.formatBotListLines(bots, mainBotId),
+      ...this.formatBotListLines(bots, mainBotId, states),
     ].join("\n");
   }
 
-  private formatBotListLines(bots: ManagedBot[], explicitMainBotId?: string): string[] {
+  private formatBotListLines(
+    bots: ManagedBot[],
+    explicitMainBotId?: string,
+    states: Record<string, BotPollingState> = {},
+  ): string[] {
     const mainBotId = this.resolveMainBotId(bots, explicitMainBotId);
     return bots.map((bot, index) => {
-      const suffix = String(bot.id) === mainBotId ? " [main]" : "";
-      return `${index + 1}. @${bot.username} (${bot.id})${suffix}`;
+      const botId = String(bot.id);
+      const isMain = botId === mainBotId;
+      const state = states[botId];
+      const details = [
+        `[${isMain ? "main" : "sub"}]`,
+        this.pollingState.formatMode(botId, isMain, state),
+        state?.lastMessageAt ? `lastMessage=${this.formatAge(state.lastMessageAt)}` : undefined,
+        state?.lastPollAt ? `lastPoll=${this.formatAge(state.lastPollAt)}` : undefined,
+        state?.nextPollAt && state.sleepMode !== "deep" ? `nextPoll=${this.formatAge(state.nextPollAt)}` : undefined,
+        state?.consecutiveFailures ? `failures=${state.consecutiveFailures}` : undefined,
+      ].filter(Boolean).join(" ");
+      return `${index + 1}. @${bot.username} (${bot.id}) ${details}`;
     });
+  }
+
+  private formatAge(value: string): string {
+    const timestamp = Date.parse(value);
+    if (!Number.isFinite(timestamp)) {
+      return value;
+    }
+    const diffMs = timestamp - Date.now();
+    const absMs = Math.abs(diffMs);
+    const suffix = diffMs > 0 ? "from now" : "ago";
+    if (absMs < 60_000) {
+      return `${Math.max(0, Math.round(absMs / 1000))}s ${suffix}`;
+    }
+    if (absMs < 3_600_000) {
+      return `${Math.round(absMs / 60_000)}m ${suffix}`;
+    }
+    if (absMs < 86_400_000) {
+      return `${Math.round(absMs / 3_600_000)}h ${suffix}`;
+    }
+    return `${Math.round(absMs / 86_400_000)}d ${suffix}`;
   }
 
   private resolveMainBot(bots: ManagedBot[], mainBotId?: string): ManagedBot | undefined {

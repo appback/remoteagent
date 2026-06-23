@@ -44,6 +44,8 @@ const HELP_TEXT = [
   "/bot main <number|@username|id>",
   "/bot remove <username|id>",
   "/bot reload",
+  "/sleep [bot]",
+  "/wake <bot>",
   "/install codex|claude",
   "/login codex",
   "/login claude [token]",
@@ -93,6 +95,8 @@ const RECOGNIZED_COMMANDS = new Set([
   "docs",
   "bots",
   "bot",
+  "sleep",
+  "wake",
   "install",
   "login",
   "reset",
@@ -845,6 +849,21 @@ ${bridge.formatStatus(mapping)}`);
     }
 
     const result = await botManagement.reloadBots(sourceBotId, sourceBotToken, ctx.chat.id);
+    await reply(ctx, result.message);
+  });
+
+  bot.command("sleep", async (ctx) => {
+    await ensureOwnerControlAccess(ctx);
+    const sourceBotId = getBotId();
+    const { rest } = parseCommand(ctx.message?.text, 2);
+    const result = await botManagement.sleepBot(rest?.trim() ?? "", sourceBotId);
+    await reply(ctx, result.message);
+  });
+
+  bot.command("wake", async (ctx) => {
+    await ensureOwnerControlAccess(ctx);
+    const { rest } = parseCommand(ctx.message?.text, 2);
+    const result = await botManagement.wakeBot(rest?.trim() ?? "");
     await reply(ctx, result.message);
   });
 

@@ -14,6 +14,7 @@ import { BridgeService } from "./services/bridge-service.js";
 import { BotManagementService } from "./services/bot-management-service.js";
 import { LocalUiService } from "./services/local-ui-service.js";
 import { AgentMemoryService } from "./services/agent-memory-service.js";
+import { BotPollingStateService } from "./services/bot-polling-state-service.js";
 import { terminateAllSpawnedExecutions } from "./adapters/windows-shell.js";
 import { setTelegramCommandMenu } from "./telegram-command-menu.js";
 import type { ProviderAdapter } from "./adapters/provider-adapter.js";
@@ -28,11 +29,13 @@ let processLockPath: string | undefined;
 let telegramTransportStatusPath: string | undefined;
 const telegramTransportStatuses: Record<string, Record<string, unknown>> = {};
 let telegramPollingLimiter: AsyncSemaphore;
+let botPollingState: BotPollingStateService;
 
 async function main(): Promise<void> {
   processLockPath = await acquireProcessLock(config.dataDir);
   telegramTransportStatusPath = path.join(config.dataDir, "telegram-transport.json");
   telegramPollingLimiter = new AsyncSemaphore(config.telegramPollingMaxConcurrency);
+  botPollingState = new BotPollingStateService(config.dataDir);
   registerProcessLifecycle();
 
   const store = new FileStore(config.dataDir, config.defaultMode);
@@ -79,6 +82,7 @@ async function main(): Promise<void> {
     config.dataDir,
     config.botRestartServiceName,
     config.botRestartHelperPath,
+    botPollingState,
   );
   startArtifactCleanupSchedule(new AgentMemoryService(config.dataDir));
   if (config.localUiEnabled) {
@@ -114,7 +118,7 @@ async function main(): Promise<void> {
     console.error("Failed to report pending bot operation result:", error);
   });
 
-  await Promise.all(bots.map((bot, index) => startManualPolling(bot, index)));
+  await startManualPollingScheduler(bots);
 }
 
 function startArtifactCleanupSchedule(memoryService: AgentMemoryService): void {
@@ -174,43 +178,105 @@ main().catch((error: unknown) => {
   process.exitCode = 1;
 });
 
-async function startManualPolling(bot: Bot, index: number): Promise<never> {
-  const pollingBot = bot as unknown as {
-    token: string;
-    handleUpdates(updates: TelegramUpdate[]): Promise<void>;
-    botInfo: { username?: string };
-  };
-  let offset = 0;
-  let consecutiveFailures = 0;
-  let lastFailureLogAt = 0;
-  const activeHandlers = new Set<Promise<void>>();
-  const initialDelayMs = Math.min(30_000, index * 3_000 + stableJitterMs(pollingBot.botInfo.username));
-  if (initialDelayMs > 0) {
-    console.log(`Starting polling for @${pollingBot.botInfo.username} in ${formatDuration(initialDelayMs)}.`);
-    await sleep(initialDelayMs);
+type PollingBot = {
+  token: string;
+  handleUpdates(updates: TelegramUpdate[]): Promise<void>;
+  botInfo: { id: number; username?: string };
+};
+
+type PollingRuntimeState = {
+  offset: number;
+  inFlight: boolean;
+  consecutiveFailures: number;
+  lastFailureLogAt: number;
+};
+
+async function startManualPollingScheduler(bots: Bot[]): Promise<never> {
+  const pollingBots = bots as unknown as PollingBot[];
+  const runtimeStates = new Map<string, PollingRuntimeState>();
+  const botIds = pollingBots.map((bot) => String(bot.botInfo.id));
+  await botPollingState.prune(botIds);
+  const explicitMainBotId = process.env.TELEGRAM_MAIN_BOT_ID?.trim();
+  const mainBotId = explicitMainBotId && botIds.includes(explicitMainBotId)
+    ? explicitMainBotId
+    : botIds[0];
+
+  for (const [index, bot] of pollingBots.entries()) {
+    const botId = String(bot.botInfo.id);
+    runtimeStates.set(botId, {
+      offset: 0,
+      inFlight: false,
+      consecutiveFailures: 0,
+      lastFailureLogAt: 0,
+    });
+    const initialDelayMs = Math.min(30_000, index * 3_000 + stableJitterMs(bot.botInfo.username));
+    await botPollingState.recordPoll(botId, {
+      username: bot.botInfo.username,
+      nextPollAt: new Date(Date.now() + initialDelayMs).toISOString(),
+    });
+    console.log(`Scheduled polling for @${bot.botInfo.username} in ${formatDuration(initialDelayMs)}.`);
   }
 
   while (true) {
-    try {
-      const payload = await telegramPollingLimiter.run(() => getUpdatesViaCurl(pollingBot.token, offset));
-      if (consecutiveFailures > 0) {
-        console.warn(`Telegram polling recovered for @${pollingBot.botInfo.username} after ${consecutiveFailures} failure(s).`);
-        await writeTelegramTransportStatus(pollingBot.botInfo.username, {
-          status: "ok",
-          consecutiveFailures: 0,
-          lastRecoveredAt: new Date().toISOString(),
-        }).catch((error) => {
-          console.error(`Failed to write Telegram transport recovery status for @${pollingBot.botInfo.username}:`, error);
-        });
-        consecutiveFailures = 0;
-        lastFailureLogAt = 0;
+    const now = Date.now();
+    let activePolls = [...runtimeStates.values()].filter((state) => state.inFlight).length;
+    for (const bot of pollingBots) {
+      if (activePolls >= config.telegramPollingMaxConcurrency) {
+        break;
       }
-
-      if (payload.result.length === 0) {
+      const botId = String(bot.botInfo.id);
+      const runtime = runtimeStates.get(botId);
+      if (!runtime || runtime.inFlight) {
+        continue;
+      }
+      const state = await botPollingState.get(botId, bot.botInfo.username);
+      const isMain = botId === mainBotId;
+      if (!isMain && state.sleepMode === "deep") {
+        continue;
+      }
+      const nextPollAt = state.nextPollAt ? Date.parse(state.nextPollAt) : 0;
+      if (Number.isFinite(nextPollAt) && nextPollAt > now) {
         continue;
       }
 
-      const orderedUpdates = orderUpdatesForDispatch(payload.result);
+      runtime.inFlight = true;
+      activePolls += 1;
+      void pollTelegramBot(bot, runtime, {
+        isMain,
+        totalBots: pollingBots.length,
+        lastMessageAt: state.lastMessageAt,
+      }).finally(() => {
+        runtime.inFlight = false;
+      });
+    }
+    await sleep(config.telegramSchedulerTickMs);
+  }
+}
+
+async function pollTelegramBot(
+  pollingBot: PollingBot,
+  runtime: PollingRuntimeState,
+  options: { isMain: boolean; totalBots: number; lastMessageAt?: string },
+): Promise<void> {
+  const botId = String(pollingBot.botInfo.id);
+  try {
+    const payload = await telegramPollingLimiter.run(() => getUpdatesViaCurl(pollingBot.token, runtime.offset));
+    if (runtime.consecutiveFailures > 0) {
+      console.warn(`Telegram polling recovered for @${pollingBot.botInfo.username} after ${runtime.consecutiveFailures} failure(s).`);
+      await writeTelegramTransportStatus(pollingBot.botInfo.username, {
+        status: "ok",
+        consecutiveFailures: 0,
+        lastRecoveredAt: new Date().toISOString(),
+      }).catch((error) => {
+        console.error(`Failed to write Telegram transport recovery status for @${pollingBot.botInfo.username}:`, error);
+      });
+      runtime.consecutiveFailures = 0;
+      runtime.lastFailureLogAt = 0;
+    }
+
+    const now = Date.now();
+    const orderedUpdates = orderUpdatesForDispatch(payload.result);
+    if (orderedUpdates.length > 0) {
       const stopUpdates = orderedUpdates.filter((update) => isStopCommandUpdate(update));
       if (stopUpdates.length > 0) {
         for (const update of stopUpdates) {
@@ -225,42 +291,76 @@ async function startManualPolling(bot: Bot, index: number): Promise<never> {
         }
       } else {
         for (const update of orderedUpdates) {
-          const handler = pollingBot.handleUpdates([update]).catch((error) => {
+          void pollingBot.handleUpdates([update]).catch((error) => {
             console.error(`Telegram update ${update.update_id} handler failed for @${pollingBot.botInfo.username}:`, error);
-          }).finally(() => {
-            activeHandlers.delete(handler);
           });
-          activeHandlers.add(handler);
         }
       }
-      offset = payload.result[payload.result.length - 1]!.update_id + 1;
-    } catch (error) {
-      consecutiveFailures += 1;
-      const issue = summarizeTelegramTransportError(error);
-      const delayMs = Math.max(
-        nextPollingBackoffMs(consecutiveFailures, pollingBot.botInfo.username),
-        getRetryAfterMs(error) ?? 0,
-      );
-      const now = Date.now();
-      if (consecutiveFailures === 1 || now - lastFailureLogAt >= 60_000) {
-        lastFailureLogAt = now;
-        console.error(
-          `Polling failed for @${pollingBot.botInfo.username}: ${issue}. `
-          + `consecutiveFailures=${consecutiveFailures}; nextRetryIn=${formatDuration(delayMs)}.`,
-        );
-      }
-      await writeTelegramTransportStatus(pollingBot.botInfo.username, {
-        status: "degraded",
-        consecutiveFailures,
-        lastIssue: issue,
-        lastFailureAt: new Date().toISOString(),
-        nextRetryAt: new Date(Date.now() + delayMs).toISOString(),
-      }).catch((statusError) => {
-        console.error(`Failed to write Telegram transport failure status for @${pollingBot.botInfo.username}:`, statusError);
-      });
-      await sleep(delayMs);
+      runtime.offset = orderedUpdates[orderedUpdates.length - 1]!.update_id + 1;
     }
+
+    const lastMessageAt = orderedUpdates.some(hasMessagePayload) ? new Date(now).toISOString() : options.lastMessageAt;
+    const nextPollAt = now + computePolicyPollIntervalMs(options.isMain, options.totalBots, lastMessageAt, now);
+    await botPollingState.recordPoll(botId, {
+      username: pollingBot.botInfo.username,
+      lastPollAt: new Date(now).toISOString(),
+      lastUpdateAt: orderedUpdates.length > 0 ? new Date(now).toISOString() : undefined,
+      lastMessageAt,
+      nextPollAt: new Date(nextPollAt).toISOString(),
+      consecutiveFailures: 0,
+    });
+  } catch (error) {
+    runtime.consecutiveFailures += 1;
+    const issue = summarizeTelegramTransportError(error);
+    const delayMs = Math.max(
+      nextPollingBackoffMs(runtime.consecutiveFailures, pollingBot.botInfo.username),
+      getRetryAfterMs(error) ?? 0,
+    );
+    const now = Date.now();
+    if (runtime.consecutiveFailures === 1 || now - runtime.lastFailureLogAt >= 60_000) {
+      runtime.lastFailureLogAt = now;
+      console.error(
+        `Polling failed for @${pollingBot.botInfo.username}: ${issue}. `
+        + `consecutiveFailures=${runtime.consecutiveFailures}; nextRetryIn=${formatDuration(delayMs)}.`,
+      );
+    }
+    await writeTelegramTransportStatus(pollingBot.botInfo.username, {
+      status: "degraded",
+      consecutiveFailures: runtime.consecutiveFailures,
+      lastIssue: issue,
+      lastFailureAt: new Date().toISOString(),
+      nextRetryAt: new Date(Date.now() + delayMs).toISOString(),
+    }).catch((statusError) => {
+      console.error(`Failed to write Telegram transport failure status for @${pollingBot.botInfo.username}:`, statusError);
+    });
+    await botPollingState.recordPoll(botId, {
+      username: pollingBot.botInfo.username,
+      consecutiveFailures: runtime.consecutiveFailures,
+      lastPollAt: new Date(now).toISOString(),
+      nextPollAt: new Date(now + delayMs).toISOString(),
+    });
   }
+}
+
+function computePolicyPollIntervalMs(isMain: boolean, totalBots: number, lastMessageAt: string | undefined, now: number): number {
+  if (isMain || totalBots < config.telegramTieredPollingMinBots) {
+    return config.telegramActivePollIntervalMs;
+  }
+  const lastMessageTime = lastMessageAt ? Date.parse(lastMessageAt) : undefined;
+  const idleMs = lastMessageTime && Number.isFinite(lastMessageTime)
+    ? now - lastMessageTime
+    : Number.POSITIVE_INFINITY;
+  if (idleMs <= config.telegramActiveIdleMs) {
+    return config.telegramActivePollIntervalMs;
+  }
+  if (idleMs <= config.telegramColdIdleMs) {
+    return config.telegramIdlePollIntervalMs;
+  }
+  return config.telegramColdPollIntervalMs;
+}
+
+function hasMessagePayload(update: TelegramUpdate): boolean {
+  return Boolean(update.message || update.edited_message || update.channel_post);
 }
 
 type TelegramUpdate = {
