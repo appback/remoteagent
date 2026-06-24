@@ -837,13 +837,13 @@ ${bridge.formatStatus(mapping)}`);
     }
 
     if (action === "main") {
-      const result = await botManagement.setMainBot(rest?.trim() ?? args[1]?.trim() ?? "");
+      const result = await botManagement.setMainBot(commandTarget(args, rest));
       await reply(ctx, result.message);
       return;
     }
 
     if (action === "remove") {
-      const result = await botManagement.removeBot(rest?.trim() ?? "", sourceBotId, sourceBotToken, ctx.chat.id);
+      const result = await botManagement.removeBot(commandTarget(args, rest), sourceBotId, sourceBotToken, ctx.chat.id);
       await reply(ctx, result.message);
       return;
     }
@@ -855,15 +855,15 @@ ${bridge.formatStatus(mapping)}`);
   bot.command("sleep", async (ctx) => {
     await ensureOwnerControlAccess(ctx);
     const sourceBotId = getBotId();
-    const { rest } = parseCommand(ctx.message?.text, 2);
-    const result = await botManagement.sleepBot(rest?.trim() ?? "", sourceBotId);
+    const { args, rest } = parseCommand(ctx.message?.text, 1);
+    const result = await botManagement.sleepBot(commandTarget(args, rest), sourceBotId);
     await reply(ctx, result.message);
   });
 
   bot.command("wake", async (ctx) => {
     await ensureOwnerControlAccess(ctx);
-    const { rest } = parseCommand(ctx.message?.text, 2);
-    const result = await botManagement.wakeBot(rest?.trim() ?? "");
+    const { args, rest } = parseCommand(ctx.message?.text, 1);
+    const result = await botManagement.wakeBot(commandTarget(args, rest));
     await reply(ctx, result.message);
   });
 
@@ -2002,6 +2002,10 @@ function parseCommand(text: string | undefined, headCount: number): { args: stri
     args,
     rest: remaining || undefined,
   };
+}
+
+function commandTarget(args: string[], rest: string | undefined): string {
+  return (rest?.trim() || args.slice(1).join(" ").trim() || args[0]?.trim() || "");
 }
 
 function formatSecretHelp(): string {
