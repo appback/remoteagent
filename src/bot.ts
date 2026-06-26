@@ -1730,12 +1730,25 @@ function renderTelegramInlineHtml(line: string): string {
 }
 
 function renderTelegramTextLinks(value: string): string {
-  return value.replace(/https?:\/\/[^\s<>"']+/g, (url) => {
-    const trailingMatch = /[),.;!?]+$/.exec(url);
+  const rendered: string[] = [];
+  let cursor = 0;
+  const urlPattern = /https?:\/\/[^\s<>"']+/g;
+  for (const match of value.matchAll(urlPattern)) {
+    const rawUrl = match[0];
+    const start = match.index ?? 0;
+    if (start > cursor) {
+      rendered.push(escapeTelegramHtml(value.slice(cursor, start)));
+    }
+    const trailingMatch = /[),.;!?]+$/.exec(rawUrl);
     const trailing = trailingMatch?.[0] ?? "";
-    const cleanUrl = trailing ? url.slice(0, -trailing.length) : url;
-    return `<a href="${escapeTelegramHtmlAttribute(cleanUrl)}">${escapeTelegramHtml(cleanUrl)}</a>${escapeTelegramHtml(trailing)}`;
-  });
+    const cleanUrl = trailing ? rawUrl.slice(0, -trailing.length) : rawUrl;
+    rendered.push(`<a href="${escapeTelegramHtmlAttribute(cleanUrl)}">${escapeTelegramHtml(cleanUrl)}</a>${escapeTelegramHtml(trailing)}`);
+    cursor = start + rawUrl.length;
+  }
+  if (cursor < value.length) {
+    rendered.push(escapeTelegramHtml(value.slice(cursor)));
+  }
+  return rendered.join("");
 }
 
 function containsUrl(value: string): boolean {
@@ -2721,17 +2734,43 @@ async function sendTelegramMessage(
 ): Promise<TelegramMessageResult> {
   const startedAt = Date.now();
   try {
-    return await callTelegramApi<TelegramMessageResult>(botToken, "sendMessage", {
-      chat_id: String(chatId),
-      text,
-      parse_mode: extra?.parse_mode,
-    });
+    try {
+      return await callTelegramApi<TelegramMessageResult>(botToken, "sendMessage", {
+        chat_id: String(chatId),
+        text,
+        parse_mode: extra?.parse_mode,
+      });
+    } catch (error) {
+      if (!extra?.parse_mode || !isTelegramEntityParseError(error)) {
+        throw error;
+      }
+      console.warn(`[telegram-sendMessage-fallback] chat=${chatId} parseMode=${extra.parse_mode}: ${error instanceof Error ? error.message : String(error)}`);
+      return await callTelegramApi<TelegramMessageResult>(botToken, "sendMessage", {
+        chat_id: String(chatId),
+        text: stripTelegramHtml(text),
+      });
+    }
   } finally {
     const elapsedMs = Date.now() - startedAt;
     if (elapsedMs >= 3000) {
       console.warn(`[telegram-sendMessage-slow] chat=${chatId} elapsedMs=${elapsedMs} chars=${text.length}`);
     }
   }
+}
+
+function isTelegramEntityParseError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /can'?t parse entities|can't parse entities|Unsupported start tag|Bad Request/i.test(message);
+}
+
+function stripTelegramHtml(value: string): string {
+  return value
+    .replace(/<a\s+href="[^"]*">([\s\S]*?)<\/a>/gi, "$1")
+    .replace(/<\/?(?:b|strong|i|em|u|s|strike|del|code|pre|blockquote)(?:\s[^>]*)?>/gi, "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&");
 }
 
 async function sendTelegramChatAction(
