@@ -1,6 +1,6 @@
 {
   "name": "appback-remoteagent",
-  "version": "0.13.21",
+  "version": "0.14.0",
   "description": "Personal installable session server for continuing local AI work across PC and Telegram",
   "license": "MIT",
   "type": "module",
