@@ -1394,6 +1394,7 @@ async function routeTelegramWorkLoop(
   let untaggedIntentRetryCount = 0;
   let missingEvidenceRetryCount = 0;
   let deliveredProgressCount = 0;
+  let providerCompleted = false;
   const ensureStillBound = async (phase: string): Promise<void> => {
     if (!sessionId) {
       return;
@@ -1498,6 +1499,7 @@ async function routeTelegramWorkLoop(
         if (currentSession) {
           await memoryService.completeTask(currentSession.session, parsed.chunks.join("\n"));
         }
+        providerCompleted = true;
         autoContinue.clear(botId, chatId, sessionId);
         return parsed.chunks;
       }
@@ -1582,7 +1584,11 @@ async function routeTelegramWorkLoop(
     }
   } finally {
     if (currentSession) {
-      await botManagement.markProviderIdle(botId, sessionId);
+      if (providerCompleted) {
+        await botManagement.markProviderCompleted(botId, sessionId);
+      } else {
+        await botManagement.markProviderIdle(botId, sessionId);
+      }
     }
   }
 }

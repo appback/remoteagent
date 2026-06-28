@@ -8,7 +8,9 @@ export type BotPollingState = {
   runningSessionIds?: string[];
   lastProviderStartedAt?: string;
   lastProviderFinishedAt?: string;
+  lastProviderCompletedAt?: string;
   lastUpdateAt?: string;
+  lastUserMessageAt?: string;
   lastMessageAt?: string;
   lastPollAt?: string;
   nextPollAt?: string;
@@ -93,6 +95,22 @@ export class BotPollingStateService {
       delete current.runningSessionIds;
       current.lastProviderFinishedAt = new Date().toISOString();
     }
+    state.bots[botId] = current;
+    await this.writeNow();
+  }
+
+  async markCompleted(botId: string, sessionId?: string, username?: string): Promise<void> {
+    await this.markIdle(botId, sessionId, username);
+    const state = await this.read();
+    const current = state.bots[botId] ?? {
+      botId,
+      username,
+      consecutiveFailures: 0,
+    };
+    if (username) {
+      current.username = username;
+    }
+    current.lastProviderCompletedAt = new Date().toISOString();
     state.bots[botId] = current;
     await this.writeNow();
   }

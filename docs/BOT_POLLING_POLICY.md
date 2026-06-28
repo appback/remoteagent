@@ -14,6 +14,13 @@ When 5 or more bots are configured:
 - the next 4 idle bots poll every 60 seconds
 - all remaining idle bots poll every 180 seconds
 
+Recent activity is updated only when:
+
+- the operator sends a message to that bot
+- the provider returns a completed result to that bot
+
+Polling itself must not update recent activity. A bot should not become "recent" merely because RemoteAgent checked Telegram for updates.
+
 When a bot has active provider work:
 
 - that bot polls every 60 seconds

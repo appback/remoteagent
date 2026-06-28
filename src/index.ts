@@ -304,11 +304,13 @@ async function pollTelegramBot(
     }
 
     const receivedMessage = orderedUpdates.some(hasMessagePayload);
-    const lastMessageAt = receivedMessage ? new Date(now).toISOString() : options.state?.lastMessageAt;
+    const lastUserMessageAt = receivedMessage ? new Date(now).toISOString() : options.state?.lastUserMessageAt;
+    const lastMessageAt = receivedMessage ? lastUserMessageAt : options.state?.lastMessageAt;
     const nextPollAt = now + computePolicyPollIntervalMs(options.totalBots, receivedMessage ? 1 : options.botRank, {
       ...options.state,
       botId,
       consecutiveFailures: options.state?.consecutiveFailures ?? runtime.consecutiveFailures,
+      lastUserMessageAt,
       lastMessageAt,
     }, {
       tieredPollingMinBots: config.telegramTieredPollingMinBots,
@@ -321,6 +323,7 @@ async function pollTelegramBot(
       username: pollingBot.botInfo.username,
       lastPollAt: new Date(now).toISOString(),
       lastUpdateAt: orderedUpdates.length > 0 ? new Date(now).toISOString() : undefined,
+      lastUserMessageAt,
       lastMessageAt,
       nextPollAt: new Date(nextPollAt).toISOString(),
       consecutiveFailures: 0,

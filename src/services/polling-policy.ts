@@ -15,7 +15,10 @@ export function computeRecentMessageRanks(
   const ranked = botIds
     .map((botId) => ({
       botId,
-      timestamp: parseStateTime(states[botId]?.lastMessageAt) ?? 0,
+      timestamp: latestTimestamp(
+        states[botId]?.lastUserMessageAt ?? states[botId]?.lastMessageAt,
+        states[botId]?.lastProviderCompletedAt,
+      ),
     }))
     .sort((left, right) => right.timestamp - left.timestamp);
   return new Map(ranked.map((entry, index) => [entry.botId, index + 1]));
@@ -48,4 +51,8 @@ function parseStateTime(value: string | undefined): number | undefined {
   }
   const timestamp = Date.parse(value);
   return Number.isFinite(timestamp) ? timestamp : undefined;
+}
+
+function latestTimestamp(...values: Array<string | undefined>): number {
+  return Math.max(0, ...values.map((value) => parseStateTime(value) ?? 0));
 }

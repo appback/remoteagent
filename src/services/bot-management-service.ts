@@ -117,6 +117,12 @@ export class BotManagementService {
     await this.pollingState.markIdle(pollingBotId, sessionId, bot?.username);
   }
 
+  async markProviderCompleted(botId: string, sessionId?: string): Promise<void> {
+    const bot = await this.findConfiguredBot(botId);
+    const pollingBotId = bot ? String(bot.id) : botId;
+    await this.pollingState.markCompleted(pollingBotId, sessionId, bot?.username);
+  }
+
   async getPendingOperationNotice(): Promise<PendingBotOperationNotice | undefined> {
     const pending = await this.readPendingOperation();
     if (!pending) {
