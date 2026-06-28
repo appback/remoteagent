@@ -30,3 +30,4 @@ RemoteAgent no longer uses deep sleep, wake, or a special main bot for polling c
 - `/bot doctor` removes bots that Telegram reports as permanently dead.
 - `/bot remove <username|id>` removes a configured bot from the runtime.
 - Polling state is stored by Telegram bot id, not by display order.
+- The default polling concurrency is 8 because Telegram long polling can hold each request for up to 30 seconds. Lower values can make later bots look unresponsive when many bots are configured.

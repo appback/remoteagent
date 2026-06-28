@@ -154,7 +154,7 @@ export const config = {
   telegramCommandMenuEnabled: readBoolean("TELEGRAM_COMMAND_MENU_ENABLED", true),
   telegramPollingBackoffMinMs: readTimeout("TELEGRAM_POLLING_BACKOFF_MIN_MS", 60_000),
   telegramPollingBackoffMaxMs: readTimeout("TELEGRAM_POLLING_BACKOFF_MAX_MS", 900_000),
-  telegramPollingMaxConcurrency: readTimeout("TELEGRAM_POLLING_MAX_CONCURRENCY", 3),
+  telegramPollingMaxConcurrency: readTimeout("TELEGRAM_POLLING_MAX_CONCURRENCY", 8),
   telegramSchedulerTickMs: readTimeout("TELEGRAM_SCHEDULER_TICK_MS", 1000),
   telegramTieredPollingMinBots: readTimeout("TELEGRAM_TIERED_POLLING_MIN_BOTS", 5),
   telegramActivePollIntervalMs: readTimeout("TELEGRAM_ACTIVE_POLL_INTERVAL_MS", 3000),
