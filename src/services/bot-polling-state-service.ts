@@ -2,12 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
-export type BotSleepMode = "awake" | "deep";
-
 export type BotPollingState = {
   botId: string;
   username?: string;
-  sleepMode: BotSleepMode;
+  runningSessionIds?: string[];
+  lastProviderStartedAt?: string;
+  lastProviderFinishedAt?: string;
   lastUpdateAt?: string;
   lastMessageAt?: string;
   lastPollAt?: string;
@@ -42,7 +42,6 @@ export class BotPollingStateService {
     const current = state.bots[botId] ?? {
       botId,
       username,
-      sleepMode: "awake",
       consecutiveFailures: 0,
     };
     if (username && current.username !== username) {
@@ -57,31 +56,51 @@ export class BotPollingStateService {
     return { ...(await this.read()).bots };
   }
 
-  async setSleepMode(botId: string, sleepMode: BotSleepMode, username?: string): Promise<BotPollingState> {
+  async markRunning(botId: string, sessionId?: string, username?: string): Promise<void> {
     const state = await this.read();
     const current = state.bots[botId] ?? {
       botId,
       username,
-      sleepMode,
       consecutiveFailures: 0,
     };
-    current.sleepMode = sleepMode;
     if (username) {
       current.username = username;
     }
-    if (sleepMode === "awake") {
-      current.nextPollAt = new Date().toISOString();
+    const sessions = new Set(current.runningSessionIds ?? []);
+    sessions.add(sessionId || "__unknown__");
+    current.runningSessionIds = [...sessions];
+    current.lastProviderStartedAt = new Date().toISOString();
+    state.bots[botId] = current;
+    await this.writeNow();
+  }
+
+  async markIdle(botId: string, sessionId?: string, username?: string): Promise<void> {
+    const state = await this.read();
+    const current = state.bots[botId] ?? {
+      botId,
+      username,
+      consecutiveFailures: 0,
+    };
+    if (username) {
+      current.username = username;
+    }
+    const runningSessionIds = current.runningSessionIds ?? [];
+    if (runningSessionIds.length > 0) {
+      const key = sessionId || "__unknown__";
+      current.runningSessionIds = runningSessionIds.filter((value) => value !== key);
+    }
+    if (!current.runningSessionIds || current.runningSessionIds.length === 0) {
+      delete current.runningSessionIds;
+      current.lastProviderFinishedAt = new Date().toISOString();
     }
     state.bots[botId] = current;
     await this.writeNow();
-    return current;
   }
 
   async recordPoll(botId: string, patch: Partial<Omit<BotPollingState, "botId">>): Promise<void> {
     const state = await this.read();
     const current = state.bots[botId] ?? {
       botId,
-      sleepMode: "awake",
       consecutiveFailures: 0,
     };
     state.bots[botId] = {
@@ -107,11 +126,8 @@ export class BotPollingStateService {
     }
   }
 
-  formatMode(botId: string, isMain: boolean, state?: BotPollingState): string {
-    if (isMain) {
-      return "awake";
-    }
-    return state?.sleepMode === "deep" ? "deep sleep" : "awake";
+  formatMode(state?: BotPollingState): string {
+    return state?.runningSessionIds && state.runningSessionIds.length > 0 ? "running" : "idle";
   }
 
   async flush(): Promise<void> {

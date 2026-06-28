@@ -42,7 +42,6 @@ type EnvConfig = {
   lines: string[];
   tokens: string[];
   usernames: string[];
-  mainBotId?: string;
 };
 
 type BotCommandResult = {
@@ -88,61 +87,34 @@ export class BotManagementService {
       return "No Telegram bots are configured.";
     }
 
-    return this.formatBots(bots, env.mainBotId, await this.pollingState.list());
+    return this.formatBots(bots, await this.pollingState.list());
   }
 
   async formatCurrentBotSummary(currentBotId: string): Promise<string> {
     const env = await this.readEnvConfig();
     const bots = this.zipBots(env.tokens, env.usernames);
     const current = this.resolveBotSelector(bots, currentBotId);
-    const main = this.resolveMainBot(bots, env.mainBotId);
     const currentLabel = current ? `@${current.username} (${current.id})` : currentBotId;
-    const mainLabel = main ? `@${main.username} (${main.id})` : "not configured";
-    const role = current && main && current.id === main.id ? "main" : "sub";
 
     const states = await this.pollingState.list();
     const currentState = current ? states[String(current.id)] : undefined;
     return [
-      `bot: ${currentLabel}${current ? ` [${role}]` : ""}`,
-      `mainBot: ${mainLabel}`,
+      `bot: ${currentLabel}`,
       `botCount: ${bots.length}`,
-      `sleep: ${this.pollingState.formatMode(String(current?.id ?? currentBotId), role === "main", currentState)}`,
+      `pollingState: ${this.pollingState.formatMode(currentState)}`,
     ].join("\n");
   }
 
-  async sleepBot(selector: string, currentBotId: string): Promise<BotCommandResult> {
-    const env = await this.readEnvConfig();
-    const bots = this.zipBots(env.tokens, env.usernames);
-    if (bots.length === 0) {
-      throw new Error("No Telegram bots are configured.");
-    }
-    const mainBotId = this.resolveMainBotId(bots, env.mainBotId);
-    const target = selector.trim()
-      ? this.resolveBotSelector(bots, selector)
-      : this.resolveBotSelector(bots, currentBotId);
-    if (!target) {
-      throw new Error("Usage: /sleep <bot>");
-    }
-    if (String(target.id) === mainBotId) {
-      throw new Error(`@${target.username} is the main bot and cannot enter deep sleep.`);
-    }
-    await this.pollingState.setSleepMode(String(target.id), "deep", target.username);
-    return {
-      message: `Set @${target.username} to deep sleep.\n\nIt remains configured. RemoteAgent will stop polling it until /wake is used from an awake bot.`,
-    };
+  async markProviderRunning(botId: string, sessionId?: string): Promise<void> {
+    const bot = await this.findConfiguredBot(botId);
+    const pollingBotId = bot ? String(bot.id) : botId;
+    await this.pollingState.markRunning(pollingBotId, sessionId, bot?.username);
   }
 
-  async wakeBot(selector: string): Promise<BotCommandResult> {
-    const env = await this.readEnvConfig();
-    const bots = this.zipBots(env.tokens, env.usernames);
-    const target = this.resolveBotSelector(bots, selector);
-    if (!target) {
-      throw new Error("Usage: /wake <bot>");
-    }
-    await this.pollingState.setSleepMode(String(target.id), "awake", target.username);
-    return {
-      message: `Woke @${target.username}. It will be polled again.`,
-    };
+  async markProviderIdle(botId: string, sessionId?: string): Promise<void> {
+    const bot = await this.findConfiguredBot(botId);
+    const pollingBotId = bot ? String(bot.id) : botId;
+    await this.pollingState.markIdle(pollingBotId, sessionId, bot?.username);
   }
 
   async getPendingOperationNotice(): Promise<PendingBotOperationNotice | undefined> {
@@ -181,7 +153,6 @@ export class BotManagementService {
 
     const tokens = [...env.tokens, trimmed];
     const usernames = [...env.usernames, target.username];
-    const mainBotId = this.resolveMainBotId(this.zipBots(tokens, usernames), env.mainBotId);
     const backupEnvPath = await this.backupEnv();
     const pending: PendingBotOperation = {
       version: 1,
@@ -201,7 +172,7 @@ export class BotManagementService {
 
     try {
       await this.writePendingOperation(pending);
-      await this.writeEnvConfig(env.lines, tokens, usernames, mainBotId);
+      await this.writeEnvConfig(env.lines, tokens, usernames);
       await this.launchRestartJob();
     } catch (error) {
       await this.restoreBackup(backupEnvPath).catch(() => undefined);
@@ -239,10 +210,6 @@ export class BotManagementService {
     const remainingBots = bots.filter((value) => value.token !== target.token);
     const tokens = remainingBots.map((value) => value.token);
     const usernames = remainingBots.map((value) => value.username);
-    const currentMain = this.resolveMainBot(bots, env.mainBotId);
-    const nextMainBotId = currentMain?.token === target.token
-      ? this.promoteMainBotAfterRemoval(bots, target)?.id.toString()
-      : this.resolveMainBotId(remainingBots, env.mainBotId);
     const replyToken = tokens.includes(sourceBotToken) ? sourceBotToken : tokens[0]!;
     const notifyViaUsername = remainingBots.find((bot) => bot.token === replyToken)?.username;
     const backupEnvPath = await this.backupEnv();
@@ -264,7 +231,7 @@ export class BotManagementService {
 
     try {
       await this.writePendingOperation(pending);
-      await this.writeEnvConfig(env.lines, tokens, usernames, nextMainBotId);
+      await this.writeEnvConfig(env.lines, tokens, usernames);
       await this.launchRestartJob();
     } catch (error) {
       await this.restoreBackup(backupEnvPath).catch(() => undefined);
@@ -272,10 +239,6 @@ export class BotManagementService {
       throw error;
     }
 
-    const promoted = nextMainBotId ? remainingBots.find((bot) => String(bot.id) === nextMainBotId) : undefined;
-    const mainLine = promoted && currentMain?.token === target.token
-      ? `Main bot will be promoted to @${promoted.username} (${promoted.id}).`
-      : undefined;
     const notifyLine = replyToken === sourceBotToken || !notifyViaUsername
       ? "The runtime will restart once and then report the result here."
       : `The runtime will restart once and then report the result through @${notifyViaUsername}.`;
@@ -283,35 +246,8 @@ export class BotManagementService {
     return {
       message: [
         `Applying bot removal for @${target.username} (${target.id}).`,
-        mainLine,
         notifyLine,
       ].filter(Boolean).join("\n\n"),
-    };
-  }
-
-  async setMainBot(selector: string): Promise<BotCommandResult> {
-    await this.ensureSupported();
-    await this.assertNoPendingOperation();
-
-    const trimmed = selector.trim();
-    if (!trimmed) {
-      throw new Error("Usage: /bot main <number|@username|id>");
-    }
-
-    const env = await this.readEnvConfig();
-    const bots = this.zipBots(env.tokens, env.usernames);
-    const target = this.resolveBotSelector(bots, trimmed);
-    if (!target) {
-      throw new Error(`Bot was not found: ${trimmed}`);
-    }
-
-    await this.writeEnvConfig(env.lines, env.tokens, env.usernames, String(target.id));
-    return {
-      message: [
-        `Set main bot to @${target.username} (${target.id}).`,
-        "",
-        this.formatBots(bots, String(target.id)),
-      ].join("\n"),
     };
   }
 
@@ -361,7 +297,6 @@ export class BotManagementService {
 
     const tokens = alive.map((bot) => bot.token);
     const usernames = alive.map((bot) => bot.username);
-    const mainBotId = this.resolveMainBotId(alive, env.mainBotId);
     const replyToken = tokens.includes(sourceBotToken) ? sourceBotToken : tokens[0]!;
     const notifyViaUsername = alive.find((bot) => bot.token === replyToken)?.username;
     const backupEnvPath = await this.backupEnv();
@@ -383,7 +318,7 @@ export class BotManagementService {
 
     try {
       await this.writePendingOperation(pending);
-      await this.writeEnvConfig(env.lines, tokens, usernames, mainBotId);
+      await this.writeEnvConfig(env.lines, tokens, usernames);
       await this.launchRestartJob();
     } catch (error) {
       await this.restoreBackup(backupEnvPath).catch(() => undefined);
@@ -438,9 +373,8 @@ export class BotManagementService {
 
     const env = await this.readEnvConfig().catch(() => undefined);
     const bots = env ? this.zipBots(env.tokens, env.usernames) : [];
-    const mainBotId = this.resolveMainBotId(bots, env?.mainBotId);
     const listLines = bots.length > 0
-      ? this.formatBotListLines(bots, mainBotId).map((line) => `- ${line.replace(/^\d+\.\s*/, "")}`)
+      ? this.formatBotListLines(bots).map((line) => `- ${line.replace(/^\d+\.\s*/, "")}`)
       : ["- none"];
 
     const lines = pending.status === "rolled_back"
@@ -596,7 +530,6 @@ export class BotManagementService {
     const tokenLine = lines.find((line) => line.startsWith("TELEGRAM_BOT_TOKENS="));
     const singleTokenLine = lines.find((line) => line.startsWith("TELEGRAM_BOT_TOKEN="));
     const usernameLine = lines.find((line) => line.startsWith("TELEGRAM_BOT_USERNAMES="));
-    const mainBotLine = lines.find((line) => line.startsWith("TELEGRAM_MAIN_BOT_ID="));
 
     const tokens = tokenLine
       ? this.parseCsv(tokenLine.slice("TELEGRAM_BOT_TOKENS=".length))
@@ -610,18 +543,15 @@ export class BotManagementService {
       lines,
       tokens,
       usernames,
-      mainBotId: mainBotLine?.slice("TELEGRAM_MAIN_BOT_ID=".length).trim() || undefined,
     };
   }
 
-  private async writeEnvConfig(originalLines: string[], tokens: string[], usernames: string[], mainBotId?: string): Promise<void> {
+  private async writeEnvConfig(originalLines: string[], tokens: string[], usernames: string[]): Promise<void> {
     const normalizedUsernames = await this.normalizeUsernamesFromTelegram(tokens, usernames);
-    const normalizedMainBotId = this.resolveMainBotId(this.zipBots(tokens, normalizedUsernames), mainBotId);
     const nextLines: string[] = [];
     let hasMulti = false;
     let hasSingle = false;
     let hasUsernames = false;
-    let hasMainBot = false;
 
     for (const line of originalLines) {
       if (line.startsWith("TELEGRAM_BOT_TOKENS=")) {
@@ -640,10 +570,6 @@ export class BotManagementService {
         continue;
       }
       if (line.startsWith("TELEGRAM_MAIN_BOT_ID=")) {
-        if (normalizedMainBotId) {
-          nextLines.push(`TELEGRAM_MAIN_BOT_ID=${normalizedMainBotId}`);
-        }
-        hasMainBot = true;
         continue;
       }
       nextLines.push(line);
@@ -658,10 +584,6 @@ export class BotManagementService {
     if (!hasUsernames) {
       nextLines.unshift(`TELEGRAM_BOT_USERNAMES=${normalizedUsernames.join(",")}`);
     }
-    if (!hasMainBot && normalizedMainBotId) {
-      nextLines.unshift(`TELEGRAM_MAIN_BOT_ID=${normalizedMainBotId}`);
-    }
-
     const output = `${nextLines.filter((line, index, all) => !(index === all.length - 1 && line === "")).join("\n")}\n`;
     await fs.writeFile(this.envPath, output, "utf8");
   }
@@ -715,7 +637,6 @@ export class BotManagementService {
 
   private formatBots(
     bots: ManagedBot[],
-    mainBotId?: string,
     states: Record<string, BotPollingState> = {},
   ): string {
     if (bots.length === 0) {
@@ -724,26 +645,22 @@ export class BotManagementService {
 
     return [
       `Configured bots (${bots.length})`,
-      ...this.formatBotListLines(bots, mainBotId, states),
+      ...this.formatBotListLines(bots, states),
     ].join("\n");
   }
 
   private formatBotListLines(
     bots: ManagedBot[],
-    explicitMainBotId?: string,
     states: Record<string, BotPollingState> = {},
   ): string[] {
-    const mainBotId = this.resolveMainBotId(bots, explicitMainBotId);
     return bots.map((bot, index) => {
       const botId = String(bot.id);
-      const isMain = botId === mainBotId;
       const state = states[botId];
       const details = [
-        `[${isMain ? "main" : "sub"}]`,
-        this.pollingState.formatMode(botId, isMain, state),
+        this.pollingState.formatMode(state),
         state?.lastMessageAt ? `lastMessage=${this.formatAge(state.lastMessageAt)}` : undefined,
         state?.lastPollAt ? `lastPoll=${this.formatAge(state.lastPollAt)}` : undefined,
-        state?.nextPollAt && state.sleepMode !== "deep" ? `nextPoll=${this.formatAge(state.nextPollAt)}` : undefined,
+        state?.nextPollAt ? `nextPoll=${this.formatAge(state.nextPollAt)}` : undefined,
         state?.consecutiveFailures ? `failures=${state.consecutiveFailures}` : undefined,
       ].filter(Boolean).join(" ");
       return `${index + 1}. @${bot.username} (${bot.id}) ${details}`;
@@ -770,27 +687,13 @@ export class BotManagementService {
     return `${Math.round(absMs / 86_400_000)}d ${suffix}`;
   }
 
-  private resolveMainBot(bots: ManagedBot[], mainBotId?: string): ManagedBot | undefined {
-    if (bots.length === 0) {
-      return undefined;
-    }
-
-    const explicit = mainBotId ? bots.find((bot) => String(bot.id) === mainBotId) : undefined;
-    return explicit ?? bots[0];
-  }
-
-  private resolveMainBotId(bots: ManagedBot[], mainBotId?: string): string | undefined {
-    return this.resolveMainBot(bots, mainBotId)?.id.toString();
-  }
-
-  private promoteMainBotAfterRemoval(bots: ManagedBot[], removed: ManagedBot): ManagedBot | undefined {
-    const remaining = bots.filter((bot) => bot.token !== removed.token);
-    return remaining[removed.index] ?? remaining[0];
-  }
-
   private async listConfiguredBots(): Promise<ManagedBot[]> {
     const env = await this.readEnvConfig();
     return this.zipBots(env.tokens, env.usernames);
+  }
+
+  private async findConfiguredBot(botId: string): Promise<ManagedBot | undefined> {
+    return this.resolveBotSelector(await this.listConfiguredBots(), botId);
   }
 
   private tokenId(token: string): number {

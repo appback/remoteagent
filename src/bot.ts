@@ -41,11 +41,8 @@ const HELP_TEXT = [
   "/bots",
   "/bot add <token>",
   "/bot doctor",
-  "/bot main <number|@username|id>",
   "/bot remove <username|id>",
   "/bot reload",
-  "/sleep [bot]",
-  "/wake <bot>",
   "/install codex|claude",
   "/login codex",
   "/login claude [token]",
@@ -95,8 +92,6 @@ const RECOGNIZED_COMMANDS = new Set([
   "docs",
   "bots",
   "bot",
-  "sleep",
-  "wake",
   "install",
   "login",
   "reset",
@@ -270,6 +265,7 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
             chatId,
             text,
             "Telegram text request",
+            botManagement,
             helpers,
             autoContinue,
             memoryService,
@@ -807,8 +803,8 @@ ${bridge.formatStatus(mapping)}`);
     const { args, rest } = parseCommand(ctx.message?.text, 2);
     const action = args[0]?.toLowerCase();
 
-    if (!action || !["add", "doctor", "main", "remove", "reload"].includes(action)) {
-      await reply(ctx, "Usage: `/bot add <token>`, `/bot doctor`, `/bot main <number|@username|id>`, `/bot remove <username|id>`, or `/bot reload`", {
+    if (!action || !["add", "doctor", "remove", "reload"].includes(action)) {
+      await reply(ctx, "Usage: `/bot add <token>`, `/bot doctor`, `/bot remove <username|id>`, or `/bot reload`", {
         parse_mode: "Markdown",
       });
       return;
@@ -836,12 +832,6 @@ ${bridge.formatStatus(mapping)}`);
       return;
     }
 
-    if (action === "main") {
-      const result = await botManagement.setMainBot(commandTarget(args, rest));
-      await reply(ctx, result.message);
-      return;
-    }
-
     if (action === "remove") {
       const result = await botManagement.removeBot(commandTarget(args, rest), sourceBotId, sourceBotToken, ctx.chat.id);
       await reply(ctx, result.message);
@@ -849,21 +839,6 @@ ${bridge.formatStatus(mapping)}`);
     }
 
     const result = await botManagement.reloadBots(sourceBotId, sourceBotToken, ctx.chat.id);
-    await reply(ctx, result.message);
-  });
-
-  bot.command("sleep", async (ctx) => {
-    await ensureOwnerControlAccess(ctx);
-    const sourceBotId = getBotId();
-    const { args, rest } = parseCommand(ctx.message?.text, 1);
-    const result = await botManagement.sleepBot(commandTarget(args, rest), sourceBotId);
-    await reply(ctx, result.message);
-  });
-
-  bot.command("wake", async (ctx) => {
-    await ensureOwnerControlAccess(ctx);
-    const { args, rest } = parseCommand(ctx.message?.text, 1);
-    const result = await botManagement.wakeBot(commandTarget(args, rest));
     await reply(ctx, result.message);
   });
 
@@ -987,6 +962,7 @@ ${bridge.formatStatus(mapping)}`);
             chatId,
             message,
             "Telegram image request",
+            botManagement,
             helpers,
             autoContinue,
             memoryService,
@@ -1029,6 +1005,7 @@ ${bridge.formatStatus(mapping)}`);
             chatId,
             message,
             `Telegram ${attachment.kind} request`,
+            botManagement,
             helpers,
             autoContinue,
             memoryService,
@@ -1068,6 +1045,7 @@ ${bridge.formatStatus(mapping)}`);
             chatId,
             message,
             `Telegram ${attachmentKind} request`,
+            botManagement,
             helpers,
             autoContinue,
             memoryService,
@@ -1390,6 +1368,7 @@ async function routeTelegramWorkLoop(
   chatId: string,
   message: string,
   label: string,
+  botManagement: BotManagementService,
   helpers: PendingAnimationHelpers,
   autoContinue: AutoContinueController,
   memoryService: AgentMemoryService,
@@ -1432,7 +1411,12 @@ async function routeTelegramWorkLoop(
     throw new SilentTelegramAbort(`Session ${currentSession?.session.publicId ?? sessionId} is no longer bound to this chat.`);
   };
 
-  for (let turn = 1; ; turn += 1) {
+  if (currentSession) {
+    await botManagement.markProviderRunning(botId, sessionId);
+  }
+
+  try {
+    for (let turn = 1; ; turn += 1) {
     if (typeof maxTurns === "number" && maxTurns > 0 && turn > maxTurns) {
       const limitMessage = `Automatic continue limit (${maxTurns}) reached before a final result.`;
       await bridge.logSystem(botId, chatId, limitMessage);
@@ -1594,6 +1578,11 @@ async function routeTelegramWorkLoop(
       }
 
       throw error;
+    }
+    }
+  } finally {
+    if (currentSession) {
+      await botManagement.markProviderIdle(botId, sessionId);
     }
   }
 }
@@ -1860,7 +1849,7 @@ function formatMissingEvidenceRetryPrompt(lastResponse: string, issue: string): 
 }
 
 function isEmptyResponseError(message: string): boolean {
-  return /empty response/i.test(message);
+  return /empty response|failed without any output|without stdout\/stderr/i.test(message);
 }
 
 function looksLikeBlockedBody(text: string): boolean {

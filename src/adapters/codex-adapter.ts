@@ -42,7 +42,7 @@ export class CodexAdapter implements ProviderAdapter {
       }
 
       if (code !== 0) {
-        throw new Error(this.formatProcessError(stdout, stderr, timedOut));
+        throw new Error(this.formatProcessError(stdout, stderr, timedOut, code));
       }
 
       if (timedOut) {
@@ -207,7 +207,7 @@ export class CodexAdapter implements ProviderAdapter {
     return (await fs.readFile(outputPath, "utf8").catch(() => "")).trim();
   }
 
-  private formatProcessError(stdout: string, stderr: string, timedOut = false): string {
+  private formatProcessError(stdout: string, stderr: string, timedOut = false, code?: number | null): string {
     const structured = this.extractStructuredError(stdout, stderr);
     if (structured) {
       return structured;
@@ -220,7 +220,7 @@ export class CodexAdapter implements ProviderAdapter {
 
     return timedOut
       ? this.formatTimeoutError()
-      : "Codex execution failed without any output.";
+      : `Codex process exited with code ${code ?? "unknown"} without stdout/stderr.`;
   }
 
   private extractStructuredError(stdout: string, stderr: string): string | undefined {

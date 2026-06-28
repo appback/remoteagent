@@ -35,9 +35,9 @@ Current production bot ownership is intentionally split:
 Do not run the same Telegram bot token from multiple runtimes at the same time.
 Bot polling conflicts are treated as incidents, not harmless warnings.
 
-When a runtime has more than three configured Telegram bots, polling pressure can become operationally visible.
-Bot sleep is the planned mitigation: keep one main bot reachable and let long-idle sub bots stop polling without removing their configuration.
-See [BOT_SLEEP.md](./BOT_SLEEP.md).
+When a runtime has several configured Telegram bots, polling pressure can become operationally visible.
+RemoteAgent reduces that pressure with rank-based polling intervals instead of deep sleep or a special main bot.
+See [BOT_POLLING_POLICY.md](./BOT_POLLING_POLICY.md).
 
 ## Workspace policy
 

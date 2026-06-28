@@ -15,6 +15,8 @@ import { BotManagementService } from "./services/bot-management-service.js";
 import { LocalUiService } from "./services/local-ui-service.js";
 import { AgentMemoryService } from "./services/agent-memory-service.js";
 import { BotPollingStateService } from "./services/bot-polling-state-service.js";
+import type { BotPollingState } from "./services/bot-polling-state-service.js";
+import { computePolicyPollIntervalMs, computeRecentMessageRanks } from "./services/polling-policy.js";
 import { terminateAllSpawnedExecutions } from "./adapters/windows-shell.js";
 import { setTelegramCommandMenu } from "./telegram-command-menu.js";
 import type { ProviderAdapter } from "./adapters/provider-adapter.js";
@@ -196,10 +198,6 @@ async function startManualPollingScheduler(bots: Bot[]): Promise<never> {
   const runtimeStates = new Map<string, PollingRuntimeState>();
   const botIds = pollingBots.map((bot) => String(bot.botInfo.id));
   await botPollingState.prune(botIds);
-  const explicitMainBotId = process.env.TELEGRAM_MAIN_BOT_ID?.trim();
-  const mainBotId = explicitMainBotId && botIds.includes(explicitMainBotId)
-    ? explicitMainBotId
-    : botIds[0];
 
   for (const [index, bot] of pollingBots.entries()) {
     const botId = String(bot.botInfo.id);
@@ -220,6 +218,8 @@ async function startManualPollingScheduler(bots: Bot[]): Promise<never> {
   while (true) {
     const now = Date.now();
     let activePolls = [...runtimeStates.values()].filter((state) => state.inFlight).length;
+    const pollingStates = await botPollingState.list();
+    const rankByBotId = computeRecentMessageRanks(botIds, pollingStates);
     for (const bot of pollingBots) {
       if (activePolls >= config.telegramPollingMaxConcurrency) {
         break;
@@ -230,10 +230,6 @@ async function startManualPollingScheduler(bots: Bot[]): Promise<never> {
         continue;
       }
       const state = await botPollingState.get(botId, bot.botInfo.username);
-      const isMain = botId === mainBotId;
-      if (!isMain && state.sleepMode === "deep") {
-        continue;
-      }
       const nextPollAt = state.nextPollAt ? Date.parse(state.nextPollAt) : 0;
       if (Number.isFinite(nextPollAt) && nextPollAt > now) {
         continue;
@@ -242,9 +238,9 @@ async function startManualPollingScheduler(bots: Bot[]): Promise<never> {
       runtime.inFlight = true;
       activePolls += 1;
       void pollTelegramBot(bot, runtime, {
-        isMain,
         totalBots: pollingBots.length,
-        lastMessageAt: state.lastMessageAt,
+        botRank: rankByBotId.get(botId) ?? pollingBots.length,
+        state,
       }).finally(() => {
         runtime.inFlight = false;
       });
@@ -256,7 +252,7 @@ async function startManualPollingScheduler(bots: Bot[]): Promise<never> {
 async function pollTelegramBot(
   pollingBot: PollingBot,
   runtime: PollingRuntimeState,
-  options: { isMain: boolean; totalBots: number; lastMessageAt?: string },
+  options: { totalBots: number; botRank: number; state?: BotPollingState },
 ): Promise<void> {
   const botId = String(pollingBot.botInfo.id);
   try {
@@ -299,8 +295,20 @@ async function pollTelegramBot(
       runtime.offset = orderedUpdates[orderedUpdates.length - 1]!.update_id + 1;
     }
 
-    const lastMessageAt = orderedUpdates.some(hasMessagePayload) ? new Date(now).toISOString() : options.lastMessageAt;
-    const nextPollAt = now + computePolicyPollIntervalMs(options.isMain, options.totalBots, lastMessageAt, now);
+    const receivedMessage = orderedUpdates.some(hasMessagePayload);
+    const lastMessageAt = receivedMessage ? new Date(now).toISOString() : options.state?.lastMessageAt;
+    const nextPollAt = now + computePolicyPollIntervalMs(options.totalBots, receivedMessage ? 1 : options.botRank, {
+      ...options.state,
+      botId,
+      consecutiveFailures: options.state?.consecutiveFailures ?? runtime.consecutiveFailures,
+      lastMessageAt,
+    }, {
+      tieredPollingMinBots: config.telegramTieredPollingMinBots,
+      activePollIntervalMs: config.telegramActivePollIntervalMs,
+      runningPollIntervalMs: config.telegramRunningPollIntervalMs,
+      secondaryPollIntervalMs: config.telegramSecondaryPollIntervalMs,
+      tertiaryPollIntervalMs: config.telegramTertiaryPollIntervalMs,
+    });
     await botPollingState.recordPoll(botId, {
       username: pollingBot.botInfo.username,
       lastPollAt: new Date(now).toISOString(),
@@ -340,23 +348,6 @@ async function pollTelegramBot(
       nextPollAt: new Date(now + delayMs).toISOString(),
     });
   }
-}
-
-function computePolicyPollIntervalMs(isMain: boolean, totalBots: number, lastMessageAt: string | undefined, now: number): number {
-  if (isMain || totalBots < config.telegramTieredPollingMinBots) {
-    return config.telegramActivePollIntervalMs;
-  }
-  const lastMessageTime = lastMessageAt ? Date.parse(lastMessageAt) : undefined;
-  const idleMs = lastMessageTime && Number.isFinite(lastMessageTime)
-    ? now - lastMessageTime
-    : Number.POSITIVE_INFINITY;
-  if (idleMs <= config.telegramActiveIdleMs) {
-    return config.telegramActivePollIntervalMs;
-  }
-  if (idleMs <= config.telegramColdIdleMs) {
-    return config.telegramIdlePollIntervalMs;
-  }
-  return config.telegramColdPollIntervalMs;
 }
 
 function hasMessagePayload(update: TelegramUpdate): boolean {
