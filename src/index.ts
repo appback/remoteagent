@@ -220,29 +220,37 @@ async function startManualPollingScheduler(bots: Bot[]): Promise<never> {
     let activePolls = [...runtimeStates.values()].filter((state) => state.inFlight).length;
     const pollingStates = await botPollingState.list();
     const rankByBotId = computeRecentMessageRanks(botIds, pollingStates);
-    for (const bot of pollingBots) {
+    const dueBots = pollingBots
+      .map((bot) => {
+        const botId = String(bot.botInfo.id);
+        const runtime = runtimeStates.get(botId);
+        const state = pollingStates[botId];
+        const nextPollAt = state?.nextPollAt ? Date.parse(state.nextPollAt) : 0;
+        return {
+          bot,
+          botId,
+          runtime,
+          state,
+          rank: rankByBotId.get(botId) ?? pollingBots.length,
+          nextPollAt: Number.isFinite(nextPollAt) ? nextPollAt : 0,
+        };
+      })
+      .filter((entry) => entry.runtime && !entry.runtime.inFlight && entry.nextPollAt <= now)
+      .sort((left, right) => left.nextPollAt - right.nextPollAt || left.rank - right.rank);
+
+    for (const entry of dueBots) {
       if (activePolls >= config.telegramPollingMaxConcurrency) {
         break;
       }
-      const botId = String(bot.botInfo.id);
-      const runtime = runtimeStates.get(botId);
-      if (!runtime || runtime.inFlight) {
-        continue;
-      }
-      const state = await botPollingState.get(botId, bot.botInfo.username);
-      const nextPollAt = state.nextPollAt ? Date.parse(state.nextPollAt) : 0;
-      if (Number.isFinite(nextPollAt) && nextPollAt > now) {
-        continue;
-      }
 
-      runtime.inFlight = true;
+      entry.runtime!.inFlight = true;
       activePolls += 1;
-      void pollTelegramBot(bot, runtime, {
+      void pollTelegramBot(entry.bot, entry.runtime!, {
         totalBots: pollingBots.length,
-        botRank: rankByBotId.get(botId) ?? pollingBots.length,
-        state,
+        botRank: entry.rank,
+        state: entry.state,
       }).finally(() => {
-        runtime.inFlight = false;
+        entry.runtime!.inFlight = false;
       });
     }
     await sleep(config.telegramSchedulerTickMs);

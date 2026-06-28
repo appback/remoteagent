@@ -15,10 +15,7 @@ export function computeRecentMessageRanks(
   const ranked = botIds
     .map((botId) => ({
       botId,
-      timestamp: parseStateTime(states[botId]?.lastMessageAt)
-        ?? parseStateTime(states[botId]?.lastUpdateAt)
-        ?? parseStateTime(states[botId]?.lastPollAt)
-        ?? 0,
+      timestamp: parseStateTime(states[botId]?.lastMessageAt) ?? 0,
     }))
     .sort((left, right) => right.timestamp - left.timestamp);
   return new Map(ranked.map((entry, index) => [entry.botId, index + 1]));
