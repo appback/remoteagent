@@ -1322,10 +1322,14 @@ async function runWithPendingAnimation(
         const rendered = formatProviderTelegramChunks(progressChunks, parseMode);
         const extra = rendered.parseMode ? { parse_mode: rendered.parseMode } : undefined;
         for (const chunk of rendered.chunks) {
-          await sendTelegramMessage(botToken, chatId, chunk, extra);
+          await sendTelegramMessage(botToken, chatId, chunk, extra).catch((error) => {
+            console.warn(`[telegram-progress-delivery] chat=${chatId} dropped progress message: ${formatTelegramDeliveryError(error)}`);
+          });
         }
         if (normalized.documents.length > 0) {
-          await sendTelegramDocuments(botToken, chatId, normalized.documents);
+          await sendTelegramDocuments(botToken, chatId, normalized.documents).catch((error) => {
+            console.warn(`[telegram-progress-delivery] chat=${chatId} dropped progress document(s): ${formatTelegramDeliveryError(error)}`);
+          });
         }
       },
     };
@@ -2729,22 +2733,36 @@ async function sendTelegramMessage(
 ): Promise<TelegramMessageResult> {
   const startedAt = Date.now();
   try {
-    try {
-      return await callTelegramApi<TelegramMessageResult>(botToken, "sendMessage", {
-        chat_id: String(chatId),
-        text,
-        parse_mode: extra?.parse_mode,
-      });
-    } catch (error) {
-      if (!extra?.parse_mode || !isTelegramEntityParseError(error)) {
-        throw error;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        try {
+          return await callTelegramApi<TelegramMessageResult>(botToken, "sendMessage", {
+            chat_id: String(chatId),
+            text,
+            parse_mode: extra?.parse_mode,
+          });
+        } catch (error) {
+          if (!extra?.parse_mode || !isTelegramEntityParseError(error)) {
+            throw error;
+          }
+          console.warn(`[telegram-sendMessage-fallback] chat=${chatId} parseMode=${extra.parse_mode}: ${formatTelegramDeliveryError(error)}`);
+          return await callTelegramApi<TelegramMessageResult>(botToken, "sendMessage", {
+            chat_id: String(chatId),
+            text: stripTelegramHtml(text),
+          });
+        }
+      } catch (error) {
+        lastError = error;
+        if (attempt >= 3 || !isRetryableTelegramDeliveryError(error)) {
+          throw error;
+        }
+        const delayMs = attempt * 1500;
+        console.warn(`[telegram-sendMessage-retry] chat=${chatId} attempt=${attempt}/3 delayMs=${delayMs}: ${formatTelegramDeliveryError(error)}`);
+        await sleep(delayMs);
       }
-      console.warn(`[telegram-sendMessage-fallback] chat=${chatId} parseMode=${extra.parse_mode}: ${error instanceof Error ? error.message : String(error)}`);
-      return await callTelegramApi<TelegramMessageResult>(botToken, "sendMessage", {
-        chat_id: String(chatId),
-        text: stripTelegramHtml(text),
-      });
     }
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
   } finally {
     const elapsedMs = Date.now() - startedAt;
     if (elapsedMs >= 3000) {
@@ -2797,7 +2815,15 @@ async function callTelegramApi<T>(
     }
   }
 
-  const { stdout, stderr } = await execFileAsync("curl", args);
+  let stdout: string;
+  let stderr: string | undefined;
+  try {
+    const result = await execFileAsync("curl", args);
+    stdout = result.stdout;
+    stderr = result.stderr;
+  } catch (error) {
+    throw new TelegramApiError(method, summarizeCurlTelegramError(error, method));
+  }
   if (stderr?.trim()) {
     console.error(`curl stderr for ${method}: ${stderr.trim()}`);
   }
@@ -2818,6 +2844,29 @@ class TelegramApiError extends Error {
     super(description);
     this.name = "TelegramApiError";
   }
+}
+
+function summarizeCurlTelegramError(error: unknown, method: string): string {
+  if (!(error instanceof Error)) {
+    return `Telegram API ${method} failed: ${String(error)}`;
+  }
+  const stderr = typeof error === "object" && error !== null && "stderr" in error
+    ? String((error as { stderr?: unknown }).stderr ?? "").trim()
+    : "";
+  const code = typeof error === "object" && error !== null && "code" in error
+    ? String((error as { code?: unknown }).code ?? "")
+    : "";
+  const message = stderr || error.message;
+  return [`Telegram API ${method} curl failed`, code ? `code=${code}` : undefined, message].filter(Boolean).join(": ");
+}
+
+function formatTelegramDeliveryError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isRetryableTelegramDeliveryError(error: unknown): boolean {
+  const message = formatTelegramDeliveryError(error);
+  return /timed out|timeout|Bad Gateway|502|503|504|ECONNRESET|connection reset|EAI_AGAIN|ENOTFOUND/i.test(message);
 }
 
 function isTelegramForbiddenError(error: unknown): boolean {
