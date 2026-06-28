@@ -28,7 +28,7 @@ A release is only considered complete when all of the following are done in orde
 4. Run `npm run build`
 5. Commit the completed work
 6. Push `main` to `origin/main`
-7. Publish `appback-remoteagent@<version>` to npm
+7. Publish `appback-remoteagent@<version>` to npm from server 30's npm credentials
 8. Install that exact npm version on server 30 and server 26
 9. Restart `remoteagent.service` on each target if runtime code changed
 10. Verify the relevant runtime path, logs, or Telegram behavior on each target
@@ -64,18 +64,65 @@ git status
 git add -A
 git commit -m "Release 0.12.3"
 git push origin main
-npm publish
+npm pack
 ```
 
-Typical target deployment sequence for server 30 and server 26:
+## npm publish procedure
+
+Use this package-specific path for `appback-remoteagent`.
+
+Do not publish this package from machine 21 with the `21token`. That token is scoped for `@appbackhub` packages and cannot publish the unscoped `appback-remoteagent` package. It can authenticate but `npm publish` fails with:
+
+```text
+403 Forbidden - You may not perform that action with these credentials.
+```
+
+The successful publish path is:
 
 ```bash
-VERSION=0.13.0
+VERSION=0.14.0
+npm pack
+scp appback-remoteagent-$VERSION.tgz au2223@192.168.0.30:/tmp/appback-remoteagent-$VERSION.tgz
+ssh au2223@192.168.0.30 "bash -lc 'npm publish /tmp/appback-remoteagent-$VERSION.tgz'"
+npm view appback-remoteagent version
+ssh au2223@192.168.0.30 'bash -lc "npm view appback-remoteagent version"'
+rm -f appback-remoteagent-$VERSION.tgz
+ssh au2223@192.168.0.30 "rm -f /tmp/appback-remoteagent-$VERSION.tgz"
+```
+
+If registry caching briefly returns the previous version after publish, wait a few seconds and rerun `npm view appback-remoteagent version` before installing to servers.
+
+## Target deployment sequence
+
+Server 30 uses a systemd service:
+
+```bash
+VERSION=0.14.0
+ssh au2223@192.168.0.30 "VERSION=$VERSION bash -s" <<'REMOTE'
+set -euo pipefail
+sudo -n env "PATH=$PATH" npm install -g appback-remoteagent@$VERSION
+/home/au2223/.nvm/versions/node/v22.22.0/bin/remoteagent-install
+sudo -n systemctl restart remoteagent
+systemctl is-active remoteagent
+journalctl -u remoteagent --since '2 minutes ago' --no-pager
+REMOTE
+```
+
+Server 26 currently uses user-level start/stop scripts, not a systemd `remoteagent.service`:
+
+```bash
+VERSION=0.14.0
+ssh ospadmin@192.168.0.26 "VERSION=$VERSION bash -s" <<'REMOTE'
+set -euo pipefail
 npm install -g appback-remoteagent@$VERSION
 remoteagent-install
-sudo systemctl restart remoteagent
-systemctl is-active remoteagent
-journalctl -u remoteagent --since "2 minutes ago" --no-pager
+~/.remoteagent/stop-remoteagent.sh || true
+sleep 2
+~/.remoteagent/start-remoteagent.sh
+sleep 3
+pgrep -af "appback-remoteagent/dist/index.js"
+tail -80 ~/.remoteagent/logs/agent.log
+REMOTE
 ```
 
 ## Other Runtime Follow-up
