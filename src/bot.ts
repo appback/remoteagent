@@ -98,6 +98,7 @@ const RECOGNIZED_COMMANDS = new Set([
 ]);
 const TELEGRAM_STALE_UPDATE_GRACE_SECONDS = 10;
 const TELEGRAM_PROCESS_STARTED_AT_SECONDS = Math.floor(Date.now() / 1000);
+const activeWorkLoopKeys = new Set<string>();
 
 const REPORT_CONTINUE_PROMPT = [
   "Continue the same task now.",
@@ -1380,6 +1381,17 @@ async function routeTelegramWorkLoop(
 ): Promise<string[]> {
   const currentSession = await bridge.status(botId, chatId);
   const sessionId = currentSession?.session.sessionId;
+  const activeKey = workLoopKey(botId, chatId, sessionId);
+  if (activeWorkLoopKeys.has(activeKey)) {
+    const message = [
+      `Session ${currentSession?.session.publicId ?? sessionId ?? `${botId}:${chatId}`} is already running.`,
+      "Send /stop to interrupt the active work, then send the instruction again.",
+    ].join("\n");
+    await bridge.logSystem(botId, chatId, `Rejected overlapping Telegram work loop for ${activeKey}.`);
+    return [message];
+  }
+
+  activeWorkLoopKeys.add(activeKey);
   if (currentSession) {
     await memoryService.recordInstruction(currentSession.session, message);
   }
@@ -1587,6 +1599,7 @@ async function routeTelegramWorkLoop(
     }
     }
   } finally {
+    activeWorkLoopKeys.delete(activeKey);
     if (currentSession) {
       if (providerCompleted) {
         await botManagement.markProviderCompleted(botId, sessionId);
@@ -1595,6 +1608,10 @@ async function routeTelegramWorkLoop(
       }
     }
   }
+}
+
+function workLoopKey(botId: string, chatId: string, sessionId?: string): string {
+  return sessionId ? `session:${sessionId}` : `chat:${botId}:${chatId}`;
 }
 
 type PendingAnimationHelpers = {
