@@ -161,6 +161,7 @@ export const config = {
   telegramRunningPollIntervalMs: readTimeout("TELEGRAM_RUNNING_POLL_INTERVAL_MS", 60_000),
   telegramSecondaryPollIntervalMs: readTimeout("TELEGRAM_SECONDARY_POLL_INTERVAL_MS", 60_000),
   telegramTertiaryPollIntervalMs: readTimeout("TELEGRAM_TERTIARY_POLL_INTERVAL_MS", 180_000),
+  telegramRecoveryCheckIntervalMs: readTimeout("TELEGRAM_RECOVERY_CHECK_INTERVAL_MS", 60_000),
   telegramOwnerId: readOptional("TELEGRAM_OWNER_ID"),
   telegramMessageBatchMs: readNonNegativeTimeout("TELEGRAM_MESSAGE_BATCH_MS", 1500),
   telegramTypingIntervalMs: readTimeout("TELEGRAM_TYPING_INTERVAL_MS", 10_000),

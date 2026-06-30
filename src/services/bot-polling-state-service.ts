@@ -15,6 +15,8 @@ export type BotPollingState = {
   lastPollAt?: string;
   nextPollAt?: string;
   consecutiveFailures: number;
+  lastRecoveryAt?: string;
+  lastRecoveryReason?: string;
 };
 
 type BotPollingStateFile = {
@@ -127,6 +129,32 @@ export class BotPollingStateService {
       botId,
     };
     this.scheduleWrite();
+  }
+
+  async clearRunningSessions(
+    botId: string,
+    sessionIds: string[],
+    patch: Partial<Omit<BotPollingState, "botId" | "runningSessionIds">> = {},
+  ): Promise<BotPollingState | undefined> {
+    const remove = new Set(sessionIds);
+    if (remove.size === 0) {
+      return undefined;
+    }
+
+    const state = await this.read();
+    const current = state.bots[botId];
+    if (!current?.runningSessionIds?.length) {
+      return current;
+    }
+
+    current.runningSessionIds = current.runningSessionIds.filter((value) => !remove.has(value));
+    if (current.runningSessionIds.length === 0) {
+      delete current.runningSessionIds;
+    }
+    Object.assign(current, patch);
+    state.bots[botId] = current;
+    await this.writeNow();
+    return current;
   }
 
   async prune(validBotIds: string[]): Promise<void> {

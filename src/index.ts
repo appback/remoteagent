@@ -16,6 +16,7 @@ import { LocalUiService } from "./services/local-ui-service.js";
 import { AgentMemoryService } from "./services/agent-memory-service.js";
 import { BotPollingStateService } from "./services/bot-polling-state-service.js";
 import type { BotPollingState } from "./services/bot-polling-state-service.js";
+import { ProviderRecoveryService } from "./services/provider-recovery-service.js";
 import { computePolicyPollIntervalMs, computeRecentMessageRanks } from "./services/polling-policy.js";
 import { terminateAllSpawnedExecutions } from "./adapters/windows-shell.js";
 import { setTelegramCommandMenu } from "./telegram-command-menu.js";
@@ -196,6 +197,9 @@ type PollingRuntimeState = {
 async function startManualPollingScheduler(bots: Bot[]): Promise<never> {
   const pollingBots = bots as unknown as PollingBot[];
   const runtimeStates = new Map<string, PollingRuntimeState>();
+  const providerRecovery = new ProviderRecoveryService(config.dataDir, botPollingState);
+  let nextRecoveryCheckAt = 0;
+  let recoveryCheckInFlight = false;
   const botIds = pollingBots.map((bot) => String(bot.botInfo.id));
   await botPollingState.prune(botIds);
 
@@ -217,6 +221,24 @@ async function startManualPollingScheduler(bots: Bot[]): Promise<never> {
 
   while (true) {
     const now = Date.now();
+    if (!recoveryCheckInFlight && now >= nextRecoveryCheckAt) {
+      recoveryCheckInFlight = true;
+      nextRecoveryCheckAt = now + config.telegramRecoveryCheckIntervalMs;
+      void providerRecovery.reconcileStaleRunningStates(pollingBots.map((bot) => ({
+        botId: String(bot.botInfo.id),
+        username: bot.botInfo.username,
+        token: bot.token,
+      }))).then((result) => {
+        if (result.recovered > 0) {
+          console.warn(`[provider-recovery] cleared ${result.recovered} stale running session(s) after checking ${result.checked}.`);
+        }
+      }).catch((error) => {
+        console.error("[provider-recovery] reconciliation failed:", error);
+      }).finally(() => {
+        recoveryCheckInFlight = false;
+      });
+    }
+
     let activePolls = [...runtimeStates.values()].filter((state) => state.inFlight).length;
     const pollingStates = await botPollingState.list();
     const rankByBotId = computeRecentMessageRanks(botIds, pollingStates);
