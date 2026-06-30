@@ -100,13 +100,19 @@ Server 30 uses a systemd service:
 VERSION=0.14.0
 ssh au2223@192.168.0.30 "VERSION=$VERSION bash -s" <<'REMOTE'
 set -euo pipefail
-sudo -n env "PATH=$PATH" npm install -g appback-remoteagent@$VERSION
+export PATH="/home/au2223/.local/bin:/home/au2223/.nvm/versions/node/v22.22.0/bin:$PATH"
+npm install -g appback-remoteagent@$VERSION
 /home/au2223/.nvm/versions/node/v22.22.0/bin/remoteagent-install
 sudo -n systemctl restart remoteagent
 systemctl is-active remoteagent
+node -p 'require("/home/au2223/.nvm/versions/node/v22.22.0/lib/node_modules/appback-remoteagent/package.json").version'
 journalctl -u remoteagent --since '2 minutes ago' --no-pager
 REMOTE
 ```
+
+Do not run `sudo npm install -g` on server 30. The global RemoteAgent package is installed under
+`/home/au2223/.nvm/versions/node/v22.22.0`; only the `systemctl restart remoteagent` step needs sudo.
+Runtime state remains in `/home/au2223/.remoteagent` and must not be deleted during npm upgrades.
 
 Server 26 currently uses user-level start/stop scripts, not a systemd `remoteagent.service`:
 

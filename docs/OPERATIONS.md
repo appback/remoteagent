@@ -100,8 +100,11 @@ journalctl -u remoteagent -f
 Restart after build:
 
 ```bash
-sudo npm install -g appback-remoteagent@<version>
+export PATH="/home/au2223/.local/bin:/home/au2223/.nvm/versions/node/v22.22.0/bin:$PATH"
+npm install -g appback-remoteagent@<version>
+remoteagent-install
 sudo systemctl restart remoteagent
+node -p 'require("/home/au2223/.nvm/versions/node/v22.22.0/lib/node_modules/appback-remoteagent/package.json").version'
 ```
 
 Check the lock owner:
