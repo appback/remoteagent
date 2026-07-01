@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import { exec as execCallback } from "node:child_process";
 import type { Provider, ProviderRequest, ProviderResponse } from "../types.js";
 import type { ProviderAdapter } from "./provider-adapter.js";
+import { buildProviderEnv } from "./runtime-env.js";
 
 const exec = promisify(execCallback);
 
@@ -14,8 +15,7 @@ export class ShellAdapter implements ProviderAdapter {
   ) {}
 
   async send(request: ProviderRequest): Promise<ProviderResponse> {
-    const env = {
-      ...process.env,
+    const env = buildProviderEnv({
       BRIDGE_PROVIDER: this.provider,
       BRIDGE_BOT_ID: request.botId ?? "",
       BRIDGE_CHAT_ID: request.chatId,
@@ -23,7 +23,7 @@ export class ShellAdapter implements ProviderAdapter {
       BRIDGE_PUBLIC_SESSION_ID: request.publicSessionId ?? "",
       BRIDGE_CWD: request.cwd,
       BRIDGE_MESSAGE: request.message,
-    };
+    });
 
     const { stdout, stderr } = await exec(this.command, {
       env,

@@ -1,27 +1,9 @@
 import process from "node:process";
-import path from "node:path";
-import os from "node:os";
 import { execFile, spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
+import { buildProviderEnv } from "./runtime-env.js";
 
 const activeCommands = new Map<string, ChildProcess>();
-const CHILD_ENV_BLOCKED_PREFIXES = ["TELEGRAM_"];
-
-function buildChildEnv(extraEnv?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  for (const key of Object.keys(env)) {
-    if (CHILD_ENV_BLOCKED_PREFIXES.some((prefix) => key.startsWith(prefix))) {
-      delete env[key];
-    }
-  }
-  const dataDir = process.env.DATA_DIR?.trim() || path.join(os.homedir(), ".remoteagent");
-  env.REMOTEAGENT_DATA_DIR = dataDir;
-  env.REMOTEAGENT_SECRET_BIN = path.resolve(process.cwd(), "dist", "secret-helper.js");
-  if (extraEnv) {
-    Object.assign(env, extraEnv);
-  }
-  return env;
-}
 
 export function spawnWithPlatformShell(
   bin: string,
@@ -36,11 +18,11 @@ export function spawnWithPlatformShell(
     const command = process.platform === "win32"
       ? spawn("cmd.exe", ["/d", "/c", "call", bin, ...args], {
           cwd,
-          env: buildChildEnv(extraEnv),
+          env: buildProviderEnv(extraEnv),
         })
       : spawn(bin, args, {
           cwd,
-          env: buildChildEnv(extraEnv),
+          env: buildProviderEnv(extraEnv),
           detached: true,
         });
 
