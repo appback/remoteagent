@@ -309,22 +309,58 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
     }
     const botId = getBotId();
     const chatId = String(ctx.chat.id);
-    await bridge.logSystem(botId, chatId, `Plan document reinforcement requested (${count} turns max).`);
+    await bridge.logSystem(botId, chatId, `Plan document reinforcement requested (${count} check/apply cycle max).`);
     await runWithPendingAnimation(token, ctx.chat.id, async (helpers) => {
-      return {
-        chunks: await routeTelegramWorkLoop(
+      for (let cycle = 1; cycle <= count; cycle += 1) {
+        const checkChunks = await routeTelegramWorkLoop(
           bridge,
           botId,
           chatId,
-          formatPlanDocumentReinforcementPrompt(count),
-          "Plan document reinforcement",
+          formatPlanDocumentCheckPrompt(cycle, count),
+          `Plan document check ${cycle}`,
           botManagement,
           helpers,
           autoContinue,
           memoryService,
           (blocks) => blocks,
-          { maxTurns: count },
-        ),
+          { maxTurns: 1 },
+        );
+        const decision = classifyPlanReinforcementDecision(checkChunks.join("\n"));
+        await helpers.reportProgress(formatPlanCycleProgress("확인 결과", cycle, count, stripPlanReinforcementMarkers(checkChunks)));
+
+        if (decision === "none") {
+          return {
+            chunks: [`보강할 내용이 없다고 판단되어 ${cycle}/${count}회차에서 종료했습니다.`],
+          };
+        }
+
+        if (decision === "unknown") {
+          return {
+            chunks: [
+              "보강 필요 여부를 명확히 판정할 수 없어 중단했습니다.",
+              "계획문서 확인 응답에는 `PLAN_REINFORCE: needed` 또는 `PLAN_REINFORCE: none`이 포함되어야 합니다.",
+            ],
+          };
+        }
+
+        const applyChunks = await routeTelegramWorkLoop(
+          bridge,
+          botId,
+          chatId,
+          formatPlanDocumentApplyPrompt(cycle, count),
+          `Plan document apply ${cycle}`,
+          botManagement,
+          helpers,
+          autoContinue,
+          memoryService,
+          stripPlanReinforcementMarkers,
+          { maxTurns: 1 },
+        );
+        await helpers.reportProgress(formatPlanCycleProgress("보강 결과", cycle, count, applyChunks));
+      }
+
+      return {
+        chunks: [`최대 ${count}회 확인/보강 반복을 완료했습니다.`],
       };
     });
   };
@@ -2148,23 +2184,63 @@ function parseKoreanPlanReinforcementCommand(
   return parsed.kind === "valid" ? { kind: "matched", count: parsed.count } : { kind: "invalid" };
 }
 
-function formatPlanDocumentReinforcementPrompt(count: number): string {
+type PlanReinforcementDecision = "needed" | "none" | "unknown";
+
+function formatPlanDocumentCheckPrompt(cycle: number, count: number): string {
   return [
-    `계획문서를 처음부터 끝까지 확인하고, 최대 ${count}회까지만 보강 루프를 수행하세요.`,
+    "계획문서 처음부터 확인해서 보강해야할 내용 확인해",
     "",
-    "반복 절차:",
-    "1. 계획문서와 관련 문서를 실제로 읽고 보강할 내용이 있는지 판단하세요.",
-    "2. 보강할 내용이 있으면 직접 문서를 수정하세요.",
-    "3. 수정 후 같은 기준으로 다시 점검하세요.",
-    `4. 더 이상 보강할 내용이 없거나 ${count}회에 도달하면 종료하세요.`,
+    `현재 반복: ${cycle}/${count}`,
     "",
-    "중요 규칙:",
-    "- 추정하지 말고 실제 파일 경로와 확인 근거를 남기세요.",
-    "- 같은 보강을 반복하지 마세요.",
-    "- 보강할 내용이 없으면 없다고 보고하고 종료하세요.",
+    "응답 규칙:",
+    "- 첫 줄은 REPORT:result 또는 REPORT:blocked.",
+    "- REPORT:result 본문 첫 줄은 반드시 `PLAN_REINFORCE: needed` 또는 `PLAN_REINFORCE: none`.",
+    "- 보강할 내용이 있으면 `PLAN_REINFORCE: needed` 후 항목과 근거 파일을 답하세요.",
+    "- 보강할 내용이 없으면 `PLAN_REINFORCE: none` 후 확인 근거 파일을 답하세요.",
+    "- 이 단계에서는 문서를 수정하지 마세요. 확인과 답변만 하세요.",
     "- 권한, 정보, 파일 위치가 부족하면 REPORT:blocked로 정확한 blocker를 말하세요.",
-    "- 완료 시 확인한 문서, 변경한 문서, 남은 위험, 검증 결과를 짧게 보고하세요.",
   ].join("\n");
+}
+
+function formatPlanDocumentApplyPrompt(cycle: number, count: number): string {
+  return [
+    "보강해",
+    "",
+    `현재 반복: ${cycle}/${count}`,
+    "",
+    "방금 확인 응답에서 보강 필요하다고 답한 항목만 실제 문서에 반영하세요.",
+    "",
+    "응답 규칙:",
+    "- 첫 줄은 REPORT:result 또는 REPORT:blocked.",
+    "- REPORT:result 본문에는 변경한 파일 경로와 검증/확인 근거를 포함하세요.",
+    "- 새 범위를 만들지 말고 방금 확인한 보강 항목만 처리하세요.",
+    "- 권한, 정보, 파일 위치가 부족하면 REPORT:blocked로 정확한 blocker를 말하세요.",
+  ].join("\n");
+}
+
+function classifyPlanReinforcementDecision(text: string): PlanReinforcementDecision {
+  if (/PLAN_REINFORCE:\s*none/i.test(text)) {
+    return "none";
+  }
+  if (/PLAN_REINFORCE:\s*needed/i.test(text)) {
+    return "needed";
+  }
+  return "unknown";
+}
+
+function stripPlanReinforcementMarkers(blocks: string[]): string[] {
+  return blocks.map((block) =>
+    block
+      .replace(/^PLAN_REINFORCE:\s*(needed|none)\s*\r?\n?/gim, "")
+      .trim(),
+  );
+}
+
+function formatPlanCycleProgress(label: string, cycle: number, count: number, chunks: string[]): string[] {
+  const prefix = `[보강 ${cycle}/${count}] ${label}`;
+  return chunks.length > 0
+    ? chunks.map((chunk, index) => index === 0 ? `${prefix}\n${chunk}` : chunk)
+    : [prefix];
 }
 
 function commandTarget(args: string[], rest: string | undefined): string {
