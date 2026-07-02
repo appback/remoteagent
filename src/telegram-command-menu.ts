@@ -8,6 +8,7 @@ export const TELEGRAM_COMMAND_MENU = [
   { command: "list", description: "List sessions" },
   { command: "new", description: "Start a fresh session" },
   { command: "switch", description: "Switch to a session" },
+  { command: "plan", description: "Reinforce planning documents" },
   { command: "status", description: "Show current session status" },
   { command: "attach", description: "Attach an existing provider session" },
   { command: "state", description: "Show or edit session state notes" },

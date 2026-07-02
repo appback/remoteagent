@@ -26,6 +26,7 @@ const HELP_TEXT = [
   "/list [-a]",
   "/new",
   "/switch <session>",
+  "/plan <count>",
   "/batch start|send|cancel|status",
   "/attach codex <thread_id>",
   "/attach claude <session_id>",
@@ -37,7 +38,8 @@ const HELP_TEXT = [
   "/state [clear|note <text>]",
   "/artifacts list|cleanup <days>",
   "/secret set|list|remove",
-  "/docs pin|find|list|remove",
+  "/docs pin|find|list|remove|reinforce",
+  "/보강 <count>",
   "/bots",
   "/bot add <token>",
   "/bot doctor",
@@ -79,6 +81,7 @@ const RECOGNIZED_COMMANDS = new Set([
   "list",
   "new",
   "switch",
+  "plan",
   "batch",
   "attach",
   "model",
@@ -300,6 +303,31 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
       throw error;
     }
   };
+  const runPlanDocumentReinforcement = async (ctx: Context, count: number): Promise<void> => {
+    if (!ctx.chat) {
+      throw new Error("Telegram chat context is missing.");
+    }
+    const botId = getBotId();
+    const chatId = String(ctx.chat.id);
+    await bridge.logSystem(botId, chatId, `Plan document reinforcement requested (${count} turns max).`);
+    await runWithPendingAnimation(token, ctx.chat.id, async (helpers) => {
+      return {
+        chunks: await routeTelegramWorkLoop(
+          bridge,
+          botId,
+          chatId,
+          formatPlanDocumentReinforcementPrompt(count),
+          "Plan document reinforcement",
+          botManagement,
+          helpers,
+          autoContinue,
+          memoryService,
+          (blocks) => blocks,
+          { maxTurns: count },
+        ),
+      };
+    });
+  };
 
   bot.use(async (ctx, next) => {
     const updateKind = Object.keys(ctx.update).join(",");
@@ -428,6 +456,21 @@ ${bridge.formatStatus(mapping)}`);
       await bridge.stopSessionRun(previous.session.sessionId, botId, chatId, "Chat switched to another session; previous session execution was stopped.");
     }
     await reply(ctx, `Switched this chat to session ${sessionId}.\n\n${bridge.formatCurrentSession(mapping)}`);
+  });
+
+  bot.command("plan", async (ctx) => {
+    const { args, rest } = parseCommand(ctx.message?.text, 1);
+    if (rest?.trim()) {
+      await reply(ctx, "Usage: `/plan <1-10>`", { parse_mode: "Markdown" });
+      return;
+    }
+
+    const parsed = parsePlanReinforcementCount(args[0]?.trim());
+    if (parsed.kind === "invalid") {
+      await reply(ctx, "Usage: `/plan <1-10>`", { parse_mode: "Markdown" });
+      return;
+    }
+    await runPlanDocumentReinforcement(ctx, parsed.count);
   });
 
   bot.command("batch", async (ctx) => {
@@ -753,6 +796,19 @@ ${bridge.formatStatus(mapping)}`);
     const action = args[0]?.toLowerCase() || "list";
     const keyword = args[1]?.trim();
 
+    if (action === "reinforce") {
+      if (rest?.trim()) {
+        await reply(ctx, "Usage: `/docs reinforce <1-10>`", { parse_mode: "Markdown" });
+        return;
+      }
+      const parsed = parsePlanReinforcementCount(keyword);
+      if (parsed.kind === "invalid") {
+        await reply(ctx, "Usage: `/docs reinforce <1-10>`", { parse_mode: "Markdown" });
+        return;
+      }
+      await runPlanDocumentReinforcement(ctx, parsed.count);
+      return;
+    }
     if (action === "list") {
       await reply(ctx, await memoryService.listDocuments());
       return;
@@ -785,7 +841,7 @@ ${bridge.formatStatus(mapping)}`);
       await reply(ctx, removed ? `Removed docs keyword ${keyword}.` : `Docs keyword was not found: ${keyword}`);
       return;
     }
-    await reply(ctx, "Usage: `/docs list`, `/docs find <keyword>`, `/docs pin <keyword> <path>`, or `/docs remove <keyword>`", { parse_mode: "Markdown" });
+    await reply(ctx, "Usage: `/docs list`, `/docs find <keyword>`, `/docs pin <keyword> <path>`, `/docs remove <keyword>`, or `/docs reinforce <1-10>`", { parse_mode: "Markdown" });
   });
 
   bot.command("bots", async (ctx) => {
@@ -925,6 +981,16 @@ ${bridge.formatStatus(mapping)}`);
     const voice = ctx.message.voice;
     const audio = ctx.message.audio;
     const text = ctx.message.text?.trim();
+
+    const planReinforcement = parseKoreanPlanReinforcementCommand(text, botId);
+    if (planReinforcement.kind === "matched") {
+      await runPlanDocumentReinforcement(ctx, planReinforcement.count);
+      return;
+    }
+    if (planReinforcement.kind === "invalid") {
+      await reply(ctx, "Usage: `/보강 <1-10>`", { parse_mode: "Markdown" });
+      return;
+    }
 
     if (text && isRecognizedSlashCommand(text, botId)) {
       return;
@@ -1378,6 +1444,7 @@ async function routeTelegramWorkLoop(
   autoContinue: AutoContinueController,
   memoryService: AgentMemoryService,
   transform: (blocks: string[]) => string[] = (blocks) => blocks,
+  options: { maxTurns?: number } = {},
 ): Promise<string[]> {
   const currentSession = await bridge.status(botId, chatId);
   const sessionId = currentSession?.session.sessionId;
@@ -1400,7 +1467,7 @@ async function routeTelegramWorkLoop(
     : "";
   autoContinue.clear(botId, chatId, sessionId);
   let prompt = appendManagedContext(appendReportProtocol(message), managedContext);
-  const maxTurns = config.telegramAutoProgressMaxTurns;
+  const maxTurns = options.maxTurns ?? config.telegramAutoProgressMaxTurns;
   const emptyResponseRetries = config.telegramEmptyResponseRetries;
   const retryableErrorRetries = config.telegramRetryableErrorRetries;
   const retryableErrorDelayMs = config.telegramRetryableErrorDelayMs;
@@ -2031,6 +2098,65 @@ function parseCommand(text: string | undefined, headCount: number): { args: stri
     args,
     rest: remaining || undefined,
   };
+}
+
+function parsePlanReinforcementCount(raw: string | undefined): { kind: "valid"; count: number } | { kind: "invalid" } {
+  const value = raw?.trim();
+  if (!value) {
+    return { kind: "valid", count: 5 };
+  }
+  if (!/^\d+$/.test(value)) {
+    return { kind: "invalid" };
+  }
+  const count = Number(value);
+  if (!Number.isInteger(count) || count < 1 || count > 10) {
+    return { kind: "invalid" };
+  }
+  return { kind: "valid", count };
+}
+
+function parseKoreanPlanReinforcementCommand(
+  text: string | undefined,
+  botId: string,
+): { kind: "matched"; count: number } | { kind: "invalid" } | { kind: "none" } {
+  const trimmed = text?.trim();
+  if (!trimmed?.startsWith("/")) {
+    return { kind: "none" };
+  }
+
+  const [commandToken, maybeCount, ...extra] = trimmed.slice(1).split(/\s+/);
+  const [name, mention] = commandToken.split("@", 2);
+  if (name !== "보강") {
+    return { kind: "none" };
+  }
+  if (mention && mention.toLowerCase() !== botId.toLowerCase()) {
+    return { kind: "none" };
+  }
+  if (extra.length > 0) {
+    return { kind: "invalid" };
+  }
+
+  const parsed = parsePlanReinforcementCount(maybeCount);
+  return parsed.kind === "valid" ? { kind: "matched", count: parsed.count } : { kind: "invalid" };
+}
+
+function formatPlanDocumentReinforcementPrompt(count: number): string {
+  return [
+    `계획문서를 처음부터 끝까지 확인하고, 최대 ${count}회까지만 보강 루프를 수행하세요.`,
+    "",
+    "반복 절차:",
+    "1. 계획문서와 관련 문서를 실제로 읽고 보강할 내용이 있는지 판단하세요.",
+    "2. 보강할 내용이 있으면 직접 문서를 수정하세요.",
+    "3. 수정 후 같은 기준으로 다시 점검하세요.",
+    `4. 더 이상 보강할 내용이 없거나 ${count}회에 도달하면 종료하세요.`,
+    "",
+    "중요 규칙:",
+    "- 추정하지 말고 실제 파일 경로와 확인 근거를 남기세요.",
+    "- 같은 보강을 반복하지 마세요.",
+    "- 보강할 내용이 없으면 없다고 보고하고 종료하세요.",
+    "- 권한, 정보, 파일 위치가 부족하면 REPORT:blocked로 정확한 blocker를 말하세요.",
+    "- 완료 시 확인한 문서, 변경한 문서, 남은 위험, 검증 결과를 짧게 보고하세요.",
+  ].join("\n");
 }
 
 function commandTarget(args: string[], rest: string | undefined): string {
