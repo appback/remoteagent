@@ -1693,7 +1693,7 @@ class SilentTelegramAbort extends Error {
 }
 
 type ReportKind = "progress" | "result" | "blocked" | "unknown";
-type RetryableProviderIssueKind = "capacity" | "empty-response";
+type RetryableProviderIssueKind = "capacity" | "empty-response" | "transport";
 
 type RetryableProviderIssue = {
   kind: RetryableProviderIssueKind;
@@ -1974,6 +1974,10 @@ function classifyRetryableProviderIssue(message: string, retryAfterMs: number): 
     return { kind: "empty-response", retryAfterMs };
   }
 
+  if (/remote compact task|stream disconnected|websocket protocol error|connection reset without closing handshake/i.test(message)) {
+    return { kind: "transport", retryAfterMs };
+  }
+
   return undefined;
 }
 
@@ -1985,6 +1989,8 @@ function formatRetryableProviderRetryMessage(issue: RetryableProviderIssue, atte
       return `선택한 모델이 capacity 상태라 ${waitSeconds}초 후 다시 시도합니다. (${attempt}/${maxAttempts})`;
     case "empty-response":
       return `후속 응답이 비어 있어 ${waitSeconds}초 후 다시 시도합니다. (${attempt}/${maxAttempts})`;
+    case "transport":
+      return `Codex 연결이 일시적으로 끊겨 ${waitSeconds}초 후 다시 시도합니다. (${attempt}/${maxAttempts})`;
   }
 }
 
@@ -1994,6 +2000,8 @@ function formatRetryableProviderFinalMessage(issue: RetryableProviderIssue): str
       return "선택한 모델이 capacity 상태라 자동 재시도를 모두 사용했습니다. 잠시 후 다시 시도하거나 `/model`로 다른 모델을 선택해 주세요.";
     case "empty-response":
       return "후속 응답이 반복해서 비어 자동 재시도를 중단했습니다. 같은 세션에서 다시 시도해 주세요.";
+    case "transport":
+      return "Codex 연결이 반복해서 끊겨 자동 재시도를 중단했습니다. 잠시 후 같은 세션에서 다시 시도해 주세요.";
   }
 }
 
