@@ -115,26 +115,20 @@ class AutoContinueController {
   private readonly stopInProgress = new Set<string>();
   private readonly stopDedupUntil = new Map<string, number>();
   private readonly stopDedupMs = 10_000;
-  private readonly suppressUntil = new Map<string, number>();
-  private readonly suppressMs = 60_000;
 
   constructor(private readonly stopGatePath: string) {
-    this.loadStopGates();
+    this.clearLegacyStopGates();
   }
 
   requestStop(botId: string, chatId: string, sessionId?: string): void {
     for (const key of this.keys(botId, chatId, sessionId)) {
       this.stops.add(key);
-      this.suppressUntil.set(key, Date.now() + this.suppressMs);
     }
-    this.persistStopGates();
   }
 
   requestSessionStop(sessionId: string): void {
     const key = this.sessionKey(sessionId);
     this.stops.add(key);
-    this.suppressUntil.set(key, Date.now() + this.suppressMs);
-    this.persistStopGates();
   }
 
   beginStop(botId: string, chatId: string, sessionId?: string): boolean {
@@ -171,28 +165,6 @@ class AutoContinueController {
     return this.keys(botId, chatId, sessionId).some((key) => this.stops.has(key));
   }
 
-  isSuppressingNewWork(botId: string, chatId: string, sessionId?: string): boolean {
-    for (const key of this.keys(botId, chatId, sessionId)) {
-      if (this.isSuppressingKey(key)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  private isSuppressingKey(key: string): boolean {
-    const until = this.suppressUntil.get(key);
-    if (!until) {
-      return false;
-    }
-    if (Date.now() > until) {
-      this.suppressUntil.delete(key);
-      this.persistStopGates();
-      return false;
-    }
-    return true;
-  }
-
   private keys(botId: string, chatId: string, sessionId?: string): string[] {
     const keys = [this.chatKey(botId, chatId)];
     if (sessionId) {
@@ -213,30 +185,11 @@ class AutoContinueController {
     return `session:${sessionId}`;
   }
 
-  private loadStopGates(): void {
+  private clearLegacyStopGates(): void {
     try {
-      const raw = fsSync.readFileSync(this.stopGatePath, "utf8");
-      const parsed = JSON.parse(raw) as Record<string, number>;
-      const now = Date.now();
-      for (const [key, until] of Object.entries(parsed)) {
-        if (Number.isFinite(until) && until > now) {
-          this.suppressUntil.set(key, until);
-        }
-      }
+      fsSync.rmSync(this.stopGatePath, { force: true });
     } catch {
-      // Missing or invalid gate files should not prevent the bot from starting.
-    }
-  }
-
-  private persistStopGates(): void {
-    const entries = Object.fromEntries(this.suppressUntil.entries());
-    try {
-      fsSync.mkdirSync(path.dirname(this.stopGatePath), { recursive: true });
-      const tmpPath = `${this.stopGatePath}.tmp`;
-      fsSync.writeFileSync(tmpPath, JSON.stringify(entries, null, 2), "utf8");
-      fsSync.renameSync(tmpPath, this.stopGatePath);
-    } catch {
-      // Stop should still work in memory even if persisting the gate fails.
+      // Legacy stop gate cleanup must not prevent the bot from starting.
     }
   }
 }
@@ -1037,11 +990,6 @@ ${bridge.formatStatus(mapping)}`);
     }
 
     const mapping = await bridge.status(botId, chatId).catch(() => undefined);
-    if (autoContinue.isSuppressingNewWork(botId, chatId, mapping?.session.sessionId)) {
-      await bridge.logSystem(botId, chatId, "Telegram message ignored during stop cooldown.");
-      await reply(ctx, "Stopped. Ignored this message so the previous work does not restart. Send a new message again in a moment to start fresh.");
-      return;
-    }
 
     if (photo) {
       const downloaded = await downloadTelegramFile(token, botId, chatId, photo.file_id, "telegram-photo.jpg");
