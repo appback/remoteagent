@@ -223,10 +223,15 @@ export class BotPollingStateService {
     const state = await this.read();
     state.updatedAt = new Date().toISOString();
     const tmpPath = `${this.filePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
-    this.writeInFlight = this.writeInFlight.then(async () => {
+    this.writeInFlight = this.writeInFlight.catch(() => undefined).then(async () => {
       await fs.mkdir(path.dirname(this.filePath), { recursive: true });
-      await fs.writeFile(tmpPath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
-      await fs.rename(tmpPath, this.filePath);
+      try {
+        await fs.writeFile(tmpPath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+        await fs.rename(tmpPath, this.filePath);
+      } catch (error) {
+        await fs.rm(tmpPath, { force: true }).catch(() => undefined);
+        throw error;
+      }
     });
     await this.writeInFlight;
   }
