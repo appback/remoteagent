@@ -9,9 +9,17 @@ RemoteAgent production is operated from one canonical Git history:
 - production package: `appback-remoteagent`
 - branch used for production releases: `main`
 
-Do not treat stale server paths or duplicate worktrees as authoritative.
+Use `origin/main` as the authoritative source.
 Code changes should be committed and pushed to `origin/main`, published to npm, and then server 30/26 should be updated from that npm version.
-Installing a local tarball directly on a server is an emergency hotfix only; it is not a completed production release until the same version is published to npm and both targets are reconciled to that npm version.
+Production release commands are:
+
+```bash
+npm run release:publish
+npm run release:deploy -- <version> all
+```
+
+Local tarball installation is an emergency runtime restoration path.
+The production release is completed by publishing the same version to npm and running `npm run release:deploy -- <version> all`.
 
 ## Product shape in operations
 
@@ -33,7 +41,7 @@ Current production bot ownership is intentionally split:
 - server 30: RemoteAgent production bots
 - local machine 21: local-only bot runtime
 
-Do not run the same Telegram bot token from multiple runtimes at the same time.
+Assign each Telegram bot token to one runtime at a time.
 Bot polling conflicts are treated as incidents, not harmless warnings.
 
 When a runtime has several configured Telegram bots, polling pressure can become operationally visible.
@@ -135,7 +143,14 @@ If a temporary branch is unavoidable, merge it back to `main`, push it, and depl
 
 A task is not done until commit and push both happened.
 A production deployment is not done until server 30 and server 26 are running the published npm version and the runtime path has been verified.
-If npm publish fails with `403`, do not keep retrying or switch to source deployment. Confirm the npm token has publish rights for the unscoped `appback-remoteagent` package, then publish. See `docs/RELEASING.md`.
+If npm publish returns `403`, use a publish-capable npm token for the unscoped `appback-remoteagent` package and run:
+
+```bash
+source ~/.config/remoteagent/npm-token.env
+npm run release:publish
+```
+
+See `docs/RELEASING.md`.
 
 See `docs/RELEASING.md` for the detailed versioning rules.
 
