@@ -11,6 +11,7 @@ RemoteAgent production is operated from one canonical Git history:
 
 Do not treat stale server paths or duplicate worktrees as authoritative.
 Code changes should be committed and pushed to `origin/main`, published to npm, and then server 30/26 should be updated from that npm version.
+Installing a local tarball directly on a server is an emergency hotfix only; it is not a completed production release until the same version is published to npm and both targets are reconciled to that npm version.
 
 ## Product shape in operations
 
@@ -134,6 +135,7 @@ If a temporary branch is unavoidable, merge it back to `main`, push it, and depl
 
 A task is not done until commit and push both happened.
 A production deployment is not done until server 30 and server 26 are running the published npm version and the runtime path has been verified.
+If npm publish fails with `403`, do not keep retrying or switch to source deployment. Confirm the npm token has publish rights for the unscoped `appback-remoteagent` package, then publish. See `docs/RELEASING.md`.
 
 See `docs/RELEASING.md` for the detailed versioning rules.
 

@@ -20,6 +20,8 @@
     "check": "tsc --noEmit -p tsconfig.json",
     "selftest:telegram": "npm run build && node scripts/selftest-telegram-update.mjs",
     "prepare": "npm run build",
+    "prepublishOnly": "node scripts/prepublish-guard.mjs",
+    "release:publish": "bash scripts/release-publish.sh",
     "version:patch": "npm version --no-git-tag-version patch",
     "version:minor": "npm version --no-git-tag-version minor",
     "version:major": "npm version --no-git-tag-version major"

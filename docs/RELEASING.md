@@ -28,7 +28,7 @@ A release is only considered complete when all of the following are done in orde
 4. Run `npm run build`
 5. Commit the completed work
 6. Push `main` to `origin/main`
-7. Publish `appback-remoteagent@<version>` to npm from server 30's npm credentials
+7. Publish `appback-remoteagent@<version>` to npm using a token/account that is proven to have publish rights for this unscoped package
 8. Install that exact npm version on server 30 and server 26
 9. Restart `remoteagent.service` on each target if runtime code changed
 10. Verify the relevant runtime path, logs, or Telegram behavior on each target
@@ -71,26 +71,73 @@ npm pack
 
 Use this package-specific path for `appback-remoteagent`.
 
-Do not publish this package from machine 21 with the `21token`. That token is scoped for `@appbackhub` packages and cannot publish the unscoped `appback-remoteagent` package. It can authenticate but `npm publish` fails with:
+Direct `npm publish` is blocked by `prepublishOnly`.
+The only normal publish command is:
+
+```bash
+npm run release:publish
+```
+
+Do not publish this package with the machine 21 `21token`.
+That token can authenticate as `appbackhub`, but it does not currently have publish rights for the unscoped `appback-remoteagent` package.
+It fails at publish time with:
 
 ```text
 403 Forbidden - You may not perform that action with these credentials.
 ```
 
-The successful publish path is:
+Before publishing, always verify both identity and package ownership:
+
+```bash
+npm whoami
+npm owner ls appback-remoteagent
+```
+
+Authentication alone is not enough.
+If `npm whoami` works but `npm publish` returns `403`, stop and get a publish-capable npm token instead of retrying with the same token.
+
+The guarded registry publish path is:
+
+```bash
+npm run release:publish
+npm view appback-remoteagent version
+```
+
+If registry caching briefly returns the previous version after publish, wait a few seconds and rerun `npm view appback-remoteagent version` before installing to servers.
+
+## Emergency tarball install
+
+An emergency tarball install is allowed only to restore a broken runtime when npm publish is blocked.
+It is not a completed release and must be reported as a temporary hotfix.
+
+Rules:
+
+- do not call it "npm deployed" or "released"
+- do not delete runtime state
+- do not use source checkout deployment
+- confirm no active provider process is running before restart
+- install the exact local package tarball with `npm install -g /tmp/appback-remoteagent-<version>.tgz`
+- follow up by publishing the same version to npm once a publish-capable token is available
+
+Emergency server 30 flow:
 
 ```bash
 VERSION=0.14.0
 npm pack
-scp appback-remoteagent-$VERSION.tgz au2223@192.168.0.30:/tmp/appback-remoteagent-$VERSION.tgz
-ssh au2223@192.168.0.30 "bash -lc 'npm publish /tmp/appback-remoteagent-$VERSION.tgz'"
-npm view appback-remoteagent version
-ssh au2223@192.168.0.30 'bash -lc "npm view appback-remoteagent version"'
+scp appback-remoteagent-$VERSION.tgz au2223@192.168.0.30:/tmp/
+ssh au2223@192.168.0.30 "VERSION=$VERSION bash -s" <<'REMOTE'
+set -euo pipefail
+export PATH="/home/au2223/.local/bin:/home/au2223/.nvm/versions/node/v22.22.0/bin:$PATH"
+pgrep -af 'codex|claude' || true
+npm install -g "/tmp/appback-remoteagent-$VERSION.tgz"
+remoteagent-install
+sudo -n systemctl restart remoteagent
+systemctl is-active remoteagent
+node -p 'require("/home/au2223/.nvm/versions/node/v22.22.0/lib/node_modules/appback-remoteagent/package.json").version'
+journalctl -u remoteagent --since '2 minutes ago' --no-pager
+REMOTE
 rm -f appback-remoteagent-$VERSION.tgz
-ssh au2223@192.168.0.30 "rm -f /tmp/appback-remoteagent-$VERSION.tgz"
 ```
-
-If registry caching briefly returns the previous version after publish, wait a few seconds and rerun `npm view appback-remoteagent version` before installing to servers.
 
 ## Target deployment sequence
 
