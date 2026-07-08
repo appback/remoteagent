@@ -2766,6 +2766,10 @@ type TelegramGetFileResult = {
   file_path?: string;
 };
 
+const TELEGRAM_FILE_DOWNLOAD_ATTEMPTS = 4;
+const TELEGRAM_FILE_DOWNLOAD_TIMEOUT_SECONDS = 120;
+const TELEGRAM_FILE_DOWNLOAD_CONNECT_TIMEOUT_SECONDS = 20;
+
 async function downloadTelegramFile(
   botToken: string,
   botId: string,
@@ -2786,22 +2790,46 @@ async function downloadTelegramFile(
   const extension = path.extname(file.file_path) || path.extname(preferredName ?? "") || ".bin";
   const basename = path.basename(preferredName ?? file.file_path, path.extname(preferredName ?? file.file_path));
   const outputPath = path.join(directory, `${Date.now()}-${safePathSegment(basename)}-${randomUUID()}${extension}`);
+  const partialPath = `${outputPath}.part`;
   const fileUrl = new URL(file.file_path, `https://api.telegram.org/file/bot${botToken}/`).toString();
 
-  const { stderr } = await execFileAsync("curl", [
-    "-fL",
-    "-sS",
-    "--max-time",
-    "60",
-    "-o",
-    outputPath,
-    fileUrl,
-  ]);
-  if (stderr?.trim()) {
-    console.error(`curl stderr for Telegram file download: ${stderr.trim()}`);
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= TELEGRAM_FILE_DOWNLOAD_ATTEMPTS; attempt += 1) {
+    try {
+      const { stderr } = await execFileAsync("curl", [
+        "-fL",
+        "-sS",
+        "--connect-timeout",
+        String(TELEGRAM_FILE_DOWNLOAD_CONNECT_TIMEOUT_SECONDS),
+        "--max-time",
+        String(TELEGRAM_FILE_DOWNLOAD_TIMEOUT_SECONDS),
+        "-C",
+        "-",
+        "-o",
+        partialPath,
+        fileUrl,
+      ]);
+      if (stderr?.trim()) {
+        console.error(`curl stderr for Telegram file download: ${stderr.trim()}`);
+      }
+      await fs.rename(partialPath, outputPath);
+      return { path: outputPath };
+    } catch (error) {
+      lastError = error;
+      if (attempt < TELEGRAM_FILE_DOWNLOAD_ATTEMPTS) {
+        const partialSize = await fs.stat(partialPath).then((stat) => stat.size).catch(() => 0);
+        console.error(
+          `Telegram file download attempt ${attempt}/${TELEGRAM_FILE_DOWNLOAD_ATTEMPTS} failed; ` +
+          `retrying with resume from ${partialSize} bytes.`,
+        );
+        await sleep(Math.min(5000, attempt * 1000));
+        continue;
+      }
+    }
   }
 
-  return { path: outputPath };
+  await fs.rm(partialPath, { force: true }).catch(() => undefined);
+  throw lastError instanceof Error ? lastError : new Error("Telegram file download failed.");
 }
 
 function safePathSegment(value: string): string {
