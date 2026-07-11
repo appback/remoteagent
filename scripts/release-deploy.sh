@@ -39,6 +39,19 @@ deploy_30() {
   ssh au2223@192.168.0.30 "VERSION=$VERSION bash -s" <<'REMOTE'
 set -euo pipefail
 export PATH="/home/au2223/.local/bin:/home/au2223/.nvm/versions/node/v22.22.0/bin:$PATH"
+node - <<'NODE'
+const fs = require("fs");
+const path = "/home/au2223/.remoteagent/bot-polling-state.json";
+const state = JSON.parse(fs.readFileSync(path, "utf8"));
+const running = Object.values(state.bots || {})
+  .filter((bot) => Array.isArray(bot.runningSessionIds) && bot.runningSessionIds.length > 0)
+  .map((bot) => `${bot.username || bot.botId}: ${bot.runningSessionIds.join(", ")}`);
+if (running.length > 0) {
+  console.error("RemoteAgent has active provider work. Retry deploy after it finishes:");
+  for (const item of running) console.error(`- ${item}`);
+  process.exit(2);
+}
+NODE
 npm install -g "appback-remoteagent@$VERSION"
 remoteagent-install
 sudo -n systemctl restart remoteagent
@@ -53,6 +66,21 @@ deploy_26() {
   ssh ospadmin@192.168.0.26 "VERSION=$VERSION bash -s" <<'REMOTE'
 set -euo pipefail
 export PATH="$HOME/.local/bin:$PATH"
+node - <<'NODE'
+const fs = require("fs");
+const path = `${process.env.HOME}/.remoteagent/bot-polling-state.json`;
+if (fs.existsSync(path)) {
+  const state = JSON.parse(fs.readFileSync(path, "utf8"));
+  const running = Object.values(state.bots || {})
+    .filter((bot) => Array.isArray(bot.runningSessionIds) && bot.runningSessionIds.length > 0)
+    .map((bot) => `${bot.username || bot.botId}: ${bot.runningSessionIds.join(", ")}`);
+  if (running.length > 0) {
+    console.error("RemoteAgent has active provider work. Retry deploy after it finishes:");
+    for (const item of running) console.error(`- ${item}`);
+    process.exit(2);
+  }
+}
+NODE
 npm install -g "appback-remoteagent@$VERSION"
 remoteagent-install
 ~/.remoteagent/stop-remoteagent.sh || true
