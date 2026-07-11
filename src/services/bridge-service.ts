@@ -18,9 +18,11 @@ import { FileStore } from "../store/file-store.js";
 import { stopSpawnedExecution } from "../adapters/windows-shell.js";
 
 const MODEL_PRESETS: Record<Provider, string[]> = {
-  codex: ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.1-codex-max"],
+  codex: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.1-codex-max"],
   claude: ["sonnet", "opus", "haiku"],
 };
+
+const DEFAULT_CODEX_MODEL = "gpt-5.6-sol";
 
 export class BridgeService {
   private readonly sessionLocks = new Map<string, Promise<void>>();
@@ -77,7 +79,7 @@ export class BridgeService {
       cwd: workspace,
       pairedAt: new Date().toISOString(),
       sessionId: undefined,
-      model: provider === "codex" ? "gpt-5.5" : "sonnet",
+      model: this.defaultModelFor(provider),
       sandboxMode: provider === "codex" ? this.defaultCodexSandboxMode : undefined,
       lastUsedAt: undefined,
     }, workspace);
@@ -126,7 +128,7 @@ export class BridgeService {
       cwd: workspace,
       pairedAt: new Date().toISOString(),
       sessionId: normalizedSessionId,
-      model: existing?.session[provider]?.model ?? (provider === "codex" ? "gpt-5.5" : "sonnet"),
+      model: existing?.session[provider]?.model ?? this.defaultModelFor(provider),
       sandboxMode: provider === "codex"
         ? (existing?.session[provider]?.sandboxMode ?? this.defaultCodexSandboxMode)
         : undefined,
@@ -836,7 +838,7 @@ export class BridgeService {
   }
 
   private defaultModelFor(provider: Provider): string {
-    return provider === "codex" ? "gpt-5.5" : "sonnet";
+    return provider === "codex" ? DEFAULT_CODEX_MODEL : "sonnet";
   }
 
   private describeEffectiveAccess(session: SessionRecord): string[] {
