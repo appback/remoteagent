@@ -435,7 +435,8 @@ export class BridgeService {
   formatResponses(responses: ProviderResponse[]): string[] {
     return responses.map((response) => {
       const sessionLabel = response.publicSessionId ?? response.sessionId;
-      const header = `[${response.provider.toUpperCase()} | ${sessionLabel}]`;
+      const modelLabel = response.model?.trim() || this.defaultModelFor(response.provider);
+      const header = `[${response.provider.toUpperCase()} | ${modelLabel} | ${sessionLabel}]`;
       return `${header}\n${response.output}`;
     });
   }
@@ -647,6 +648,7 @@ export class BridgeService {
       responses.push({
         ...response,
         publicSessionId: session.publicId,
+        model: providerSession.model ?? this.defaultModelFor(provider),
       });
     }
 

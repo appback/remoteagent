@@ -81,6 +81,7 @@ export type ProviderResponse = {
   provider: Provider;
   sessionId: string;
   publicSessionId?: string;
+  model?: string;
   cwd: string;
   output: string;
 };
