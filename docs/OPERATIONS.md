@@ -122,6 +122,57 @@ Check the lock owner:
 cat /home/au2223/.remoteagent/remoteagent.lock
 ```
 
+## Disk maintenance
+
+RemoteAgent disk growth usually comes from Docker build cache, Docker volumes, Codex session logs, managed workspaces, Telegram uploads, and temporary build artifacts.
+
+Use one script for repeatable checks and conservative cleanup:
+
+```bash
+npm run maintenance:disk -- report
+```
+
+Run the safe cleanup path:
+
+```bash
+npm run maintenance:disk -- prune-safe
+```
+
+`prune-safe` performs only these actions:
+
+- `docker builder prune -f`
+- remove old `/tmp/remoteagent-codex-*`, `/tmp/remoteagent-claude-*`, and `/tmp/appback-*` directories older than 2 days
+- remove managed workspace directories under `WORKSPACE_ROOT` only when they are not referenced by RemoteAgent `state.json`
+
+Clean only orphan managed workspaces:
+
+```bash
+npm run maintenance:disk -- prune-workspaces
+```
+
+Archive old Codex session logs explicitly:
+
+```bash
+npm run maintenance:disk -- prune-codex-sessions 45
+```
+
+This creates an archive under `~/.codex/session-archive/` and removes the archived jsonl files from `~/.codex/sessions`.
+Use this only when old Codex resume history is no longer needed.
+
+For server 30, run the installed package script through npm:
+
+```bash
+ssh au2223@192.168.0.30 'export PATH="/home/au2223/.local/bin:/home/au2223/.nvm/versions/node/v22.22.0/bin:$PATH"; npm explore -g appback-remoteagent -- npm run maintenance:disk -- report'
+ssh au2223@192.168.0.30 'export PATH="/home/au2223/.local/bin:/home/au2223/.nvm/versions/node/v22.22.0/bin:$PATH"; npm explore -g appback-remoteagent -- npm run maintenance:disk -- prune-safe'
+```
+
+For server 26:
+
+```bash
+ssh ospadmin@192.168.0.26 'export PATH="$HOME/.local/bin:$PATH"; npm explore -g appback-remoteagent -- npm run maintenance:disk -- report'
+ssh ospadmin@192.168.0.26 'export PATH="$HOME/.local/bin:$PATH"; npm explore -g appback-remoteagent -- npm run maintenance:disk -- prune-safe'
+```
+
 ## Git workflow
 
 The intended workflow is:

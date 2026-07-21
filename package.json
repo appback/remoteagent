@@ -23,7 +23,8 @@
     "prepublishOnly": "node scripts/prepublish-guard.mjs",
     "release:version": "bash scripts/release-version.sh",
     "release:publish": "bash scripts/release-publish.sh",
-    "release:deploy": "bash scripts/release-deploy.sh"
+    "release:deploy": "bash scripts/release-deploy.sh",
+    "maintenance:disk": "bash scripts/disk-maintenance.sh"
   },
   "dependencies": {
     "dotenv": "^16.6.1",
