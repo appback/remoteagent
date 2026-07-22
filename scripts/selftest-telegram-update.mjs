@@ -333,7 +333,10 @@ const evidenceCalls = (await fs.readFile(telegramCalls, "utf8"))
 if (missingEvidenceCalls !== 2) {
   throw new Error(`Expected missing evidence result to be retried once, got ${missingEvidenceCalls}`);
 }
-if (!evidenceCalls.some((call) => /변경 파일: `src\/example\.ts`/.test(call.text) && /`npm run check` 통과/.test(call.text))) {
+if (!evidenceCalls.some((call) =>
+  /변경 파일: (?:`|<code>)src\/example\.ts(?:`|<\/code>)/.test(call.text)
+  && /(?:`|<code>)npm run check(?:`|<\/code>) 통과/.test(call.text)
+)) {
   throw new Error(`Did not see recovered result with concrete evidence. Calls: ${JSON.stringify(evidenceCalls, null, 2)}`);
 }
 if (evidenceCalls.some((call) => call.method === "sendMessage" && /^수정 완료했습니다\.$/.test(call.text.trim()))) {

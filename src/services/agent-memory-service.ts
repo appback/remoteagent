@@ -34,6 +34,13 @@ type DocumentPin = {
   updatedAt: string;
 };
 
+type MacroRecord = {
+  alias: string;
+  prompt: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 type AttemptsState = {
   progress: Record<string, { count: number; lastAt: string; sample: string }>;
 };
@@ -72,6 +79,7 @@ export class AgentMemoryService {
   private readonly artifactsPath: string;
   private readonly secretsPath: string;
   private readonly docsPath: string;
+  private readonly macrosPath: string;
   private readonly telegramUploadsDir: string;
 
   constructor(private readonly dataDir: string) {
@@ -79,6 +87,7 @@ export class AgentMemoryService {
     this.artifactsPath = path.join(this.rootDir, "artifacts.json");
     this.secretsPath = path.join(this.rootDir, "secrets.json");
     this.docsPath = path.join(this.rootDir, "docs-index.json");
+    this.macrosPath = path.join(this.rootDir, "macros.json");
     this.telegramUploadsDir = path.join(dataDir, "uploads", "telegram");
   }
 
@@ -321,6 +330,61 @@ export class AgentMemoryService {
     delete secrets[key];
     await this.writeSecrets(secrets);
     return existed;
+  }
+
+  async setMacro(alias: string, prompt: string): Promise<MacroRecord> {
+    const normalizedAlias = this.normalizeMacroAlias(alias);
+    const normalizedPrompt = prompt.trim();
+    if (!normalizedPrompt) {
+      throw new Error("Macro prompt must not be empty.");
+    }
+    const macros = await this.readMacros();
+    const now = new Date().toISOString();
+    const record: MacroRecord = {
+      alias: normalizedAlias,
+      prompt: normalizedPrompt,
+      createdAt: macros[normalizedAlias]?.createdAt ?? now,
+      updatedAt: now,
+    };
+    macros[normalizedAlias] = record;
+    await this.writeJson(this.macrosPath, macros);
+    return record;
+  }
+
+  async removeMacro(alias: string): Promise<boolean> {
+    const normalizedAlias = this.normalizeMacroAlias(alias);
+    const macros = await this.readMacros();
+    const existed = Boolean(macros[normalizedAlias]);
+    delete macros[normalizedAlias];
+    await this.writeJson(this.macrosPath, macros);
+    return existed;
+  }
+
+  async getMacro(aliasOrIndex: string): Promise<MacroRecord | undefined> {
+    const macros = Object.values(await this.readMacros())
+      .sort((left, right) => left.alias.localeCompare(right.alias, "ko"));
+    const trimmed = aliasOrIndex.trim();
+    if (/^[0-9]+$/.test(trimmed)) {
+      const index = Number.parseInt(trimmed, 10);
+      return index >= 1 && index <= macros.length ? macros[index - 1] : undefined;
+    }
+    const normalizedAlias = this.normalizeMacroAlias(trimmed);
+    return macros.find((macro) => macro.alias === normalizedAlias);
+  }
+
+  async listMacros(): Promise<string> {
+    const macros = Object.values(await this.readMacros())
+      .sort((left, right) => left.alias.localeCompare(right.alias, "ko"));
+    if (macros.length === 0) {
+      return "No macros are stored.";
+    }
+    return [
+      `Macros (${macros.length})`,
+      ...macros.map((macro, index) => {
+        const preview = macro.prompt.replace(/\s+/g, " ").slice(0, 120);
+        return `${index + 1}. ${macro.alias}\n   ${preview}${macro.prompt.length > preview.length ? "..." : ""}`;
+      }),
+    ].join("\n");
   }
 
   async getSecret(key: string): Promise<string | undefined> {
@@ -776,6 +840,21 @@ export class AgentMemoryService {
 
   private async readDocs(): Promise<Record<string, DocumentPin>> {
     return this.readJson<Record<string, DocumentPin>>(this.docsPath, {});
+  }
+
+  private async readMacros(): Promise<Record<string, MacroRecord>> {
+    return this.readJson<Record<string, MacroRecord>>(this.macrosPath, {});
+  }
+
+  private normalizeMacroAlias(alias: string): string {
+    const normalized = alias.trim();
+    if (/^[0-9]+$/.test(normalized)) {
+      throw new Error("Macro alias cannot be numeric. Numeric values are reserved for list selection.");
+    }
+    if (!/^[a-z0-9가-힣._-]{1,80}$/i.test(normalized)) {
+      throw new Error("Macro alias must be 1-80 chars and may contain letters, numbers, Korean, dot, underscore, or dash.");
+    }
+    return normalized;
   }
 
   private normalizeKeyword(keyword: string): string {

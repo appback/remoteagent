@@ -39,6 +39,8 @@ const HELP_TEXT = [
   "/artifacts list|cleanup <days>",
   "/secret set|list|remove",
   "/docs pin|find|list|remove|reinforce",
+  "/macro set|list|remove|<alias|number>",
+  "/매크로 set|list|remove|<alias|number>",
   "/보강 <count>",
   "/bots",
   "/bot add <token>",
@@ -93,6 +95,7 @@ const RECOGNIZED_COMMANDS = new Set([
   "artifacts",
   "secret",
   "docs",
+  "macro",
   "bots",
   "bot",
   "install",
@@ -101,7 +104,8 @@ const RECOGNIZED_COMMANDS = new Set([
 ]);
 const TELEGRAM_STALE_UPDATE_GRACE_SECONDS = 10;
 const TELEGRAM_PROCESS_STARTED_AT_SECONDS = Math.floor(Date.now() / 1000);
-const activeWorkLoopKeys = new Set<string>();
+const workLoopTails = new Map<string, Promise<void>>();
+const workLoopGenerations = new Map<string, number>();
 
 const REPORT_CONTINUE_PROMPT = [
   "Continue the same task now.",
@@ -237,6 +241,7 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
     if (!previous) {
       return;
     }
+    cancelQueuedWorkLoops(botId, chatId, previous.session.sessionId);
     autoContinue.requestSessionStop(previous.session.sessionId);
     messageBatcher.cancelPending(botId, chatId);
     messageBatcher.cancelManual(botId, chatId);
@@ -440,6 +445,7 @@ ${bridge.formatStatus(mapping)}`);
     const mapping = await bridge.switchSession(botId, chatId, sessionId);
     if (previous && previous.session.sessionId !== mapping.session.sessionId) {
       autoContinue.requestSessionStop(previous.session.sessionId);
+      cancelQueuedWorkLoops(botId, chatId, previous.session.sessionId);
       messageBatcher.cancelPending(botId, chatId);
       messageBatcher.cancelManual(botId, chatId);
       await bridge.stopSessionRun(previous.session.sessionId, botId, chatId, "Chat switched to another session; previous session execution was stopped.");
@@ -555,6 +561,7 @@ ${bridge.formatStatus(mapping)}`);
     const mapping = await bridge.status(botId, chatId);
     const sessionId = mapping?.session.sessionId;
     autoContinue.requestStop(botId, chatId, sessionId);
+    cancelQueuedWorkLoops(botId, chatId, sessionId);
     const pendingBatch = messageBatcher.cancelPending(botId, chatId);
     const manualBatch = messageBatcher.cancelManual(botId, chatId);
     if (!autoContinue.beginStop(botId, chatId, sessionId)) {
@@ -833,6 +840,44 @@ ${bridge.formatStatus(mapping)}`);
     await reply(ctx, "Usage: `/docs list`, `/docs find <keyword>`, `/docs pin <keyword> <path>`, `/docs remove <keyword>`, or `/docs reinforce <1-10>`", { parse_mode: "Markdown" });
   });
 
+  const handleMacroCommand = async (ctx: Context, text: string): Promise<void> => {
+    if (!ctx.chat) {
+      throw new Error("Telegram chat context is missing.");
+    }
+    const botId = getBotId();
+    const chatId = String(ctx.chat.id);
+    const parsed = parseMacroCommandText(text, botId);
+    if (parsed.kind === "help") {
+      await reply(ctx, await formatMacroHelp(memoryService));
+      return;
+    }
+    if (parsed.kind === "set") {
+      await ensureOwnerControlAccess(ctx);
+      const macro = await memoryService.setMacro(parsed.alias, parsed.prompt);
+      await reply(ctx, `Saved macro '${macro.alias}'.`);
+      return;
+    }
+    if (parsed.kind === "remove") {
+      await ensureOwnerControlAccess(ctx);
+      const removed = await memoryService.removeMacro(parsed.alias);
+      await reply(ctx, removed ? `Removed macro '${parsed.alias}'.` : `Macro was not found: ${parsed.alias}`);
+      return;
+    }
+
+    const macro = await memoryService.getMacro(parsed.target);
+    if (!macro) {
+      await reply(ctx, `Macro was not found: ${parsed.target}\n\n${await memoryService.listMacros()}`);
+      return;
+    }
+
+    await bridge.logSystem(botId, chatId, `Macro executed: ${macro.alias}`);
+    await messageBatcher.enqueue({ botToken: token, telegramChatId: ctx.chat.id }, botId, chatId, macro.prompt);
+  };
+
+  bot.command("macro", async (ctx) => {
+    await handleMacroCommand(ctx, ctx.message?.text ?? "/macro");
+  });
+
   bot.command("bots", async (ctx) => {
     await ensureOwnerControlAccess(ctx);
     const pendingNotice = await botManagement.getPendingOperationNotice();
@@ -978,6 +1023,12 @@ ${bridge.formatStatus(mapping)}`);
     }
     if (planReinforcement.kind === "invalid") {
       await reply(ctx, "Usage: `/보강 <1-10>`", { parse_mode: "Markdown" });
+      return;
+    }
+
+    const koreanMacro = parseKoreanMacroCommand(text, botId);
+    if (koreanMacro) {
+      await handleMacroCommand(ctx, text ?? "/매크로");
       return;
     }
 
@@ -1433,23 +1484,47 @@ async function routeTelegramWorkLoop(
   const currentSession = await bridge.status(botId, chatId);
   const sessionId = currentSession?.session.sessionId;
   const activeKey = workLoopKey(botId, chatId, sessionId);
-  if (activeWorkLoopKeys.has(activeKey)) {
-    const message = [
-      `Session ${currentSession?.session.publicId ?? sessionId ?? `${botId}:${chatId}`} is already running.`,
-      "Send /stop to interrupt the active work, then send the instruction again.",
-    ].join("\n");
-    await bridge.logSystem(botId, chatId, `Rejected overlapping Telegram work loop for ${activeKey}.`);
-    return [message];
+  const previousTail = workLoopTails.get(activeKey);
+  const generation = workLoopGenerations.get(activeKey) ?? 0;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const currentTail = (previousTail ?? Promise.resolve())
+    .catch(() => undefined)
+    .then(() => gate);
+  workLoopTails.set(activeKey, currentTail);
+
+  if (previousTail) {
+    await bridge.logSystem(botId, chatId, `Queued overlapping Telegram work loop for ${activeKey}.`);
+    await helpers.reportProgress([`Queued instruction for ${currentSession?.session.publicId ?? "this session"}. It will run after the active work finishes.`]);
+    await previousTail.catch(() => undefined);
+    if ((workLoopGenerations.get(activeKey) ?? 0) !== generation || autoContinue.isStopRequested(botId, chatId, sessionId)) {
+      await bridge.logSystem(botId, chatId, `Discarded queued Telegram work loop for ${activeKey}.`);
+      release();
+      if (workLoopTails.get(activeKey) === currentTail) {
+        workLoopTails.delete(activeKey);
+      }
+      throw new SilentTelegramAbort("Queued work was discarded.");
+    }
   }
 
-  activeWorkLoopKeys.add(activeKey);
-  if (currentSession) {
-    await memoryService.recordInstruction(currentSession.session, message);
+  let managedContext = "";
+  try {
+    if (currentSession) {
+      await memoryService.recordInstruction(currentSession.session, message);
+    }
+    managedContext = currentSession
+      ? await memoryService.formatProviderContext(currentSession.session)
+      : "";
+    autoContinue.clear(botId, chatId, sessionId);
+  } catch (error) {
+    release();
+    if (workLoopTails.get(activeKey) === currentTail) {
+      workLoopTails.delete(activeKey);
+    }
+    throw error;
   }
-  const managedContext = currentSession
-    ? await memoryService.formatProviderContext(currentSession.session)
-    : "";
-  autoContinue.clear(botId, chatId, sessionId);
   let prompt = appendManagedContext(appendReportProtocol(message), managedContext);
   const maxTurns = options.maxTurns ?? config.telegramAutoProgressMaxTurns;
   const emptyResponseRetries = config.telegramEmptyResponseRetries;
@@ -1650,7 +1725,10 @@ async function routeTelegramWorkLoop(
     }
     }
   } finally {
-    activeWorkLoopKeys.delete(activeKey);
+    release();
+    if (workLoopTails.get(activeKey) === currentTail) {
+      workLoopTails.delete(activeKey);
+    }
     if (currentSession) {
       if (providerCompleted) {
         await botManagement.markProviderCompleted(botId, sessionId);
@@ -1663,6 +1741,16 @@ async function routeTelegramWorkLoop(
 
 function workLoopKey(botId: string, chatId: string, sessionId?: string): string {
   return sessionId ? `session:${sessionId}` : `chat:${botId}:${chatId}`;
+}
+
+function cancelQueuedWorkLoops(botId: string, chatId: string, sessionId?: string): void {
+  const keys = [workLoopKey(botId, chatId, sessionId)];
+  if (sessionId) {
+    keys.push(workLoopKey(botId, chatId));
+  }
+  for (const key of keys) {
+    workLoopGenerations.set(key, (workLoopGenerations.get(key) ?? 0) + 1);
+  }
 }
 
 type PendingAnimationHelpers = {
@@ -2090,6 +2178,141 @@ function parseCommand(text: string | undefined, headCount: number): { args: stri
     args,
     rest: remaining || undefined,
   };
+}
+
+type MacroCommand =
+  | { kind: "help" }
+  | { kind: "set"; alias: string; prompt: string }
+  | { kind: "remove"; alias: string }
+  | { kind: "run"; target: string };
+
+function parseMacroCommandText(text: string | undefined, botId?: string): MacroCommand {
+  const body = stripSlashCommand(text, ["macro", "매크로"], botId).trim();
+  if (!body) {
+    return { kind: "help" };
+  }
+
+  const tokens = tokenizeCommandBody(body);
+  const action = tokens[0]?.toLowerCase();
+  if (action === "list") {
+    return { kind: "help" };
+  }
+
+  if (action === "set") {
+    const alias = tokens[1]?.trim();
+    const prompt = tokens.length >= 3
+      ? tokens.slice(2).join(" ").trim()
+      : "";
+    if (!alias || !prompt) {
+      throw new Error("Usage: /macro set <alias> <instruction>");
+    }
+    return { kind: "set", alias, prompt };
+  }
+
+  if (action === "remove" || action === "rm" || action === "delete" || action === "del" || action === "clear") {
+    const alias = tokens[1]?.trim();
+    if (!alias || tokens.length > 2) {
+      throw new Error("Usage: /macro remove <alias>");
+    }
+    return { kind: "remove", alias };
+  }
+
+  return { kind: "run", target: tokens.length === 1 ? tokens[0]! : body };
+}
+
+function parseKoreanMacroCommand(text: string | undefined, botId?: string): boolean {
+  return Boolean(text && stripSlashCommand(text, ["매크로"], botId) !== text);
+}
+
+function stripSlashCommand(text: string | undefined, names: string[], botId?: string): string {
+  const trimmed = text?.trim() ?? "";
+  for (const name of names) {
+    const escaped = escapeRegExp(name);
+    const username = botId ? `(?:@${escapeRegExp(botId.replace(/^@/, ""))})?` : "(?:@\\w+)?";
+    const pattern = new RegExp(`^/${escaped}${username}(?:\\s+|$)`, "i");
+    if (pattern.test(trimmed)) {
+      return trimmed.replace(pattern, "");
+    }
+  }
+  return trimmed;
+}
+
+function tokenizeCommandBody(input: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let quote: "'" | "\"" | undefined;
+  let escaped = false;
+
+  for (const char of input) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = undefined;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+    if (char === "'" || char === "\"") {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+      continue;
+    }
+    current += char;
+  }
+
+  if (escaped) {
+    current += "\\";
+  }
+  if (quote) {
+    throw new Error("Unclosed quote in command.");
+  }
+  if (current) {
+    tokens.push(current);
+  }
+  return tokens;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function formatMacroHelp(memoryService: AgentMemoryService): Promise<string> {
+  return [
+    "Macro command guide",
+    "",
+    "Commands:",
+    "```text",
+    "/macro",
+    "/macro set 초기설정 너의 역할은 ...",
+    "/macro set '초기설정' '너의 역할은 ...'",
+    "/macro 초기설정",
+    "/macro 1",
+    "/macro remove 초기설정",
+    "/매크로",
+    "/매크로 초기설정",
+    "```",
+    "",
+    "Rules:",
+    "- Macro aliases can use Korean, letters, numbers, dot, underscore, and dash.",
+    "- Numeric-only aliases are reserved for list selection and cannot be registered.",
+    "",
+    await memoryService.listMacros(),
+  ].join("\n");
 }
 
 function parsePlanReinforcementCount(raw: string | undefined): { kind: "valid"; count: number } | { kind: "invalid" } {

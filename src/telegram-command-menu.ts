@@ -15,6 +15,7 @@ export const TELEGRAM_COMMAND_MENU = [
   { command: "option", description: "Show or change runtime options" },
   { command: "secret", description: "Store or manage hidden secret values" },
   { command: "docs", description: "Pin or find session documents" },
+  { command: "macro", description: "Save or run reusable instructions" },
   { command: "model", description: "Show or change provider model" },
   { command: "stop", description: "Stop active work and clear queued messages" },
   { command: "sandbox", description: "Set Codex sandbox mode" },
