@@ -166,7 +166,7 @@ Clean the current chat session workspace manually from Telegram:
 /cleanup
 ```
 
-`/cleanup` does not delete the session workspace itself. It only removes generated/cache/log paths inside the current managed workspace, such as `node_modules`, `dist`, `build`, `coverage`, `.cache`, `.gradle`, `.next`, `.turbo`, `*.log`, `*.tmp`, and `*.tsbuildinfo`. It skips `.git` and refuses non-RemoteAgent-managed workspaces.
+`/cleanup` does not delete the session workspace directory itself. It removes the contents of the current managed workspace while preserving RemoteAgent's session todo/state/history under `~/.remoteagent/managed/sessions/<session>`. If a top-level `TODO.md`, `todo.md`, or `todo.json` exists inside the workspace, it is also preserved. The command refuses non-RemoteAgent-managed workspaces.
 
 Archive old Codex session logs explicitly:
 

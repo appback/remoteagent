@@ -182,7 +182,7 @@ Telegram attachments are written into the local runtime under `~/.remoteagent/up
 
 Attachments can be inspected with `/artifacts list` and cleaned manually with `/artifacts cleanup <days>`. RemoteAgent also runs periodic artifact cleanup when `ARTIFACT_CLEANUP_ENABLED=true`; by default it keeps 30 days and also removes old unindexed files under `uploads/telegram`.
 
-Managed workspaces are cleaned separately. RemoteAgent periodically removes only orphan workspace directories that are no longer referenced by `state.json` when `WORKSPACE_CLEANUP_ENABLED=true`. Use `/cleanup` to clean generated files from the current session workspace; it removes cache/build/log artifacts and refuses non-RemoteAgent-managed workspaces.
+Managed workspaces are cleaned separately. RemoteAgent periodically removes only orphan workspace directories that are no longer referenced by `state.json` when `WORKSPACE_CLEANUP_ENABLED=true`. Use `/cleanup` to clear the current session workspace; RemoteAgent keeps the session todo/state/history under `~/.remoteagent/managed/sessions/<session>` and refuses non-RemoteAgent-managed workspaces.
 
 Current supported attachment classes:
 

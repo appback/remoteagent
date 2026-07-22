@@ -13,31 +13,7 @@ type BridgeStateShape = {
   sessions?: Record<string, SessionRecord>;
 };
 
-const GENERATED_DIR_NAMES = new Set([
-  ".cache",
-  ".gradle",
-  ".next",
-  ".nuxt",
-  ".parcel-cache",
-  ".turbo",
-  "build",
-  "coverage",
-  "dist",
-  "node_modules",
-  "out",
-]);
-
-const GENERATED_FILE_PATTERNS = [
-  /\.log$/i,
-  /\.tmp$/i,
-  /\.tsbuildinfo$/i,
-  /^npm-debug\.log/i,
-  /^pnpm-debug\.log/i,
-  /^yarn-error\.log/i,
-  /^\.DS_Store$/i,
-];
-
-const MAX_SCAN_DEPTH = 5;
+const PRESERVED_WORKSPACE_TODO_FILES = new Set(["TODO.md", "todo.md", "todo.json"]);
 
 export class WorkspaceCleanupService {
   constructor(
@@ -84,11 +60,12 @@ export class WorkspaceCleanupService {
     }
 
     const result: CleanupResult = { removedPaths: 0, removedBytes: 0, skipped: 0, messages: [] };
-    await this.cleanupGeneratedEntries(session.workspace, 0, result);
+    await this.cleanupWorkspaceContents(session.workspace, result);
 
     return [
       `Workspace cleanup finished for ${session.publicId}.`,
       `workspace=${session.workspace}`,
+      `preservedSessionMemory=${path.join(this.dataDir, "managed", "sessions", session.publicId)}`,
       `removed=${result.removedPaths}`,
       `freed=${formatBytes(result.removedBytes)}`,
       `skipped=${result.skipped}`,
@@ -98,31 +75,15 @@ export class WorkspaceCleanupService {
     ].join("\n");
   }
 
-  private async cleanupGeneratedEntries(root: string, depth: number, result: CleanupResult): Promise<void> {
-    if (depth > MAX_SCAN_DEPTH) {
-      return;
-    }
-
+  private async cleanupWorkspaceContents(root: string, result: CleanupResult): Promise<void> {
     const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
     for (const entry of entries) {
       const entryPath = path.join(root, entry.name);
-      if (entry.name === ".git") {
+      if (entry.isFile() && PRESERVED_WORKSPACE_TODO_FILES.has(entry.name)) {
         result.skipped += 1;
         continue;
       }
-
-      if (entry.isDirectory()) {
-        if (GENERATED_DIR_NAMES.has(entry.name)) {
-          await this.removePath(entryPath, result);
-          continue;
-        }
-        await this.cleanupGeneratedEntries(entryPath, depth + 1, result);
-        continue;
-      }
-
-      if (entry.isFile() && GENERATED_FILE_PATTERNS.some((pattern) => pattern.test(entry.name))) {
-        await this.removePath(entryPath, result);
-      }
+      await this.removePath(entryPath, result);
     }
   }
 

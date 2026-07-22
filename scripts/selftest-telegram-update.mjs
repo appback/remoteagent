@@ -202,13 +202,17 @@ await fs.mkdir(path.join(sessionWorkspace, "src"), { recursive: true });
 await fs.writeFile(path.join(sessionWorkspace, "node_modules", "left-pad", "index.js"), "module.exports = 1;\n", "utf8");
 await fs.writeFile(path.join(sessionWorkspace, "src", "keep.ts"), "export const keep = true;\n", "utf8");
 await fs.writeFile(path.join(sessionWorkspace, "debug.log"), "temporary log\n", "utf8");
+await fs.writeFile(path.join(sessionWorkspace, "TODO.md"), "- keep cleanup notes\n", "utf8");
 await send("/cleanup");
-await fs.access(path.join(sessionWorkspace, "src", "keep.ts"));
+await fs.access(path.join(sessionWorkspace, "TODO.md"));
 if (await pathExists(path.join(sessionWorkspace, "node_modules"))) {
-  throw new Error("/cleanup did not remove generated node_modules");
+  throw new Error("/cleanup did not remove node_modules");
 }
 if (await pathExists(path.join(sessionWorkspace, "debug.log"))) {
-  throw new Error("/cleanup did not remove generated log file");
+  throw new Error("/cleanup did not remove log file");
+}
+if (await pathExists(path.join(sessionWorkspace, "src"))) {
+  throw new Error("/cleanup did not remove regular workspace contents");
 }
 
 const orphanWorkspace = path.join(workspaceRoot, "orphan123");
