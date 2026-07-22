@@ -14,6 +14,7 @@ import { BridgeService } from "./services/bridge-service.js";
 import { BotManagementService } from "./services/bot-management-service.js";
 import { LocalUiService } from "./services/local-ui-service.js";
 import { AgentMemoryService } from "./services/agent-memory-service.js";
+import { WorkspaceCleanupService } from "./services/workspace-cleanup-service.js";
 import { BotPollingStateService } from "./services/bot-polling-state-service.js";
 import type { BotPollingState } from "./services/bot-polling-state-service.js";
 import { ProviderRecoveryService } from "./services/provider-recovery-service.js";
@@ -88,6 +89,7 @@ async function main(): Promise<void> {
     botPollingState,
   );
   startArtifactCleanupSchedule(new AgentMemoryService(config.dataDir));
+  startWorkspaceCleanupSchedule(new WorkspaceCleanupService(config.dataDir, config.workspaceRoot));
   if (config.localUiEnabled) {
     const localUi = new LocalUiService(bridge, config.localUiHost, config.localUiPort);
     await localUi.start()
@@ -122,6 +124,33 @@ async function main(): Promise<void> {
   });
 
   await startManualPollingScheduler(bots);
+}
+
+function startWorkspaceCleanupSchedule(workspaceCleanupService: WorkspaceCleanupService): void {
+  if (!config.workspaceCleanupEnabled) {
+    console.log("Workspace cleanup schedule is disabled.");
+    return;
+  }
+
+  const run = async (): Promise<void> => {
+    try {
+      const result = await workspaceCleanupService.cleanupOrphanWorkspaces();
+      console.log(`[workspace-cleanup] ${result}`);
+    } catch (error) {
+      console.error("[workspace-cleanup] failed:", error);
+    }
+  };
+
+  console.log(`Workspace cleanup schedule enabled: interval=${config.workspaceCleanupIntervalMs}ms`);
+  const initial = setTimeout(() => {
+    void run();
+  }, 120_000);
+  initial.unref();
+
+  const interval = setInterval(() => {
+    void run();
+  }, config.workspaceCleanupIntervalMs);
+  interval.unref();
 }
 
 function startArtifactCleanupSchedule(memoryService: AgentMemoryService): void {

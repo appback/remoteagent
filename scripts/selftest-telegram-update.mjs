@@ -62,12 +62,20 @@ process.env.TELEGRAM_EMPTY_RESPONSE_RETRIES = "0";
 process.env.TELEGRAM_RETRYABLE_ERROR_RETRIES = "0";
 process.env.LOCAL_UI_ENABLED = "false";
 
-const [{ createBot }, { BridgeService }, { BotManagementService }, { FileStore }, { AgentMemoryService }] = await Promise.all([
+const [
+  { createBot },
+  { BridgeService },
+  { BotManagementService },
+  { FileStore },
+  { AgentMemoryService },
+  { WorkspaceCleanupService },
+] = await Promise.all([
   import(path.join(root, "dist", "bot.js")),
   import(path.join(root, "dist", "services", "bridge-service.js")),
   import(path.join(root, "dist", "services", "bot-management-service.js")),
   import(path.join(root, "dist", "store", "file-store.js")),
   import(path.join(root, "dist", "services", "agent-memory-service.js")),
+  import(path.join(root, "dist", "services", "workspace-cleanup-service.js")),
 ]);
 
 const providerCalls = [];
@@ -188,6 +196,55 @@ if (!/^TELEGRAM_UNTAGGED_INTENT_RETRIES=4$/m.test(envText)) {
   throw new Error(`Option command did not persist untagged intent retry limit to .env: ${envText}`);
 }
 
+const sessionWorkspace = session.workspace;
+await fs.mkdir(path.join(sessionWorkspace, "node_modules", "left-pad"), { recursive: true });
+await fs.mkdir(path.join(sessionWorkspace, "src"), { recursive: true });
+await fs.writeFile(path.join(sessionWorkspace, "node_modules", "left-pad", "index.js"), "module.exports = 1;\n", "utf8");
+await fs.writeFile(path.join(sessionWorkspace, "src", "keep.ts"), "export const keep = true;\n", "utf8");
+await fs.writeFile(path.join(sessionWorkspace, "debug.log"), "temporary log\n", "utf8");
+await send("/cleanup");
+await fs.access(path.join(sessionWorkspace, "src", "keep.ts"));
+if (await pathExists(path.join(sessionWorkspace, "node_modules"))) {
+  throw new Error("/cleanup did not remove generated node_modules");
+}
+if (await pathExists(path.join(sessionWorkspace, "debug.log"))) {
+  throw new Error("/cleanup did not remove generated log file");
+}
+
+const orphanWorkspace = path.join(workspaceRoot, "orphan123");
+const referencedWorkspace = sessionWorkspace;
+await fs.mkdir(orphanWorkspace, { recursive: true });
+await fs.writeFile(path.join(orphanWorkspace, "artifact.tmp"), "orphan\n", "utf8");
+const workspaceCleanup = new WorkspaceCleanupService(dataDir, workspaceRoot);
+const orphanResult = await workspaceCleanup.cleanupOrphanWorkspaces();
+if (!/removed=1/.test(orphanResult)) {
+  throw new Error(`Expected one orphan workspace removal, got: ${orphanResult}`);
+}
+if (await pathExists(orphanWorkspace)) {
+  throw new Error("Orphan workspace was not removed");
+}
+if (!(await pathExists(referencedWorkspace))) {
+  throw new Error("Referenced workspace was removed unexpectedly");
+}
+
+const missingStateDataDir = path.join(tmp, "missing-state-data");
+const missingStateWorkspaceRoot = path.join(tmp, "missing-state-workspaces");
+const shouldRemain = path.join(missingStateWorkspaceRoot, "should-remain");
+await fs.mkdir(shouldRemain, { recursive: true });
+const missingStateCleanup = new WorkspaceCleanupService(missingStateDataDir, missingStateWorkspaceRoot);
+let refusedMissingState = false;
+try {
+  await missingStateCleanup.cleanupOrphanWorkspaces();
+} catch {
+  refusedMissingState = true;
+}
+if (!refusedMissingState) {
+  throw new Error("Workspace cleanup should refuse to run when state.json is missing");
+}
+if (!(await pathExists(shouldRemain))) {
+  throw new Error("Workspace cleanup removed a workspace when state.json was missing");
+}
+
 const memory = new AgentMemoryService(dataDir);
 const developmentSession = {
   ...session,
@@ -257,6 +314,9 @@ if (!calls.some((call) => call.method === "sendMessage" && /Set provider executi
 }
 if (!calls.some((call) => call.method === "sendMessage" && /Set untagged intent retry limit to 4/.test(call.text))) {
   throw new Error(`Did not see option intent acknowledgement. Calls: ${JSON.stringify(calls, null, 2)}`);
+}
+if (!calls.some((call) => call.method === "sendMessage" && /Workspace cleanup finished for S001/.test(call.text))) {
+  throw new Error(`Did not see workspace cleanup acknowledgement. Calls: ${JSON.stringify(calls, null, 2)}`);
 }
 if (calls.some((call) => /미완료 TODO|\/task|새 작업으로 접수/.test(call.text))) {
   throw new Error(`Task gate language leaked to Telegram replies. Calls: ${JSON.stringify(calls, null, 2)}`);
@@ -360,3 +420,7 @@ console.log(JSON.stringify({
 }, null, 2));
 
 process.exit(0);
+
+async function pathExists(target) {
+  return fs.access(target).then(() => true, () => false);
+}

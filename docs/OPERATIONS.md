@@ -150,6 +150,24 @@ Clean only orphan managed workspaces:
 npm run maintenance:disk -- prune-workspaces
 ```
 
+RemoteAgent also runs conservative workspace cleanup on a schedule when enabled:
+
+```bash
+WORKSPACE_CLEANUP_ENABLED=true
+WORKSPACE_CLEANUP_INTERVAL_MS=86400000
+```
+
+Scheduled workspace cleanup only removes managed workspace directories under `WORKSPACE_ROOT` when they are not referenced by RemoteAgent `state.json`.
+If `state.json` is missing or invalid, workspace cleanup refuses to run.
+
+Clean the current chat session workspace manually from Telegram:
+
+```text
+/cleanup
+```
+
+`/cleanup` does not delete the session workspace itself. It only removes generated/cache/log paths inside the current managed workspace, such as `node_modules`, `dist`, `build`, `coverage`, `.cache`, `.gradle`, `.next`, `.turbo`, `*.log`, `*.tmp`, and `*.tsbuildinfo`. It skips `.git` and refuses non-RemoteAgent-managed workspaces.
+
 Archive old Codex session logs explicitly:
 
 ```bash

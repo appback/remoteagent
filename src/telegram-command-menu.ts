@@ -21,6 +21,7 @@ export const TELEGRAM_COMMAND_MENU = [
   { command: "sandbox", description: "Set Codex sandbox mode" },
   { command: "batch", description: "Collect and send a multi-message batch" },
   { command: "artifacts", description: "List or clean uploaded artifacts" },
+  { command: "cleanup", description: "Clean current session workspace" },
   { command: "bots", description: "List configured Telegram bots" },
   { command: "bot", description: "Manage Telegram bots" },
   { command: "install", description: "Install or update Codex or Claude" },

@@ -13,6 +13,7 @@ import { BotManagementService } from "./services/bot-management-service.js";
 import { ProviderSetupService } from "./services/provider-setup-service.js";
 import { RemoteShellService } from "./services/remote-shell-service.js";
 import { AgentMemoryService } from "./services/agent-memory-service.js";
+import { WorkspaceCleanupService } from "./services/workspace-cleanup-service.js";
 import { deleteTelegramCommandMenu, setTelegramCommandMenu } from "./telegram-command-menu.js";
 import type { ChatSession, CodexSandboxMode, Provider } from "./types.js";
 import type { UserFromGetMe } from "grammy/types";
@@ -37,6 +38,7 @@ const HELP_TEXT = [
   "/option [retry <count>|timeout <seconds>|intent <count>|command-menu <on|off|refresh>]",
   "/state [clear|note <text>]",
   "/artifacts list|cleanup <days>",
+  "/cleanup",
   "/secret set|list|remove",
   "/docs pin|find|list|remove|reinforce",
   "/macro set|list|remove|<alias|number>",
@@ -93,6 +95,7 @@ const RECOGNIZED_COMMANDS = new Set([
   "option",
   "state",
   "artifacts",
+  "cleanup",
   "secret",
   "docs",
   "macro",
@@ -203,6 +206,7 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
   const autoContinue = new AutoContinueController(path.join(config.dataDir, "stop-gates.json"));
   const shellService = new RemoteShellService(config.commandTimeoutMs);
   const memoryService = new AgentMemoryService(config.dataDir);
+  const workspaceCleanupService = new WorkspaceCleanupService(config.dataDir, config.workspaceRoot);
   const sourceBotToken = token;
   const setupService = new ProviderSetupService(
     config.setupCommandTimeoutMs,
@@ -754,6 +758,20 @@ ${bridge.formatStatus(mapping)}`);
       return;
     }
     await reply(ctx, "Usage: `/artifacts list` or `/artifacts cleanup <days>`", { parse_mode: "Markdown" });
+  });
+
+  bot.command("cleanup", async (ctx) => {
+    await ensureOwnerControlAccess(ctx);
+    const botId = getBotId();
+    const chatId = String(ctx.chat.id);
+    const mapping = await bridge.status(botId, chatId);
+    if (!mapping) {
+      await reply(ctx, "No paired session for this chat yet.");
+      return;
+    }
+    const result = await workspaceCleanupService.cleanupSessionWorkspace(mapping.session);
+    await bridge.logSystem(botId, chatId, `Workspace cleanup requested for ${mapping.session.publicId}.`);
+    await reply(ctx, result);
   });
 
   bot.command("secret", async (ctx) => {

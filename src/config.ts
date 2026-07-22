@@ -173,6 +173,8 @@ export const config = {
   artifactCleanupEnabled: readBoolean("ARTIFACT_CLEANUP_ENABLED", true),
   artifactRetentionDays: readTimeout("ARTIFACT_RETENTION_DAYS", 30),
   artifactCleanupIntervalMs: readTimeout("ARTIFACT_CLEANUP_INTERVAL_MS", 86_400_000),
+  workspaceCleanupEnabled: readBoolean("WORKSPACE_CLEANUP_ENABLED", true),
+  workspaceCleanupIntervalMs: readTimeout("WORKSPACE_CLEANUP_INTERVAL_MS", 86_400_000),
   dataDir: defaultDataDir,
   defaultMode: readMode("DEFAULT_MODE", "codex"),
   defaultWorkspace: path.resolve(process.env.DEFAULT_WORKSPACE?.trim() || os.homedir()),
