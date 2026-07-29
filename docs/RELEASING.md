@@ -174,3 +174,26 @@ Runtime targets:
 server 30: 0.15.5 active
 server 26: 0.15.5 running
 ```
+
+## Release 0.17.0
+
+Date: 2026-07-29
+
+Changes:
+
+- Queued instructions receive runtime-unique `Q001`-style ids.
+- `/queue` lists instructions waiting behind the current session work.
+- `/queue remove <id>` removes one selected waiting instruction.
+- `/queue del` removes the most recently queued instruction.
+- `/stop` reports and clears queued work-loop instructions as well as pending message batches.
+- Telegram startup preserves the configured bot username when `getMe` temporarily fails, preventing existing chat/session bindings from being bypassed by a generated numeric bot identity.
+
+Validated:
+
+```bash
+npm run check
+npm run build
+npm run selftest:telegram
+npm run release:publish
+npm run release:deploy -- 0.17.0 all
+```
