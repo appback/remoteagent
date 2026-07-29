@@ -123,6 +123,9 @@ Current command surface implemented in `src/bot.ts`:
 | `/batch done` | Alias for `/batch send` |
 | `/batch cancel` | Discards the current batch |
 | `/batch status` | Shows current batch state |
+| `/queue` | Lists instructions waiting behind the active session work |
+| `/queue remove <id>` | Removes one waiting instruction by its `Q001`-style id |
+| `/queue del` | Removes the most recently queued instruction |
 
 Multi-bot polling is tiered by recent activity and active provider work. See [docs/BOT_POLLING_POLICY.md](./docs/BOT_POLLING_POLICY.md).
 

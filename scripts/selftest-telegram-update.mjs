@@ -93,6 +93,10 @@ const providerCalls = [];
 let providerMode = "success";
 let untaggedIntentCalls = 0;
 let missingEvidenceCalls = 0;
+let queueHoldStartedResolve;
+let queueHoldReleaseResolve;
+let queueHoldStartedPromise = Promise.resolve();
+let queueHoldReleasePromise = Promise.resolve();
 const provider = {
   async send(request) {
     providerCalls.push(request);
@@ -121,6 +125,17 @@ const provider = {
         output: missingEvidenceCalls === 1
           ? "REPORT:result\n수정 완료했습니다."
           : "REPORT:result\n수정 완료했습니다.\n\n근거:\n- 변경 파일: `src/example.ts`\n- 검증: `npm run check` 통과",
+      };
+    }
+    if (providerMode === "queue-hold") {
+      queueHoldStartedResolve?.();
+      await queueHoldReleasePromise;
+      return {
+        provider: "codex",
+        sessionId: request.sessionId || "mock-thread",
+        publicSessionId: request.publicSessionId,
+        cwd: request.cwd,
+        output: "REPORT:result\nactive queue test completed",
       };
     }
     return {
@@ -178,6 +193,34 @@ function update(text) {
 
 async function send(text) {
   await injectedBot.handleUpdates([update(text)]);
+}
+
+async function readTelegramCalls() {
+  return (await fs.readFile(telegramCalls, "utf8"))
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const [method, chatId, textB64 = ""] = line.split("\t");
+      return {
+        method,
+        chat_id: chatId,
+        text: Buffer.from(textB64, "base64").toString("utf8"),
+      };
+    });
+}
+
+async function waitForTelegramCall(predicate, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const calls = await readTelegramCalls();
+    const match = [...calls].reverse().find(predicate);
+    if (match) {
+      return match;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error("Timed out waiting for Telegram self-test call.");
 }
 
 await send("/start codex");
@@ -418,6 +461,60 @@ if (evidenceCalls.some((call) => call.method === "sendMessage" && /^수정 완�
   throw new Error(`Evidence-free completion leaked as final Telegram message. Calls: ${JSON.stringify(evidenceCalls, null, 2)}`);
 }
 
+const queueProviderCallsBefore = providerCalls.length;
+providerMode = "queue-hold";
+queueHoldStartedPromise = new Promise((resolve) => {
+  queueHoldStartedResolve = resolve;
+});
+queueHoldReleasePromise = new Promise((resolve) => {
+  queueHoldReleaseResolve = resolve;
+});
+
+await send("/batch start");
+await send("active queue regression test");
+const activeQueueSend = send("/batch send");
+await queueHoldStartedPromise;
+
+await send("/batch start");
+await send("first queued instruction");
+const firstQueuedSend = send("/batch send");
+const firstQueueNotice = await waitForTelegramCall((call) => /Queued instruction Q\d+/.test(call.text));
+const firstQueueId = firstQueueNotice.text.match(/Queued instruction (Q\d+)/)?.[1];
+if (!firstQueueId) {
+  throw new Error(`First queued instruction did not receive an id: ${firstQueueNotice.text}`);
+}
+
+await send("/batch start");
+await send("second queued instruction");
+const secondQueuedSend = send("/batch send");
+const secondQueueNotice = await waitForTelegramCall((call) => {
+  const queueId = call.text.match(/Queued instruction (Q\d+)/)?.[1];
+  return Boolean(queueId && queueId !== firstQueueId);
+});
+const secondQueueId = secondQueueNotice.text.match(/Queued instruction (Q\d+)/)?.[1];
+if (!secondQueueId) {
+  throw new Error(`Second queued instruction did not receive an id: ${secondQueueNotice.text}`);
+}
+
+await send("/queue");
+const queueListCall = await waitForTelegramCall((call) =>
+  call.text.includes(firstQueueId) && call.text.includes(secondQueueId)
+);
+if (!/Queued instructions for S001 \(2\)/.test(queueListCall.text)) {
+  throw new Error(`Queue list did not report both entries: ${queueListCall.text}`);
+}
+
+await send(`/queue remove ${firstQueueId}`);
+await waitForTelegramCall((call) => call.text.includes(`Removed queued instruction ${firstQueueId}`));
+await send("/queue del");
+await waitForTelegramCall((call) => call.text.includes(`Removed queued instruction ${secondQueueId}`));
+
+queueHoldReleaseResolve?.();
+await Promise.all([activeQueueSend, firstQueuedSend, secondQueuedSend]);
+if (providerCalls.length !== queueProviderCallsBefore + 1) {
+  throw new Error(`Removed queued instructions reached the provider: ${providerCalls.length - queueProviderCallsBefore} calls`);
+}
+
 console.log(JSON.stringify({
   ok: true,
   dataDir,
@@ -430,6 +527,8 @@ console.log(JSON.stringify({
   providerCalls: providerCalls.length,
   untaggedIntentCalls,
   missingEvidenceCalls,
+  queueRemoveById: firstQueueId,
+  queueRemoveLatest: secondQueueId,
   timeoutFinalMessage: true,
   telegramSendMessages: evidenceCalls.filter((call) => call.method === "sendMessage").length,
 }, null, 2));

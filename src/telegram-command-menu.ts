@@ -17,6 +17,7 @@ export const TELEGRAM_COMMAND_MENU = [
   { command: "docs", description: "Pin or find session documents" },
   { command: "macro", description: "Save or run reusable instructions" },
   { command: "model", description: "Show or change provider model" },
+  { command: "queue", description: "List or remove queued instructions" },
   { command: "stop", description: "Stop active work and clear queued messages" },
   { command: "sandbox", description: "Set Codex sandbox mode" },
   { command: "batch", description: "Collect and send a multi-message batch" },

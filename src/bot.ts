@@ -32,6 +32,7 @@ const HELP_TEXT = [
   "/attach codex <thread_id>",
   "/attach claude <session_id>",
   "/model [name]",
+  "/queue [remove <id>|del]",
   "/stop",
   "/sandbox codex <read-only|workspace-write|danger-full-access>",
   "/status",
@@ -89,6 +90,7 @@ const RECOGNIZED_COMMANDS = new Set([
   "batch",
   "attach",
   "model",
+  "queue",
   "stop",
   "sandbox",
   "status",
@@ -109,6 +111,22 @@ const TELEGRAM_STALE_UPDATE_GRACE_SECONDS = 10;
 const TELEGRAM_PROCESS_STARTED_AT_SECONDS = Math.floor(Date.now() / 1000);
 const workLoopTails = new Map<string, Promise<void>>();
 const workLoopGenerations = new Map<string, number>();
+const queuedWorkLoops = new Map<string, QueuedWorkLoopEntry>();
+let nextQueuedWorkSequence = 1;
+
+type QueuedWorkLoopEntry = {
+  id: string;
+  sequence: number;
+  activeKey: string;
+  botId: string;
+  chatId: string;
+  sessionId?: string;
+  publicSessionId?: string;
+  messagePreview: string;
+  createdAt: string;
+  canceled: boolean;
+  release: () => void;
+};
 
 const REPORT_CONTINUE_PROMPT = [
   "Continue the same task now.",
@@ -559,17 +577,56 @@ ${bridge.formatStatus(mapping)}`);
     await reply(ctx, `Set ${mapping.session.mode} model to ${model}.\n\n${bridge.formatStatus(mapping)}`);
   });
 
+  bot.command("queue", async (ctx) => {
+    const botId = getBotId();
+    const chatId = String(ctx.chat.id);
+    const mapping = await bridge.status(botId, chatId);
+    const activeKey = workLoopKey(botId, chatId, mapping?.session.sessionId);
+    const { args, rest } = parseCommand(ctx.message?.text, 2);
+    const action = args[0]?.toLowerCase();
+    const selector = args[1];
+
+    if (rest?.trim() || (action && action !== "list" && action !== "remove" && action !== "rm" && action !== "del")) {
+      await reply(ctx, "Usage: `/queue`, `/queue remove <id>`, or `/queue del`", { parse_mode: "Markdown" });
+      return;
+    }
+
+    if (!action || action === "list") {
+      await reply(ctx, formatQueuedWorkLoops(activeKey, mapping?.session.publicId));
+      return;
+    }
+
+    if ((action === "remove" || action === "rm") && !selector) {
+      await reply(ctx, "Usage: `/queue remove <id>`", { parse_mode: "Markdown" });
+      return;
+    }
+
+    const removed = removeQueuedWorkLoop(activeKey, selector);
+    if (!removed) {
+      const target = selector ? normalizeQueueId(selector) : "the latest queued instruction";
+      await reply(ctx, `Queued instruction was not found: ${target}`);
+      return;
+    }
+
+    await bridge.logSystem(botId, chatId, `Removed queued instruction ${removed.id} for ${activeKey}.`);
+    await reply(
+      ctx,
+      `Removed queued instruction ${removed.id} from ${removed.publicSessionId ?? "this session"}.\n`
+      + `Remaining queued instructions: ${listQueuedWorkLoops(activeKey).length}`,
+    );
+  });
+
   bot.command("stop", async (ctx) => {
     const botId = getBotId();
     const chatId = String(ctx.chat.id);
     const mapping = await bridge.status(botId, chatId);
     const sessionId = mapping?.session.sessionId;
     autoContinue.requestStop(botId, chatId, sessionId);
-    cancelQueuedWorkLoops(botId, chatId, sessionId);
+    const queuedWorkCount = cancelQueuedWorkLoops(botId, chatId, sessionId);
     const pendingBatch = messageBatcher.cancelPending(botId, chatId);
     const manualBatch = messageBatcher.cancelManual(botId, chatId);
     if (!autoContinue.beginStop(botId, chatId, sessionId)) {
-      const batchCount = pendingBatch.count + manualBatch.count;
+      const batchCount = queuedWorkCount + pendingBatch.count + manualBatch.count;
       if (batchCount > 0) {
         await bridge.logSystem(botId, chatId, `Duplicate stop discarded ${batchCount} queued message(s).`);
       }
@@ -579,7 +636,7 @@ ${bridge.formatStatus(mapping)}`);
     try {
       const result = await bridge.stopActiveRun(botId, chatId);
       await bridge.logSystem(botId, chatId, "Stop requested for auto-continue.");
-      const batchCount = pendingBatch.count + manualBatch.count;
+      const batchCount = queuedWorkCount + pendingBatch.count + manualBatch.count;
       await reply(
         ctx,
         result.stopped
@@ -1513,12 +1570,35 @@ async function routeTelegramWorkLoop(
     .then(() => gate);
   workLoopTails.set(activeKey, currentTail);
 
+  let queuedEntry: QueuedWorkLoopEntry | undefined;
   if (previousTail) {
-    await bridge.logSystem(botId, chatId, `Queued overlapping Telegram work loop for ${activeKey}.`);
-    await helpers.reportProgress([`Queued instruction for ${currentSession?.session.publicId ?? "this session"}. It will run after the active work finishes.`]);
-    await previousTail.catch(() => undefined);
-    if ((workLoopGenerations.get(activeKey) ?? 0) !== generation || autoContinue.isStopRequested(botId, chatId, sessionId)) {
-      await bridge.logSystem(botId, chatId, `Discarded queued Telegram work loop for ${activeKey}.`);
+    queuedEntry = registerQueuedWorkLoop({
+      activeKey,
+      botId,
+      chatId,
+      sessionId,
+      publicSessionId: currentSession?.session.publicId,
+      message,
+      release,
+    });
+    try {
+      await bridge.logSystem(botId, chatId, `Queued overlapping Telegram work loop ${queuedEntry.id} for ${activeKey}.`);
+      await helpers.reportProgress([
+        `Queued instruction ${queuedEntry.id} for ${currentSession?.session.publicId ?? "this session"}. It will run after the active work finishes.`,
+        `Remove it with \`/queue remove ${queuedEntry.id}\`, or remove the latest queued instruction with \`/queue del\`.`,
+      ]);
+      await previousTail.catch(() => undefined);
+    } catch (error) {
+      queuedWorkLoops.delete(queuedEntry.id);
+      release();
+      if (workLoopTails.get(activeKey) === currentTail) {
+        workLoopTails.delete(activeKey);
+      }
+      throw error;
+    }
+    queuedWorkLoops.delete(queuedEntry.id);
+    if (queuedEntry.canceled || (workLoopGenerations.get(activeKey) ?? 0) !== generation || autoContinue.isStopRequested(botId, chatId, sessionId)) {
+      await bridge.logSystem(botId, chatId, `Discarded queued Telegram work loop ${queuedEntry.id} for ${activeKey}.`);
       release();
       if (workLoopTails.get(activeKey) === currentTail) {
         workLoopTails.delete(activeKey);
@@ -1761,14 +1841,101 @@ function workLoopKey(botId: string, chatId: string, sessionId?: string): string 
   return sessionId ? `session:${sessionId}` : `chat:${botId}:${chatId}`;
 }
 
-function cancelQueuedWorkLoops(botId: string, chatId: string, sessionId?: string): void {
+function cancelQueuedWorkLoops(botId: string, chatId: string, sessionId?: string): number {
   const keys = [workLoopKey(botId, chatId, sessionId)];
   if (sessionId) {
     keys.push(workLoopKey(botId, chatId));
   }
+  const keySet = new Set(keys);
+  let removed = 0;
+  for (const entry of queuedWorkLoops.values()) {
+    if (!keySet.has(entry.activeKey)) {
+      continue;
+    }
+    entry.canceled = true;
+    entry.release();
+    queuedWorkLoops.delete(entry.id);
+    removed += 1;
+  }
   for (const key of keys) {
     workLoopGenerations.set(key, (workLoopGenerations.get(key) ?? 0) + 1);
   }
+  return removed;
+}
+
+function registerQueuedWorkLoop(input: {
+  activeKey: string;
+  botId: string;
+  chatId: string;
+  sessionId?: string;
+  publicSessionId?: string;
+  message: string;
+  release: () => void;
+}): QueuedWorkLoopEntry {
+  const sequence = nextQueuedWorkSequence;
+  nextQueuedWorkSequence += 1;
+  const entry: QueuedWorkLoopEntry = {
+    id: `Q${String(sequence).padStart(3, "0")}`,
+    sequence,
+    activeKey: input.activeKey,
+    botId: input.botId,
+    chatId: input.chatId,
+    sessionId: input.sessionId,
+    publicSessionId: input.publicSessionId,
+    messagePreview: summarizeQueuedInstruction(input.message),
+    createdAt: new Date().toISOString(),
+    canceled: false,
+    release: input.release,
+  };
+  queuedWorkLoops.set(entry.id, entry);
+  return entry;
+}
+
+function listQueuedWorkLoops(activeKey: string): QueuedWorkLoopEntry[] {
+  return [...queuedWorkLoops.values()]
+    .filter((entry) => entry.activeKey === activeKey && !entry.canceled)
+    .sort((left, right) => left.sequence - right.sequence);
+}
+
+function removeQueuedWorkLoop(activeKey: string, selector?: string): QueuedWorkLoopEntry | undefined {
+  const entries = listQueuedWorkLoops(activeKey);
+  const target = selector
+    ? queuedWorkLoops.get(normalizeQueueId(selector))
+    : entries.at(-1);
+  if (!target || target.activeKey !== activeKey || target.canceled) {
+    return undefined;
+  }
+  target.canceled = true;
+  target.release();
+  queuedWorkLoops.delete(target.id);
+  return target;
+}
+
+function normalizeQueueId(value: string): string {
+  const normalized = value.trim().toUpperCase();
+  if (/^\d+$/.test(normalized)) {
+    return `Q${normalized.padStart(3, "0")}`;
+  }
+  return normalized;
+}
+
+function summarizeQueuedInstruction(message: string): string {
+  const normalized = message.replace(/\s+/g, " ").trim();
+  return normalized.length > 100 ? `${normalized.slice(0, 97)}...` : normalized;
+}
+
+function formatQueuedWorkLoops(activeKey: string, publicSessionId?: string): string {
+  const entries = listQueuedWorkLoops(activeKey);
+  if (entries.length === 0) {
+    return `No queued instructions for ${publicSessionId ?? "this chat"}.`;
+  }
+  return [
+    `Queued instructions for ${publicSessionId ?? "this chat"} (${entries.length})`,
+    ...entries.map((entry) => `${entry.id}: ${entry.messagePreview || "(empty instruction)"}`),
+    "",
+    `Remove one: /queue remove ${entries[0]!.id}`,
+    "Remove latest: /queue del",
+  ].join("\n");
 }
 
 type PendingAnimationHelpers = {
