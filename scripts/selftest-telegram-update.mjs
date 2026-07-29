@@ -69,6 +69,7 @@ const [
   { FileStore },
   { AgentMemoryService },
   { WorkspaceCleanupService },
+  { buildFallbackBotInfo },
 ] = await Promise.all([
   import(path.join(root, "dist", "bot.js")),
   import(path.join(root, "dist", "services", "bridge-service.js")),
@@ -76,7 +77,17 @@ const [
   import(path.join(root, "dist", "store", "file-store.js")),
   import(path.join(root, "dist", "services", "agent-memory-service.js")),
   import(path.join(root, "dist", "services", "workspace-cleanup-service.js")),
+  import(path.join(root, "dist", "telegram-bot-identity.js")),
 ]);
+
+const persistedBotIdentity = buildFallbackBotInfo(
+  "8966593034:test-token",
+  0,
+  "@appbackadmin_bot",
+);
+if (persistedBotIdentity.username !== "appbackadmin_bot") {
+  throw new Error(`Configured bot username was not preserved during getMe fallback: ${persistedBotIdentity.username}`);
+}
 
 const providerCalls = [];
 let providerMode = "success";

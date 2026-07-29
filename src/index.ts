@@ -21,6 +21,7 @@ import { ProviderRecoveryService } from "./services/provider-recovery-service.js
 import { computePolicyPollIntervalMs, computeRecentMessageRanks } from "./services/polling-policy.js";
 import { terminateAllSpawnedExecutions } from "./adapters/windows-shell.js";
 import { setTelegramCommandMenu } from "./telegram-command-menu.js";
+import { buildBotInfoFromIdentity, buildFallbackBotInfo } from "./telegram-bot-identity.js";
 import type { ProviderAdapter } from "./adapters/provider-adapter.js";
 import type { Provider } from "./types.js";
 import type { Bot } from "grammy";
@@ -101,7 +102,9 @@ async function main(): Promise<void> {
       });
   }
 
-  const botInfos = await Promise.all(config.telegramBotTokens.map((token, index) => resolveBotInfo(token, index)));
+  const botInfos = await Promise.all(config.telegramBotTokens.map((token, index) =>
+    resolveBotInfo(token, index, config.telegramBotUsernames[index])
+  ));
   const bots = config.telegramBotTokens.map((token, index) => createBot(token, bridge, botManagement, botInfos[index]!));
 
   if (config.telegramCommandMenuEnabled) {
@@ -615,7 +618,7 @@ type TelegramGetMeResponse = {
   };
 };
 
-async function resolveBotInfo(token: string, index: number): Promise<UserFromGetMe> {
+async function resolveBotInfo(token: string, index: number, configuredUsername?: string): Promise<UserFromGetMe> {
   try {
     const { stdout } = await execFileAsync("curl", [
       "-sS",
@@ -633,35 +636,7 @@ async function resolveBotInfo(token: string, index: number): Promise<UserFromGet
     console.warn(`Telegram getMe failed for bot ${tokenIdLabel(token)}: ${summarizeTelegramIdentityError(error)}`);
   }
 
-  return buildFallbackBotInfo(token, index);
-}
-
-function buildBotInfoFromIdentity(id: number, username: string, firstName?: string): UserFromGetMe {
-  return {
-    id,
-    is_bot: true,
-    first_name: firstName || username,
-    username,
-    can_join_groups: false,
-    can_read_all_group_messages: false,
-    supports_inline_queries: false,
-  } as UserFromGetMe;
-}
-
-function buildFallbackBotInfo(token: string, index: number): UserFromGetMe {
-  const id = Number.parseInt(token.split(":", 1)[0] ?? "", 10);
-  const fallbackUsername = knownBotUsername(id);
-  const username = fallbackUsername || `bot_${Number.isFinite(id) ? id : index + 1}`;
-
-  return {
-    id: Number.isFinite(id) ? id : index + 1,
-    is_bot: true,
-    first_name: username,
-    username,
-    can_join_groups: false,
-    can_read_all_group_messages: false,
-    supports_inline_queries: false,
-  } as UserFromGetMe;
+  return buildFallbackBotInfo(token, index, configuredUsername);
 }
 
 function tokenIdLabel(token: string): string {
@@ -678,16 +653,6 @@ function summarizeTelegramIdentityError(error: unknown): string {
   return [code, error.message.replace(/bot\d+:[A-Za-z0-9_-]+/g, "bot[redacted]")]
     .filter(Boolean)
     .join(" ");
-}
-
-function knownBotUsername(id: number): string | undefined {
-  if (id === 8369496408) {
-    return "codex_remoteagent_bot";
-  }
-  if (id === 8429712341) {
-    return "sqream_bot";
-  }
-  return undefined;
 }
 
 function commandExists(command: string): boolean {

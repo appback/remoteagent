@@ -44,6 +44,10 @@ Current production bot ownership is intentionally split:
 Assign each Telegram bot token to one runtime at a time.
 Bot polling conflicts are treated as incidents, not harmless warnings.
 
+`TELEGRAM_BOT_TOKENS` and `TELEGRAM_BOT_USERNAMES` are parallel persisted lists.
+At startup, Telegram `getMe` is the preferred identity source, but a temporary DNS or Telegram failure must fall back to the persisted username at the same list position.
+Using a generated `bot_<numeric-id>` identity when a persisted username exists breaks the existing `<username>:<chat-id>` session binding.
+
 When a runtime has several configured Telegram bots, polling pressure can become operationally visible.
 RemoteAgent reduces that pressure with rank-based polling intervals instead of deep sleep or a special main bot.
 See [BOT_POLLING_POLICY.md](./BOT_POLLING_POLICY.md).
