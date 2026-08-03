@@ -169,16 +169,7 @@ export class CodexAdapter implements ProviderAdapter {
 
     let text: string | undefined;
     try {
-      const event = JSON.parse(line) as {
-        type?: string;
-        item?: {
-          type?: string;
-          text?: string;
-        };
-      };
-      text = event.type === "item.completed" && event.item?.type === "agent_message"
-        ? event.item.text?.trim()
-        : undefined;
+      text = this.extractEventAgentText(JSON.parse(line));
     } catch {
       // Ignore non-JSON stdout and let the normal final-response parser handle it.
       return;
@@ -187,6 +178,42 @@ export class CodexAdapter implements ProviderAdapter {
     if (text && /^REPORT:progress(?:\r?\n|$)/i.test(text)) {
       await onProgress(text);
     }
+  }
+
+  private extractEventAgentText(event: unknown): string | undefined {
+    if (!event || typeof event !== "object") {
+      return undefined;
+    }
+
+    const record = event as {
+      type?: string;
+      item?: { type?: string; text?: string };
+      payload?: {
+        type?: string;
+        message?: string;
+        text?: string;
+        content?: Array<{ type?: string; text?: string }>;
+      };
+    };
+
+    if (record.type === "item.completed" && record.item?.type === "agent_message") {
+      return record.item.text?.trim();
+    }
+
+    if (record.type === "event_msg" && record.payload?.type === "agent_message") {
+      return (record.payload.message ?? record.payload.text)?.trim();
+    }
+
+    if (record.type === "response_item" && record.payload?.type === "message") {
+      const text = record.payload.content
+        ?.filter((item) => item.type === "output_text" && typeof item.text === "string")
+        .map((item) => item.text)
+        .join("\n")
+        .trim();
+      return text || record.payload.text?.trim();
+    }
+
+    return undefined;
   }
 
   private extractThreadId(stdout: string): string | undefined {

@@ -23,7 +23,9 @@ printf '%s\\n' '{"type":"thread.started","thread_id":"stream-thread"}'
 printf '%s' '{"type":"item.completed","item":{"type":"agent_message","text":"REPORT:progress\\nphase one"}}'
 printf '\\n'
 sleep 0.05
-printf '%s\\n' '{"type":"item.completed","item":{"type":"agent_message","text":"REPORT:progress\\nphase two"}}'
+printf '%s\\n' '{"type":"event_msg","payload":{"type":"agent_message","message":"REPORT:progress\\nphase two"}}'
+sleep 0.05
+printf '%s\\n' '{"type":"response_item","payload":{"type":"message","content":[{"type":"output_text","text":"REPORT:progress\\nphase three"}]}}'
 sleep 0.05
 printf '%s\\n' '{"type":"item.completed","item":{"type":"agent_message","text":"REPORT:result\\nfinished"}}'
 printf '%s\\n' 'REPORT:result' 'finished' > "$output"
@@ -50,7 +52,12 @@ const responsePromise = adapter.send({
 const response = await responsePromise;
 settled = true;
 
-if (progress.length !== 2 || !progress[0]?.includes("phase one") || !progress[1]?.includes("phase two")) {
+if (
+  progress.length !== 3
+  || !progress[0]?.includes("phase one")
+  || !progress[1]?.includes("phase two")
+  || !progress[2]?.includes("phase three")
+) {
   throw new Error(`Unexpected streamed progress: ${JSON.stringify(progress)}`);
 }
 if (progress.some((item) => item.includes("REPORT:result"))) {

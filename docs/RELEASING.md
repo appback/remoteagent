@@ -220,3 +220,25 @@ npm run selftest:telegram
 npm run release:publish
 npm run release:deploy -- 0.17.1 30
 ```
+
+## Release 0.18.0
+
+Date: 2026-08-03
+
+Changes:
+
+- Telegram list and option responses provide inline command controls.
+- Queue notices provide inline remove-latest and remove-by-id controls in one message.
+- Codex progress streaming accepts both normalized CLI `item.completed` events and raw `event_msg`/`response_item` agent-message events.
+- The Codex stream self-test covers every supported progress event shape and keeps final results out of the progress callback.
+
+Validated:
+
+```bash
+npm run check
+npm run build
+npm run selftest:codex-stream
+npm run selftest:telegram
+npm run release:publish
+npm run release:deploy -- 0.18.0 30
+```
