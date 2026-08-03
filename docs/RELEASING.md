@@ -197,3 +197,26 @@ npm run selftest:telegram
 npm run release:publish
 npm run release:deploy -- 0.17.0 all
 ```
+
+## Release 0.17.1
+
+Date: 2026-08-03
+
+Changes:
+
+- Codex JSON stdout is parsed while the provider process is running.
+- `REPORT:progress` messages are delivered to Telegram immediately without starting another provider turn.
+- A streamed final progress message is deduplicated from the normal post-process response path.
+- Queue instructions are announced in one Telegram message instead of two.
+- Queue notices include inline `/queue remove Qxxx` and `/queue del` buttons that execute the existing queue removal behavior.
+
+Validated:
+
+```bash
+npm run check
+npm run build
+npm run selftest:codex-stream
+npm run selftest:telegram
+npm run release:publish
+npm run release:deploy -- 0.17.1 30
+```

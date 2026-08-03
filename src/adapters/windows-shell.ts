@@ -13,6 +13,7 @@ export function spawnWithPlatformShell(
   input?: string,
   executionKey?: string,
   extraEnv?: NodeJS.ProcessEnv,
+  onStdoutLine?: (line: string) => void | Promise<void>,
 ): Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean }> {
   return new Promise((resolve, reject) => {
     const command = process.platform === "win32"
@@ -32,6 +33,8 @@ export function spawnWithPlatformShell(
 
     let stdout = "";
     let stderr = "";
+    let stdoutRemainder = "";
+    let stdoutCallbackTail = Promise.resolve();
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
@@ -39,7 +42,22 @@ export function spawnWithPlatformShell(
     }, timeoutMs);
 
     command.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
+      const text = chunk.toString();
+      stdout += text;
+      if (!onStdoutLine) {
+        return;
+      }
+
+      stdoutRemainder += text;
+      const lines = stdoutRemainder.split(/\r?\n/);
+      stdoutRemainder = lines.pop() ?? "";
+      for (const line of lines) {
+        stdoutCallbackTail = stdoutCallbackTail
+          .then(() => onStdoutLine(line))
+          .catch((error) => {
+            console.warn(`[provider-stream] stdout callback failed: ${error instanceof Error ? error.message : String(error)}`);
+          });
+      }
     });
 
     command.stderr.on("data", (chunk) => {
@@ -59,11 +77,19 @@ export function spawnWithPlatformShell(
     }
     command.stdin.end();
 
-    command.on("close", (code) => {
+    command.on("close", async (code) => {
       clearTimeout(timer);
       if (executionKey && activeCommands.get(executionKey) === command) {
         activeCommands.delete(executionKey);
       }
+      if (onStdoutLine && stdoutRemainder) {
+        stdoutCallbackTail = stdoutCallbackTail
+          .then(() => onStdoutLine(stdoutRemainder))
+          .catch((error) => {
+            console.warn(`[provider-stream] stdout callback failed: ${error instanceof Error ? error.message : String(error)}`);
+          });
+      }
+      await stdoutCallbackTail;
       resolve({ stdout, stderr, code, timedOut });
     });
   });

@@ -21,23 +21,27 @@ set -euo pipefail
 method="unknown"
 text=""
 chat_id=""
+reply_markup=""
 for arg in "$@"; do
   case "$arg" in
     https://api.telegram.org/bot*/sendMessage) method="sendMessage" ;;
     https://api.telegram.org/bot*/editMessageText) method="editMessageText" ;;
     https://api.telegram.org/bot*/deleteMessage) method="deleteMessage" ;;
     https://api.telegram.org/bot*/sendDocument) method="sendDocument" ;;
+    https://api.telegram.org/bot*/answerCallbackQuery) method="answerCallbackQuery" ;;
     chat_id=*) chat_id="\${arg#chat_id=}" ;;
     text=*) text="\${arg#text=}" ;;
+    reply_markup=*) reply_markup="\${arg#reply_markup=}" ;;
   esac
 done
 text_b64="$(printf '%s' "$text" | base64 -w 0)"
-printf '%s\\t%s\\t%s\\n' "$method" "$chat_id" "$text_b64" >> ${JSON.stringify(telegramCalls)}
+reply_markup_b64="$(printf '%s' "$reply_markup" | base64 -w 0)"
+printf '%s\\t%s\\t%s\\t%s\\n' "$method" "$chat_id" "$text_b64" "$reply_markup_b64" >> ${JSON.stringify(telegramCalls)}
 case "$method" in
   sendMessage|editMessageText)
     printf '{"ok":true,"result":{"message_id":1001}}'
     ;;
-  deleteMessage)
+  deleteMessage|answerCallbackQuery)
     printf '{"ok":true,"result":true}'
     ;;
   sendDocument)
@@ -93,6 +97,7 @@ const providerCalls = [];
 let providerMode = "success";
 let untaggedIntentCalls = 0;
 let missingEvidenceCalls = 0;
+let streamingFinalProgressCalls = 0;
 let queueHoldStartedResolve;
 let queueHoldReleaseResolve;
 let queueHoldStartedPromise = Promise.resolve();
@@ -136,6 +141,38 @@ const provider = {
         publicSessionId: request.publicSessionId,
         cwd: request.cwd,
         output: "REPORT:result\nactive queue test completed",
+      };
+    }
+    if (providerMode === "streaming-progress") {
+      await request.onProgress?.("REPORT:progress\nstreamed phase one completed");
+      await request.onProgress?.("REPORT:progress\nstreamed phase two completed");
+      return {
+        provider: "codex",
+        sessionId: request.sessionId || "mock-thread",
+        publicSessionId: request.publicSessionId,
+        cwd: request.cwd,
+        output: "REPORT:result\nstreamed provider completed with evidence: `stream-test.log`",
+      };
+    }
+    if (providerMode === "streaming-final-progress") {
+      streamingFinalProgressCalls += 1;
+      if (streamingFinalProgressCalls === 1) {
+        const output = "REPORT:progress\nstreamed final progress completed";
+        await request.onProgress?.(output);
+        return {
+          provider: "codex",
+          sessionId: request.sessionId || "mock-thread",
+          publicSessionId: request.publicSessionId,
+          cwd: request.cwd,
+          output,
+        };
+      }
+      return {
+        provider: "codex",
+        sessionId: request.sessionId || "mock-thread",
+        publicSessionId: request.publicSessionId,
+        cwd: request.cwd,
+        output: "REPORT:result\nstreamed continuation completed with evidence: `stream-final.log`",
       };
     }
     return {
@@ -191,8 +228,30 @@ function update(text) {
   };
 }
 
+function callbackUpdate(data, sourceMessageId = messageId++) {
+  return {
+    update_id: updateId++,
+    callback_query: {
+      id: `callback-${updateId}`,
+      from: { id: 111, is_bot: false, first_name: "Tester", username: "tester" },
+      message: {
+        message_id: sourceMessageId,
+        date: now(),
+        chat: { id: 111222333, type: "private", first_name: "Tester", username: "tester" },
+        text: "queue controls",
+      },
+      chat_instance: "selftest",
+      data,
+    },
+  };
+}
+
 async function send(text) {
   await injectedBot.handleUpdates([update(text)]);
+}
+
+async function click(data) {
+  await injectedBot.handleUpdates([callbackUpdate(data)]);
 }
 
 async function readTelegramCalls() {
@@ -201,11 +260,12 @@ async function readTelegramCalls() {
     .split("\n")
     .filter(Boolean)
     .map((line) => {
-      const [method, chatId, textB64 = ""] = line.split("\t");
+      const [method, chatId, textB64 = "", replyMarkupB64 = ""] = line.split("\t");
       return {
         method,
         chat_id: chatId,
         text: Buffer.from(textB64, "base64").toString("utf8"),
+        reply_markup: Buffer.from(replyMarkupB64, "base64").toString("utf8"),
       };
     });
 }
@@ -461,6 +521,36 @@ if (evidenceCalls.some((call) => call.method === "sendMessage" && /^수정 완�
   throw new Error(`Evidence-free completion leaked as final Telegram message. Calls: ${JSON.stringify(evidenceCalls, null, 2)}`);
 }
 
+providerMode = "streaming-progress";
+await send("/batch start");
+await send("streaming progress regression test");
+await send("/batch send");
+
+const streamingCalls = await readTelegramCalls();
+for (const phase of ["streamed phase one completed", "streamed phase two completed"]) {
+  const matches = streamingCalls.filter((call) => call.method === "sendMessage" && call.text.includes(phase));
+  if (matches.length !== 1) {
+    throw new Error(`Expected exactly one streamed Telegram progress message for ${phase}, got ${matches.length}`);
+  }
+}
+if (!streamingCalls.some((call) => call.method === "sendMessage" && call.text.includes("streamed provider completed"))) {
+  throw new Error("Streaming provider final result was not delivered");
+}
+
+providerMode = "streaming-final-progress";
+await send("/batch start");
+await send("streaming final progress deduplication test");
+await send("/batch send");
+const streamingFinalCalls = await readTelegramCalls();
+const streamedFinalProgressMessages = streamingFinalCalls.filter((call) =>
+  call.method === "sendMessage" && call.text.includes("streamed final progress completed")
+);
+if (streamedFinalProgressMessages.length !== 1 || streamingFinalProgressCalls !== 2) {
+  throw new Error(
+    `Final streamed progress was not deduplicated: messages=${streamedFinalProgressMessages.length} providerCalls=${streamingFinalProgressCalls}`,
+  );
+}
+
 const queueProviderCallsBefore = providerCalls.length;
 providerMode = "queue-hold";
 queueHoldStartedPromise = new Promise((resolve) => {
@@ -483,6 +573,16 @@ const firstQueueId = firstQueueNotice.text.match(/Queued instruction (Q\d+)/)?.[
 if (!firstQueueId) {
   throw new Error(`First queued instruction did not receive an id: ${firstQueueNotice.text}`);
 }
+const firstQueueNotices = (await readTelegramCalls()).filter((call) =>
+  call.method === "sendMessage" && call.text.includes(`Queued instruction ${firstQueueId} for`)
+);
+if (firstQueueNotices.length !== 1) {
+  throw new Error(`Queue notice should be one Telegram message, got ${firstQueueNotices.length}`);
+}
+if (!firstQueueNotice.reply_markup.includes(`remoteagent:queue:remove:${firstQueueId}`)
+  || !firstQueueNotice.reply_markup.includes("remoteagent:queue:del")) {
+  throw new Error(`Queue notice buttons are missing: ${firstQueueNotice.reply_markup}`);
+}
 
 await send("/batch start");
 await send("second queued instruction");
@@ -504,9 +604,9 @@ if (!/Queued instructions for S001 \(2\)/.test(queueListCall.text)) {
   throw new Error(`Queue list did not report both entries: ${queueListCall.text}`);
 }
 
-await send(`/queue remove ${firstQueueId}`);
+await click(`remoteagent:queue:remove:${firstQueueId}`);
 await waitForTelegramCall((call) => call.text.includes(`Removed queued instruction ${firstQueueId}`));
-await send("/queue del");
+await click("remoteagent:queue:del");
 await waitForTelegramCall((call) => call.text.includes(`Removed queued instruction ${secondQueueId}`));
 
 queueHoldReleaseResolve?.();
@@ -527,6 +627,8 @@ console.log(JSON.stringify({
   providerCalls: providerCalls.length,
   untaggedIntentCalls,
   missingEvidenceCalls,
+  streamingProgress: true,
+  streamingFinalProgressDeduplicated: true,
   queueRemoveById: firstQueueId,
   queueRemoveLatest: secondQueueId,
   timeoutFinalMessage: true,

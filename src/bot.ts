@@ -15,7 +15,7 @@ import { RemoteShellService } from "./services/remote-shell-service.js";
 import { AgentMemoryService } from "./services/agent-memory-service.js";
 import { WorkspaceCleanupService } from "./services/workspace-cleanup-service.js";
 import { deleteTelegramCommandMenu, setTelegramCommandMenu } from "./telegram-command-menu.js";
-import type { ChatSession, CodexSandboxMode, Provider } from "./types.js";
+import type { ChatSession, CodexSandboxMode, Provider, ProviderResponse } from "./types.js";
 import type { UserFromGetMe } from "grammy/types";
 
 const execFileAsync = promisify(execFile);
@@ -282,6 +282,23 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
       }
       throw error;
     }
+  };
+  const removeQueuedInstruction = async (
+    botId: string,
+    chatId: string,
+    selector?: string,
+  ): Promise<string> => {
+    const mapping = await bridge.status(botId, chatId);
+    const activeKey = workLoopKey(botId, chatId, mapping?.session.sessionId);
+    const removed = removeQueuedWorkLoop(activeKey, selector);
+    if (!removed) {
+      const target = selector ? normalizeQueueId(selector) : "the latest queued instruction";
+      return `Queued instruction was not found: ${target}`;
+    }
+
+    await bridge.logSystem(botId, chatId, `Removed queued instruction ${removed.id} for ${activeKey}.`);
+    return `Removed queued instruction ${removed.id} from ${removed.publicSessionId ?? "this session"}.\n`
+      + `Remaining queued instructions: ${listQueuedWorkLoops(activeKey).length}`;
   };
   const runPlanDocumentReinforcement = async (ctx: Context, count: number): Promise<void> => {
     if (!ctx.chat) {
@@ -601,19 +618,7 @@ ${bridge.formatStatus(mapping)}`);
       return;
     }
 
-    const removed = removeQueuedWorkLoop(activeKey, selector);
-    if (!removed) {
-      const target = selector ? normalizeQueueId(selector) : "the latest queued instruction";
-      await reply(ctx, `Queued instruction was not found: ${target}`);
-      return;
-    }
-
-    await bridge.logSystem(botId, chatId, `Removed queued instruction ${removed.id} for ${activeKey}.`);
-    await reply(
-      ctx,
-      `Removed queued instruction ${removed.id} from ${removed.publicSessionId ?? "this session"}.\n`
-      + `Remaining queued instructions: ${listQueuedWorkLoops(activeKey).length}`,
-    );
+    await reply(ctx, await removeQueuedInstruction(botId, chatId, selector));
   });
 
   bot.command("stop", async (ctx) => {
@@ -1082,6 +1087,31 @@ ${bridge.formatStatus(mapping)}`);
     await reply(ctx, "Cleared all pairings for this chat.");
   });
 
+  bot.on("callback_query:data", async (ctx) => {
+    const match = /^remoteagent:queue:(remove:(Q\d+)|del)$/i.exec(ctx.callbackQuery.data);
+    if (!match) {
+      return;
+    }
+
+    const callbackChat = ctx.callbackQuery.message?.chat;
+    if (!callbackChat) {
+      await callTelegramApi<boolean>(token, "answerCallbackQuery", {
+        callback_query_id: ctx.callbackQuery.id,
+        text: "This queue action is no longer available.",
+      });
+      return;
+    }
+
+    const botId = getBotId();
+    const chatId = String(callbackChat.id);
+    const result = await removeQueuedInstruction(botId, chatId, match[2]);
+    await callTelegramApi<boolean>(token, "answerCallbackQuery", {
+      callback_query_id: ctx.callbackQuery.id,
+      text: result.split("\n", 1)[0],
+    });
+    await sendTelegramMessage(token, callbackChat.id, result);
+  });
+
   bot.on("message", async (ctx) => {
     const botId = getBotId();
     const chatId = String(ctx.chat.id);
@@ -1489,7 +1519,7 @@ async function runWithPendingAnimation(
 
   try {
     const helpers: PendingAnimationHelpers = {
-      reportProgress: async (chunks, parseMode) => {
+      reportProgress: async (chunks, parseMode, messageOptions) => {
         const normalized = await normalizeTelegramDelivery(chunks);
         const progressChunks = flattenChunks(normalized.chunks, 3900);
         if (progressChunks.length === 0 && normalized.documents.length === 0) {
@@ -1497,7 +1527,10 @@ async function runWithPendingAnimation(
         }
 
         const rendered = formatProviderTelegramChunks(progressChunks, parseMode);
-        const extra = rendered.parseMode ? { parse_mode: rendered.parseMode } : undefined;
+        const extra: TelegramMessageOptions = {
+          ...messageOptions,
+          ...(rendered.parseMode ? { parse_mode: rendered.parseMode } : {}),
+        };
         for (const chunk of rendered.chunks) {
           await sendTelegramMessage(botToken, chatId, chunk, extra).catch((error) => {
             console.warn(`[telegram-progress-delivery] chat=${chatId} dropped progress message: ${formatTelegramDeliveryError(error)}`);
@@ -1583,10 +1616,24 @@ async function routeTelegramWorkLoop(
     });
     try {
       await bridge.logSystem(botId, chatId, `Queued overlapping Telegram work loop ${queuedEntry.id} for ${activeKey}.`);
-      await helpers.reportProgress([
+      await helpers.reportProgress([[
         `Queued instruction ${queuedEntry.id} for ${currentSession?.session.publicId ?? "this session"}. It will run after the active work finishes.`,
+        "",
         `Remove it with \`/queue remove ${queuedEntry.id}\`, or remove the latest queued instruction with \`/queue del\`.`,
-      ]);
+      ].join("\n")], undefined, {
+        reply_markup: JSON.stringify({
+          inline_keyboard: [[
+            {
+              text: `/queue remove ${queuedEntry.id}`,
+              callback_data: `remoteagent:queue:remove:${queuedEntry.id}`,
+            },
+            {
+              text: "/queue del",
+              callback_data: "remoteagent:queue:del",
+            },
+          ]],
+        }),
+      });
       await previousTail.catch(() => undefined);
     } catch (error) {
       queuedWorkLoops.delete(queuedEntry.id);
@@ -1635,6 +1682,7 @@ async function routeTelegramWorkLoop(
   let missingEvidenceRetryCount = 0;
   let deliveredProgressCount = 0;
   let providerCompleted = false;
+  const streamedProgressKeys = new Set<string>();
   const ensureStillBound = async (phase: string): Promise<void> => {
     if (!sessionId) {
       return;
@@ -1650,6 +1698,24 @@ async function routeTelegramWorkLoop(
       `Telegram work loop stopped during ${phase} because the chat is now bound to another session.`,
     );
     throw new SilentTelegramAbort(`Session ${currentSession?.session.publicId ?? sessionId} is no longer bound to this chat.`);
+  };
+  const deliverStreamedProgress = async (response: ProviderResponse): Promise<void> => {
+    const parsed = parseReportResponses(bridge.formatResponses([response]), transform);
+    if (parsed.kind !== "progress" || parsed.chunks.length === 0) {
+      return;
+    }
+
+    const key = progressDeliveryKey(parsed.chunks);
+    if (streamedProgressKeys.has(key)) {
+      return;
+    }
+    streamedProgressKeys.add(key);
+    deliveredProgressCount += 1;
+    await ensureStillBound(`${label} streamed progress delivery`);
+    if (currentSession) {
+      await memoryService.recordProgress(currentSession.session, parsed.chunks.join("\n"));
+    }
+    await helpers.reportProgress(parsed.chunks);
   };
 
   if (currentSession) {
@@ -1678,8 +1744,8 @@ async function routeTelegramWorkLoop(
 
     try {
       const responses = sessionId
-        ? await bridge.routeSessionMessageForChat(sessionId, botId, chatId, prompt)
-        : await bridge.routeMessage(botId, chatId, prompt);
+        ? await bridge.routeSessionMessageForChat(sessionId, botId, chatId, prompt, deliverStreamedProgress)
+        : await bridge.routeMessage(botId, chatId, prompt, deliverStreamedProgress);
       await ensureStillBound(`${turnLabel} response`);
       const parsed = parseReportResponses(bridge.formatResponses(responses), transform);
       await bridge.logSystem(botId, chatId, `${turnLabel} returned ${parsed.kind}.`);
@@ -1689,21 +1755,25 @@ async function routeTelegramWorkLoop(
       if (parsed.kind === "progress") {
         untaggedIntentRetryCount = 0;
         missingEvidenceRetryCount = 0;
-        deliveredProgressCount += 1;
-        if (currentSession) {
-          const progress = await memoryService.recordProgress(currentSession.session, parsed.chunks.join("\n"));
-          if (progress.repeated) {
-            const repeatedMessage = [
-              "Repeated progress detected. The same work pattern has appeared 3 or more times.",
-              "Automatic continuation stopped so the task can be inspected instead of looping.",
-            ].join("\n");
-            await bridge.logSystem(botId, chatId, repeatedMessage);
-            autoContinue.clear(botId, chatId, sessionId);
-            return [repeatedMessage];
+        const key = progressDeliveryKey(parsed.chunks);
+        if (!streamedProgressKeys.has(key)) {
+          streamedProgressKeys.add(key);
+          deliveredProgressCount += 1;
+          if (currentSession) {
+            const progress = await memoryService.recordProgress(currentSession.session, parsed.chunks.join("\n"));
+            if (progress.repeated) {
+              const repeatedMessage = [
+                "Repeated progress detected. The same work pattern has appeared 3 or more times.",
+                "Automatic continuation stopped so the task can be inspected instead of looping.",
+              ].join("\n");
+              await bridge.logSystem(botId, chatId, repeatedMessage);
+              autoContinue.clear(botId, chatId, sessionId);
+              return [repeatedMessage];
+            }
           }
+          await ensureStillBound(`${turnLabel} progress delivery`);
+          await helpers.reportProgress(parsed.chunks);
         }
-        await ensureStillBound(`${turnLabel} progress delivery`);
-        await helpers.reportProgress(parsed.chunks);
         if (autoContinue.isStopRequested(botId, chatId, sessionId)) {
           const stopMessage = "Automatic continuation stopped after the latest progress report.";
           await bridge.logSystem(botId, chatId, stopMessage);
@@ -1939,7 +2009,11 @@ function formatQueuedWorkLoops(activeKey: string, publicSessionId?: string): str
 }
 
 type PendingAnimationHelpers = {
-  reportProgress: (chunks: string[], parseMode?: "HTML" | "MarkdownV2") => Promise<void>;
+  reportProgress: (
+    chunks: string[],
+    parseMode?: "HTML" | "MarkdownV2",
+    messageOptions?: Omit<TelegramMessageOptions, "parse_mode">,
+  ) => Promise<void>;
 };
 
 class SilentTelegramAbort extends Error {
@@ -2005,6 +2079,10 @@ function parseReportResponses(
   const kind = parsedBlocks[0]?.kind ?? "unknown";
   const chunks = transform(parsedBlocks.map((item) => item.text));
   return { kind, chunks };
+}
+
+function progressDeliveryKey(chunks: string[]): string {
+  return chunks.join("\n").replace(/\s+/g, " ").trim();
 }
 
 function formatProviderTelegramChunks(
@@ -3156,6 +3234,7 @@ print(text)
 }
 type TelegramMessageOptions = {
   parse_mode?: "Markdown" | "MarkdownV2" | "HTML";
+  reply_markup?: string;
 };
 
 type TelegramOutgoingDocument = {
@@ -3352,6 +3431,7 @@ async function sendTelegramMessage(
             chat_id: String(chatId),
             text,
             parse_mode: extra?.parse_mode,
+            reply_markup: extra?.reply_markup,
           });
         } catch (error) {
           if (!extra?.parse_mode || !isTelegramEntityParseError(error)) {
@@ -3361,6 +3441,7 @@ async function sendTelegramMessage(
           return await callTelegramApi<TelegramMessageResult>(botToken, "sendMessage", {
             chat_id: String(chatId),
             text: stripTelegramHtml(text),
+            reply_markup: extra?.reply_markup,
           });
         }
       } catch (error) {

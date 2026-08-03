@@ -75,6 +75,7 @@ export type ProviderRequest = {
   sessionId?: string;
   model?: string;
   sandboxMode?: CodexSandboxMode;
+  onProgress?: (output: string) => void | Promise<void>;
 };
 
 export type ProviderResponse = {

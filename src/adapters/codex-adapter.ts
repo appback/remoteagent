@@ -26,6 +26,7 @@ export class CodexAdapter implements ProviderAdapter {
       request.remoteSessionId,
       request.publicSessionId,
       request.message,
+      request.onProgress,
     );
 
     try {
@@ -149,12 +150,43 @@ export class CodexAdapter implements ProviderAdapter {
     remoteSessionId: string,
     publicSessionId: string | undefined,
     input?: string,
+    onProgress?: (output: string) => void | Promise<void>,
   ): Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean }> {
     return spawnWithPlatformShell(this.codexBin, args, cwd, this.currentTimeoutMs(), input, remoteSessionId, {
       REMOTEAGENT_SESSION_ID: remoteSessionId,
       REMOTEAGENT_PUBLIC_SESSION_ID: publicSessionId ?? "",
       REMOTEAGENT_WORKSPACE: cwd,
-    });
+    }, (line) => this.handleProgressLine(line, onProgress));
+  }
+
+  private async handleProgressLine(
+    line: string,
+    onProgress?: (output: string) => void | Promise<void>,
+  ): Promise<void> {
+    if (!onProgress || !line.startsWith("{")) {
+      return;
+    }
+
+    let text: string | undefined;
+    try {
+      const event = JSON.parse(line) as {
+        type?: string;
+        item?: {
+          type?: string;
+          text?: string;
+        };
+      };
+      text = event.type === "item.completed" && event.item?.type === "agent_message"
+        ? event.item.text?.trim()
+        : undefined;
+    } catch {
+      // Ignore non-JSON stdout and let the normal final-response parser handle it.
+      return;
+    }
+
+    if (text && /^REPORT:progress(?:\r?\n|$)/i.test(text)) {
+      await onProgress(text);
+    }
   }
 
   private extractThreadId(stdout: string): string | undefined {

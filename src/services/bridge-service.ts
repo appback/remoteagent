@@ -23,6 +23,7 @@ const MODEL_PRESETS: Record<Provider, string[]> = {
 };
 
 const DEFAULT_CODEX_MODEL = "gpt-5.6-sol";
+type ProviderProgressHandler = (response: ProviderResponse) => void | Promise<void>;
 
 export class BridgeService {
   private readonly sessionLocks = new Map<string, Promise<void>>();
@@ -353,7 +354,12 @@ export class BridgeService {
     return { stopped, sessionPublicId: session.publicId };
   }
 
-  async routeMessage(botId: string, chatId: string, message: string): Promise<ProviderResponse[]> {
+  async routeMessage(
+    botId: string,
+    chatId: string,
+    message: string,
+    onProgress?: ProviderProgressHandler,
+  ): Promise<ProviderResponse[]> {
     const chatSession = await this.requireChat(botId, chatId);
 
     await this.log({
@@ -366,7 +372,8 @@ export class BridgeService {
       text: message,
     });
 
-    return this.withSessionLock(chatSession.session.sessionId, () => this.routeSession(chatSession.session, message, "telegram", botId, chatId));
+    return this.withSessionLock(chatSession.session.sessionId, () =>
+      this.routeSession(chatSession.session, message, "telegram", botId, chatId, onProgress));
   }
 
   async routeSessionMessage(sessionId: string, message: string): Promise<ProviderResponse[]> {
@@ -386,7 +393,13 @@ export class BridgeService {
     return this.withSessionLock(session.sessionId, () => this.routeSession(session, message, "pc-ui"));
   }
 
-  async routeSessionMessageForChat(sessionId: string, botId: string, chatId: string, message: string): Promise<ProviderResponse[]> {
+  async routeSessionMessageForChat(
+    sessionId: string,
+    botId: string,
+    chatId: string,
+    message: string,
+    onProgress?: ProviderProgressHandler,
+  ): Promise<ProviderResponse[]> {
     const session = await this.store.getSession(sessionId);
     if (!session) {
       throw new Error(`Session was not found: ${sessionId}`);
@@ -402,7 +415,8 @@ export class BridgeService {
       text: message,
     });
 
-    return this.withSessionLock(session.sessionId, () => this.routeSession(session, message, "telegram", botId, chatId));
+    return this.withSessionLock(session.sessionId, () =>
+      this.routeSession(session, message, "telegram", botId, chatId, onProgress));
   }
 
   formatStatus(chatSession: ChatSession | undefined): string {
@@ -591,6 +605,7 @@ export class BridgeService {
     requestSource: string,
     botId?: string,
     chatId?: string,
+    onProgress?: ProviderProgressHandler,
   ): Promise<ProviderResponse[]> {
     const responses: ProviderResponse[] = [];
     const providers = this.resolveProviders(session.mode);
@@ -609,6 +624,29 @@ export class BridgeService {
         message,
         model: providerSession.model,
         sandboxMode: providerSession.sandboxMode,
+        onProgress: onProgress
+          ? async (output) => {
+              const progressResponse: ProviderResponse = {
+                provider,
+                sessionId: providerSession.sessionId ?? session.sessionId,
+                publicSessionId: session.publicId,
+                model: providerSession.model ?? this.defaultModelFor(provider),
+                cwd: providerSession.cwd,
+                output,
+              };
+              await this.log({
+                timestamp: new Date().toISOString(),
+                remoteSessionId: session.sessionId,
+                botId,
+                chatId,
+                provider,
+                direction: "out",
+                sessionId: providerSession.sessionId,
+                text: output,
+              });
+              await onProgress(progressResponse);
+            }
+          : undefined,
       });
 
       const updatedProviderSession = {
