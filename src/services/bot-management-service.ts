@@ -14,6 +14,11 @@ type ManagedBot = {
   username: string;
 };
 
+export type BotChoice = {
+  id: number;
+  username: string;
+};
+
 type PendingBotOperationAction = "add" | "remove" | "reload" | "doctor";
 type PendingBotOperationStatus = "pending" | "rolled_back";
 
@@ -88,6 +93,10 @@ export class BotManagementService {
     }
 
     return this.formatBots(bots, await this.pollingState.list());
+  }
+
+  async listBotChoices(): Promise<BotChoice[]> {
+    return (await this.listConfiguredBots()).map(({ id, username }) => ({ id, username }));
   }
 
   async formatCurrentBotSummary(currentBotId: string): Promise<string> {

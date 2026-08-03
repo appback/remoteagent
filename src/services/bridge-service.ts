@@ -25,6 +25,13 @@ const MODEL_PRESETS: Record<Provider, string[]> = {
 const DEFAULT_CODEX_MODEL = "gpt-5.6-sol";
 type ProviderProgressHandler = (response: ProviderResponse) => void | Promise<void>;
 
+export type ModelSelection = {
+  sessionPublicId: string;
+  provider: Provider;
+  currentModel: string;
+  presets: string[];
+};
+
 export class BridgeService {
   private readonly sessionLocks = new Map<string, Promise<void>>();
 
@@ -232,16 +239,12 @@ export class BridgeService {
   }
 
   async formatModelSelection(botId: string, chatId: string): Promise<string> {
-    const chatSession = await this.requireChat(botId, chatId);
-    const provider = chatSession.session.mode;
-    this.ensurePaired(chatSession, provider);
-
-    const providerSession = chatSession.session[provider]!;
-    const presets = MODEL_PRESETS[provider] ?? [];
+    const selection = await this.getModelSelection(botId, chatId);
+    const { provider, currentModel, presets } = selection;
     const lines = [
-      `session: ${chatSession.session.publicId}`,
+      `session: ${selection.sessionPublicId}`,
       `mode: ${provider}`,
-      `currentModel: ${providerSession.model ?? this.defaultModelFor(provider)}`,
+      `currentModel: ${currentModel}`,
       "availablePresets:",
       ...presets.map((item, index) => ` ${index + 1}. ${item}`),
       "",
@@ -253,6 +256,19 @@ export class BridgeService {
     }
 
     return lines.join("\n");
+  }
+
+  async getModelSelection(botId: string, chatId: string): Promise<ModelSelection> {
+    const chatSession = await this.requireChat(botId, chatId);
+    const provider = chatSession.session.mode;
+    this.ensurePaired(chatSession, provider);
+    const providerSession = chatSession.session[provider]!;
+    return {
+      sessionPublicId: chatSession.session.publicId,
+      provider,
+      currentModel: providerSession.model ?? this.defaultModelFor(provider),
+      presets: [...(MODEL_PRESETS[provider] ?? [])],
+    };
   }
 
   async status(botId: string, chatId: string): Promise<ChatSession | undefined> {

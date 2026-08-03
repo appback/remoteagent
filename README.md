@@ -103,6 +103,8 @@ Current command surface implemented in `src/bot.ts`:
 | `/new` | Creates and binds a new session using the saved default mode in a new managed workspace |
 | `/switch <session>` | Rebinds this chat to an existing RemoteAgent session |
 | `/status` | Shows current session, workspace, provider, and sandbox state |
+| `/model [name]` | Lists selectable provider models or changes the current session model |
+| `/sandbox [codex <mode>]` | Lists Codex sandbox choices or changes the current session sandbox |
 | `/option retry <count>` | Sets the automatic continuation turn limit and persists it to `~/.remoteagent/.env` |
 | `/option timeout <seconds>` | Sets the provider execution timeout and persists it to `~/.remoteagent/.env` |
 | `/option intent <count>` | Sets retries for untagged intent-only provider replies and persists it to `~/.remoteagent/.env` |
@@ -110,6 +112,7 @@ Current command surface implemented in `src/bot.ts`:
 | `/state clear` | Clears the current session ledger without deleting the session |
 | `/state note <text>` | Adds an operator note to the session ledger |
 | `/bots` | Lists the currently configured Telegram bots |
+| `/macro [alias\|number]` | Lists stored macros or runs one against the current session |
 | `/bot add <token>` | Adds a conversation bot, restarts the runtime, and confirms the result after restart |
 | `/bot doctor` | Checks configured Telegram bots and removes bots that Telegram reports as permanently dead |
 | `/bot remove <username\|id>` | Removes a configured Telegram bot, restarts the runtime, and confirms the result after restart |
@@ -126,6 +129,8 @@ Current command surface implemented in `src/bot.ts`:
 | `/queue` | Lists instructions waiting behind the active session work |
 | `/queue remove <id>` | Removes one waiting instruction by its `Q001`-style id |
 | `/queue del` | Removes the most recently queued instruction |
+
+Selection-oriented replies include Telegram inline buttons for sessions, models, macros, runtime option details, sandbox modes, queued instructions, and configured bot links. Text commands remain the canonical compatible interface. Callback actions use short-lived opaque IDs bound to the originating chat and user; they do not expose secrets or rely on visible list positions as internal identity. Selecting `danger-full-access` through a button requires a second confirmation.
 
 Multi-bot polling is tiered by recent activity and active provider work. See [docs/BOT_POLLING_POLICY.md](./docs/BOT_POLLING_POLICY.md).
 

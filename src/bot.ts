@@ -128,6 +128,70 @@ type QueuedWorkLoopEntry = {
   release: () => void;
 };
 
+type InlineAction =
+  | { kind: "session.switch"; selector: string }
+  | { kind: "session.list"; showAll: boolean }
+  | { kind: "model.set"; model: string }
+  | { kind: "macro.run"; alias: string }
+  | { kind: "option.show"; option: RuntimeOptionName }
+  | { kind: "sandbox.set"; mode: CodexSandboxMode; confirmed?: boolean }
+  | { kind: "bots.refresh" };
+
+type RuntimeOptionName = "retry" | "timeout" | "intent" | "command-menu";
+
+type InlineActionRecord = {
+  action: InlineAction;
+  chatId: string;
+  userId: string;
+  createdAt: number;
+};
+
+type InlineKeyboardButton = {
+  text: string;
+  callback_data?: string;
+  url?: string;
+};
+
+class InlineActionRegistry {
+  private readonly records = new Map<string, InlineActionRecord>();
+  private readonly ttlMs = 6 * 60 * 60 * 1000;
+  private readonly maxRecords = 1_000;
+
+  register(action: InlineAction, chatId: string, userId: string): string {
+    this.prune();
+    while (this.records.size >= this.maxRecords) {
+      const oldest = this.records.keys().next().value as string | undefined;
+      if (!oldest) {
+        break;
+      }
+      this.records.delete(oldest);
+    }
+
+    const id = randomUUID().replace(/-/g, "").slice(0, 20);
+    this.records.set(id, { action, chatId, userId, createdAt: Date.now() });
+    return `remoteagent:action:${id}`;
+  }
+
+  resolve(data: string, chatId: string, userId: string): InlineAction | undefined {
+    this.prune();
+    const match = /^remoteagent:action:([a-f0-9]{20})$/i.exec(data);
+    const record = match ? this.records.get(match[1]!) : undefined;
+    if (!record || record.chatId !== chatId || record.userId !== userId) {
+      return undefined;
+    }
+    return record.action;
+  }
+
+  private prune(): void {
+    const expiresBefore = Date.now() - this.ttlMs;
+    for (const [id, record] of this.records) {
+      if (record.createdAt < expiresBefore) {
+        this.records.delete(id);
+      }
+    }
+  }
+}
+
 const REPORT_CONTINUE_PROMPT = [
   "Continue the same task now.",
   "Do more concrete work before replying again.",
@@ -221,6 +285,7 @@ class AutoContinueController {
 
 export function createBot(token: string, bridge: BridgeService, botManagement: BotManagementService, botInfo: UserFromGetMe): Bot {
   const bot = new Bot(token, { botInfo });
+  const inlineActions = new InlineActionRegistry();
   const autoContinue = new AutoContinueController(path.join(config.dataDir, "stop-gates.json"));
   const shellService = new RemoteShellService(config.commandTimeoutMs);
   const memoryService = new AgentMemoryService(config.dataDir);
@@ -282,6 +347,20 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
       }
       throw error;
     }
+  };
+  const actionButton = (ctx: Context, text: string, action: InlineAction): InlineKeyboardButton => {
+    if (!ctx.chat || !ctx.from) {
+      throw new Error("Telegram action button requires chat and user context.");
+    }
+    return {
+      text,
+      callback_data: inlineActions.register(action, String(ctx.chat.id), String(ctx.from.id)),
+    };
+  };
+  const keyboardOptions = (rows: InlineKeyboardButton[][]): TelegramMessageOptions | undefined => {
+    return rows.length > 0
+      ? { reply_markup: JSON.stringify({ inline_keyboard: rows }) }
+      : undefined;
   };
   const removeQueuedInstruction = async (
     botId: string,
@@ -428,7 +507,7 @@ ${bridge.formatStatus(mapping)}`);
     await reply(ctx, HELP_TEXT);
   });
 
-  const replySessionList = async (ctx: Context): Promise<void> => {
+  const replySessionList = async (ctx: Context, requestedShowAll?: boolean): Promise<void> => {
     if (!ctx.chat) {
       throw new Error("Telegram chat context is missing.");
     }
@@ -436,7 +515,7 @@ ${bridge.formatStatus(mapping)}`);
     const botId = getBotId();
     const chatId = String(ctx.chat.id);
     const { args } = parseCommand(ctx.message?.text, 1);
-    const showAll = args[0] === "-a" || args[0] === "--all";
+    const showAll = requestedShowAll ?? (args[0] === "-a" || args[0] === "--all");
     const [mapping, sessions] = await Promise.all([
       bridge.status(botId, chatId),
       bridge.listSessions(),
@@ -449,9 +528,38 @@ ${bridge.formatStatus(mapping)}`);
         await bridge.listActiveSessionIds(),
       )
       : bridge.formatSessionList(sessions, mapping?.session.sessionId);
-    for (const chunk of flattenChunks([`${sessionList}\n\n${botSummary}`], 3900)) {
-      await reply(ctx, chunk);
+    const sessionButtons = sessions.slice(0, showAll ? 20 : 10).map((session) => [
+      actionButton(
+        ctx,
+        truncateButtonLabel(`${session.sessionId === mapping?.session.sessionId ? "✓ " : ""}${session.publicId} · ${workspaceLeaf(session.workspace)}`),
+        { kind: "session.switch", selector: session.publicId },
+      ),
+    ]);
+    if (!showAll && sessions.length > 10) {
+      sessionButtons.push([actionButton(ctx, `Show all ${sessions.length} sessions`, { kind: "session.list", showAll: true })]);
     }
+    const chunks = flattenChunks([`${sessionList}\n\n${botSummary}`], 3900);
+    for (const [index, chunk] of chunks.entries()) {
+      await reply(ctx, chunk, index === chunks.length - 1 ? keyboardOptions(sessionButtons) : undefined);
+    }
+  };
+
+  const switchChatSession = async (ctx: Context, selector: string): Promise<string> => {
+    if (!ctx.chat) {
+      throw new Error("Telegram chat context is missing.");
+    }
+    const botId = getBotId();
+    const chatId = String(ctx.chat.id);
+    const previous = await bridge.status(botId, chatId).catch(() => undefined);
+    const mapping = await bridge.switchSession(botId, chatId, selector);
+    if (previous && previous.session.sessionId !== mapping.session.sessionId) {
+      autoContinue.requestSessionStop(previous.session.sessionId);
+      cancelQueuedWorkLoops(botId, chatId, previous.session.sessionId);
+      messageBatcher.cancelPending(botId, chatId);
+      messageBatcher.cancelManual(botId, chatId);
+      await bridge.stopSessionRun(previous.session.sessionId, botId, chatId, "Chat switched to another session; previous session execution was stopped.");
+    }
+    return `Switched this chat to session ${mapping.session.publicId}.\n\n${bridge.formatCurrentSession(mapping)}`;
   };
 
   bot.command("list", async (ctx) => {
@@ -468,8 +576,6 @@ ${bridge.formatStatus(mapping)}`);
   });
 
   bot.command("switch", async (ctx) => {
-    const botId = getBotId();
-    const chatId = String(ctx.chat.id);
     const { args } = parseCommand(ctx.message?.text, 1);
     const sessionId = args[0];
 
@@ -480,16 +586,7 @@ ${bridge.formatStatus(mapping)}`);
       return;
     }
 
-    const previous = await bridge.status(botId, chatId).catch(() => undefined);
-    const mapping = await bridge.switchSession(botId, chatId, sessionId);
-    if (previous && previous.session.sessionId !== mapping.session.sessionId) {
-      autoContinue.requestSessionStop(previous.session.sessionId);
-      cancelQueuedWorkLoops(botId, chatId, previous.session.sessionId);
-      messageBatcher.cancelPending(botId, chatId);
-      messageBatcher.cancelManual(botId, chatId);
-      await bridge.stopSessionRun(previous.session.sessionId, botId, chatId, "Chat switched to another session; previous session execution was stopped.");
-    }
-    await reply(ctx, `Switched this chat to session ${sessionId}.\n\n${bridge.formatCurrentSession(mapping)}`);
+    await reply(ctx, await switchChatSession(ctx, sessionId));
   });
 
   bot.command("plan", async (ctx) => {
@@ -570,6 +667,15 @@ ${bridge.formatStatus(mapping)}`);
 ${bridge.formatStatus(mapping)}`);
   });
 
+  const setChatModel = async (ctx: Context, model: string): Promise<string> => {
+    if (!ctx.chat) {
+      throw new Error("Telegram chat context is missing.");
+    }
+    const mapping = await bridge.setModel(getBotId(), String(ctx.chat.id), model);
+    const selectedModel = mapping.session[mapping.session.mode]?.model ?? model;
+    return `Set ${mapping.session.mode} model to ${selectedModel}.\n\n${bridge.formatStatus(mapping)}`;
+  };
+
   bot.command("model", async (ctx) => {
     const botId = getBotId();
     const chatId = String(ctx.chat.id);
@@ -584,14 +690,18 @@ ${bridge.formatStatus(mapping)}`);
     }
 
     if (!model) {
+      const selection = await bridge.getModelSelection(botId, chatId);
+      const rows = selection.presets.map((preset) => [
+        actionButton(ctx, `${preset === selection.currentModel ? "✓ " : ""}${preset}`, { kind: "model.set", model: preset }),
+      ]);
       await reply(ctx, await bridge.formatModelSelection(botId, chatId), {
         parse_mode: "Markdown",
+        ...(keyboardOptions(rows) ?? {}),
       });
       return;
     }
 
-    const mapping = await bridge.setModel(botId, chatId, model);
-    await reply(ctx, `Set ${mapping.session.mode} model to ${model}.\n\n${bridge.formatStatus(mapping)}`);
+    await reply(ctx, await setChatModel(ctx, model));
   });
 
   bot.command("queue", async (ctx) => {
@@ -609,7 +719,15 @@ ${bridge.formatStatus(mapping)}`);
     }
 
     if (!action || action === "list") {
-      await reply(ctx, formatQueuedWorkLoops(activeKey, mapping?.session.publicId));
+      const queued = listQueuedWorkLoops(activeKey);
+      const rows = queued.map((entry) => [{
+        text: `Remove ${entry.id}`,
+        callback_data: `remoteagent:queue:remove:${entry.id}`,
+      }]);
+      if (queued.length > 0) {
+        rows.push([{ text: "Remove latest", callback_data: "remoteagent:queue:del" }]);
+      }
+      await reply(ctx, formatQueuedWorkLoops(activeKey, mapping?.session.publicId), keyboardOptions(rows));
       return;
     }
 
@@ -669,7 +787,16 @@ ${bridge.formatStatus(mapping)}`);
     const value = args[1];
 
     if (!option) {
-      await reply(ctx, formatRuntimeOptions());
+      await reply(ctx, formatRuntimeOptions(), keyboardOptions([
+        [
+          actionButton(ctx, "Retry", { kind: "option.show", option: "retry" }),
+          actionButton(ctx, "Timeout", { kind: "option.show", option: "timeout" }),
+        ],
+        [
+          actionButton(ctx, "Intent", { kind: "option.show", option: "intent" }),
+          actionButton(ctx, "Command menu", { kind: "option.show", option: "command-menu" }),
+        ],
+      ]));
       return;
     }
 
@@ -681,14 +808,7 @@ ${bridge.formatStatus(mapping)}`);
     }
 
     if (!value) {
-      const current = option === "retry"
-        ? `Current automatic continuation retry limit: ${formatRetryLimit(config.telegramAutoProgressMaxTurns)}\n\nUsage: \`/option retry <count>\``
-        : option === "intent"
-          ? `Current untagged intent retry limit: ${formatRetryLimit(config.telegramUntaggedIntentRetries)}\n\nUsage: \`/option intent <count>\``
-          : option === "command-menu"
-            ? `Current Telegram command menu: ${config.telegramCommandMenuEnabled ? "on" : "off"}\n\nUsage: \`/option command-menu on\`, \`/option command-menu off\`, or \`/option command-menu refresh\``
-            : `Current provider execution timeout: ${formatTimeoutSeconds(config.commandTimeoutMs)}\n\nUsage: \`/option timeout <seconds>\``;
-      await reply(ctx, current, {
+      await reply(ctx, formatRuntimeOptionDetail(option), {
         parse_mode: "Markdown",
       });
       return;
@@ -920,15 +1040,30 @@ ${bridge.formatStatus(mapping)}`);
     await reply(ctx, "Usage: `/docs list`, `/docs find <keyword>`, `/docs pin <keyword> <path>`, `/docs remove <keyword>`, or `/docs reinforce <1-10>`", { parse_mode: "Markdown" });
   });
 
-  const handleMacroCommand = async (ctx: Context, text: string): Promise<void> => {
+  const runMacro = async (ctx: Context, target: string): Promise<string | undefined> => {
     if (!ctx.chat) {
       throw new Error("Telegram chat context is missing.");
     }
     const botId = getBotId();
     const chatId = String(ctx.chat.id);
+    const macro = await memoryService.getMacro(target);
+    if (!macro) {
+      return `Macro was not found: ${target}\n\n${await memoryService.listMacros()}`;
+    }
+
+    await bridge.logSystem(botId, chatId, `Macro executed: ${macro.alias}`);
+    await messageBatcher.enqueue({ botToken: token, telegramChatId: ctx.chat.id }, botId, chatId, macro.prompt);
+    return undefined;
+  };
+  const handleMacroCommand = async (ctx: Context, text: string): Promise<void> => {
+    const botId = getBotId();
     const parsed = parseMacroCommandText(text, botId);
     if (parsed.kind === "help") {
-      await reply(ctx, await formatMacroHelp(memoryService));
+      const macros = await memoryService.getMacros();
+      const rows = macros.slice(0, 20).map((macro) => [
+        actionButton(ctx, truncateButtonLabel(macro.alias), { kind: "macro.run", alias: macro.alias }),
+      ]);
+      await reply(ctx, await formatMacroHelp(memoryService), keyboardOptions(rows));
       return;
     }
     if (parsed.kind === "set") {
@@ -944,28 +1079,37 @@ ${bridge.formatStatus(mapping)}`);
       return;
     }
 
-    const macro = await memoryService.getMacro(parsed.target);
-    if (!macro) {
-      await reply(ctx, `Macro was not found: ${parsed.target}\n\n${await memoryService.listMacros()}`);
-      return;
+    const result = await runMacro(ctx, parsed.target);
+    if (result) {
+      await reply(ctx, result);
     }
-
-    await bridge.logSystem(botId, chatId, `Macro executed: ${macro.alias}`);
-    await messageBatcher.enqueue({ botToken: token, telegramChatId: ctx.chat.id }, botId, chatId, macro.prompt);
   };
 
   bot.command("macro", async (ctx) => {
     await handleMacroCommand(ctx, ctx.message?.text ?? "/macro");
   });
 
-  bot.command("bots", async (ctx) => {
+  const replyBotList = async (ctx: Context): Promise<void> => {
     await ensureOwnerControlAccess(ctx);
     const pendingNotice = await botManagement.getPendingOperationNotice();
-    if (pendingNotice?.pending) {
-      await reply(ctx, `${pendingNotice.message}\n\n${await botManagement.listBots()}`);
-      return;
+    const [botList, choices] = await Promise.all([
+      botManagement.listBots(),
+      botManagement.listBotChoices(),
+    ]);
+    const rows: InlineKeyboardButton[][] = [];
+    for (let index = 0; index < choices.length; index += 2) {
+      rows.push(choices.slice(index, index + 2).map((choice) => ({
+        text: `@${choice.username}`,
+        url: `https://t.me/${choice.username}`,
+      })));
     }
-    await reply(ctx, await botManagement.listBots());
+    rows.push([actionButton(ctx, "Refresh", { kind: "bots.refresh" })]);
+    const message = pendingNotice?.pending ? `${pendingNotice.message}\n\n${botList}` : botList;
+    await reply(ctx, message, keyboardOptions(rows));
+  };
+
+  bot.command("bots", async (ctx) => {
+    await replyBotList(ctx);
   });
 
   bot.command("bot", async (ctx) => {
@@ -1060,12 +1204,36 @@ ${bridge.formatStatus(mapping)}`);
     });
   });
 
+  const setChatSandbox = async (ctx: Context, sandboxMode: CodexSandboxMode): Promise<string> => {
+    if (!ctx.chat) {
+      throw new Error("Telegram chat context is missing.");
+    }
+    const mapping = await bridge.setCodexSandboxMode(getBotId(), String(ctx.chat.id), sandboxMode);
+    return `Set Codex sandbox to ${sandboxMode}.\n\n${bridge.formatStatus(mapping)}`;
+  };
+
   bot.command("sandbox", async (ctx) => {
     const botId = getBotId();
     const chatId = String(ctx.chat.id);
     const { args } = parseCommand(ctx.message?.text, 2);
     const provider = args[0]?.toLowerCase();
     const sandboxMode = args[1]?.toLowerCase();
+
+    if (!provider && !sandboxMode) {
+      const mapping = await bridge.status(botId, chatId);
+      if (!mapping?.session.codex) {
+        await reply(ctx, "No Codex session is paired with this chat.");
+        return;
+      }
+      const current = mapping.session.codex.sandboxMode ?? config.codexSandboxMode;
+      const modes: CodexSandboxMode[] = ["read-only", "workspace-write", "danger-full-access"];
+      await reply(ctx, `Codex sandbox\ncurrent: ${current}\n\nChoose a mode:`, keyboardOptions(
+        modes.map((mode) => [
+          actionButton(ctx, `${mode === current ? "✓ " : ""}${mode}`, { kind: "sandbox.set", mode }),
+        ]),
+      ));
+      return;
+    }
 
     if (provider !== "codex" || !sandboxMode || !isCodexSandboxMode(sandboxMode)) {
       await reply(ctx, "Usage: `/sandbox codex <read-only|workspace-write|danger-full-access>`", {
@@ -1074,8 +1242,7 @@ ${bridge.formatStatus(mapping)}`);
       return;
     }
 
-    const mapping = await bridge.setCodexSandboxMode(botId, chatId, sandboxMode);
-    await reply(ctx, `Set Codex sandbox to ${sandboxMode}.\n\n${bridge.formatStatus(mapping)}`);
+    await reply(ctx, await setChatSandbox(ctx, sandboxMode));
   });
 
 
@@ -1088,28 +1255,90 @@ ${bridge.formatStatus(mapping)}`);
   });
 
   bot.on("callback_query:data", async (ctx) => {
-    const match = /^remoteagent:queue:(remove:(Q\d+)|del)$/i.exec(ctx.callbackQuery.data);
-    if (!match) {
-      return;
-    }
-
+    const data = ctx.callbackQuery.data;
     const callbackChat = ctx.callbackQuery.message?.chat;
     if (!callbackChat) {
       await callTelegramApi<boolean>(token, "answerCallbackQuery", {
         callback_query_id: ctx.callbackQuery.id,
-        text: "This queue action is no longer available.",
+        text: "This action is no longer available.",
       });
       return;
     }
 
     const botId = getBotId();
     const chatId = String(callbackChat.id);
-    const result = await removeQueuedInstruction(botId, chatId, match[2]);
+    const queueMatch = /^remoteagent:queue:(remove:(Q\d+)|del)$/i.exec(data);
+    if (queueMatch) {
+      const result = await removeQueuedInstruction(botId, chatId, queueMatch[2]);
+      await callTelegramApi<boolean>(token, "answerCallbackQuery", {
+        callback_query_id: ctx.callbackQuery.id,
+        text: result.split("\n", 1)[0],
+      });
+      await sendTelegramMessage(token, callbackChat.id, result);
+      return;
+    }
+
+    if (!data.startsWith("remoteagent:action:")) {
+      return;
+    }
+
+    const action = inlineActions.resolve(data, chatId, String(ctx.from.id));
+    if (!action) {
+      await callTelegramApi<boolean>(token, "answerCallbackQuery", {
+        callback_query_id: ctx.callbackQuery.id,
+        text: "This button expired. Open the command list again.",
+      });
+      return;
+    }
+
     await callTelegramApi<boolean>(token, "answerCallbackQuery", {
       callback_query_id: ctx.callbackQuery.id,
-      text: result.split("\n", 1)[0],
+      text: action.kind === "macro.run" ? "Macro selected." : "Applying...",
     });
-    await sendTelegramMessage(token, callbackChat.id, result);
+
+    try {
+      if (action.kind === "session.switch") {
+        await reply(ctx, await switchChatSession(ctx, action.selector));
+        return;
+      }
+      if (action.kind === "session.list") {
+        await replySessionList(ctx, action.showAll);
+        return;
+      }
+      if (action.kind === "model.set") {
+        await reply(ctx, await setChatModel(ctx, action.model));
+        return;
+      }
+      if (action.kind === "macro.run") {
+        const result = await runMacro(ctx, action.alias);
+        if (result) {
+          await reply(ctx, result);
+        }
+        return;
+      }
+      if (action.kind === "option.show") {
+        await ensureOwnerControlAccess(ctx);
+        await reply(ctx, formatRuntimeOptionDetail(action.option), { parse_mode: "Markdown" });
+        return;
+      }
+      if (action.kind === "bots.refresh") {
+        await replyBotList(ctx);
+        return;
+      }
+      if (action.mode === "danger-full-access" && !action.confirmed) {
+        await reply(ctx, "Confirm Codex sandbox change to danger-full-access.", keyboardOptions([[
+          actionButton(ctx, "Confirm danger-full-access", {
+            kind: "sandbox.set",
+            mode: "danger-full-access",
+            confirmed: true,
+          }),
+        ]]));
+        return;
+      }
+      await reply(ctx, await setChatSandbox(ctx, action.mode));
+    } catch (error) {
+      await reply(ctx, error instanceof Error ? error.message : String(error));
+    }
   });
 
   bot.on("message", async (ctx) => {
@@ -2735,6 +2964,29 @@ function formatRuntimeOptions(): string {
     "`intent 0` disables untagged intent-only response retries.",
     "`command-menu refresh` reapplies Telegram slash-command autocomplete without changing the saved option.",
   ].join("\n");
+}
+
+function formatRuntimeOptionDetail(option: RuntimeOptionName): string {
+  if (option === "retry") {
+    return `Current automatic continuation retry limit: ${formatRetryLimit(config.telegramAutoProgressMaxTurns)}\n\nUsage: \`/option retry <count>\``;
+  }
+  if (option === "intent") {
+    return `Current untagged intent retry limit: ${formatRetryLimit(config.telegramUntaggedIntentRetries)}\n\nUsage: \`/option intent <count>\``;
+  }
+  if (option === "command-menu") {
+    return `Current Telegram command menu: ${config.telegramCommandMenuEnabled ? "on" : "off"}\n\nUsage: \`/option command-menu on\`, \`/option command-menu off\`, or \`/option command-menu refresh\``;
+  }
+  return `Current provider execution timeout: ${formatTimeoutSeconds(config.commandTimeoutMs)}\n\nUsage: \`/option timeout <seconds>\``;
+}
+
+function truncateButtonLabel(value: string, maxLength = 48): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length <= maxLength ? normalized : `${normalized.slice(0, maxLength - 3)}...`;
+}
+
+function workspaceLeaf(workspace: string): string {
+  const normalized = workspace.replace(/[\\/]+$/, "");
+  return normalized.split(/[\\/]/).at(-1) || workspace;
 }
 
 function formatRetryLimit(value: number): string {

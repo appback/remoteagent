@@ -254,6 +254,14 @@ async function click(data) {
   await injectedBot.handleUpdates([callbackUpdate(data)]);
 }
 
+function findInlineButton(call, label) {
+  if (!call?.reply_markup) {
+    return undefined;
+  }
+  const markup = JSON.parse(call.reply_markup);
+  return markup.inline_keyboard?.flat().find((button) => button.text === label);
+}
+
 async function readTelegramCalls() {
   return (await fs.readFile(telegramCalls, "utf8"))
     .trim()
@@ -438,6 +446,83 @@ if (!calls.some((call) => call.method === "sendMessage" && /Workspace cleanup fi
 }
 if (calls.some((call) => /미완료 TODO|\/task|새 작업으로 접수/.test(call.text))) {
   throw new Error(`Task gate language leaked to Telegram replies. Calls: ${JSON.stringify(calls, null, 2)}`);
+}
+
+await send("/new");
+await send("/list");
+const sessionListCall = await waitForTelegramCall((call) => call.text.includes("Sessions (2/2)"));
+const firstSessionButton = findInlineButton(sessionListCall, `S001 · ${path.basename(session.workspace)}`);
+if (!firstSessionButton?.callback_data?.startsWith("remoteagent:action:")) {
+  throw new Error(`Session switch button is missing: ${sessionListCall.reply_markup}`);
+}
+await click(firstSessionButton.callback_data);
+await waitForTelegramCall((call) => call.text.includes("Switched this chat to session S001."));
+
+await send("/model");
+const modelListCall = await waitForTelegramCall((call) => call.text.includes("availablePresets:"));
+const modelButton = findInlineButton(modelListCall, "gpt-5.6-terra");
+if (!modelButton?.callback_data) {
+  throw new Error(`Model selection button is missing: ${modelListCall.reply_markup}`);
+}
+await click(modelButton.callback_data);
+await waitForTelegramCall((call) => call.text.includes("Set codex model to gpt-5.6-terra."));
+const modelState = JSON.parse(await fs.readFile(path.join(dataDir, "state.json"), "utf8"));
+if (modelState.sessions[session.sessionId]?.codex?.model !== "gpt-5.6-terra") {
+  throw new Error("Model button did not update the bound session model");
+}
+
+await send("/option");
+const optionListCall = await waitForTelegramCall((call) => call.text.startsWith("Runtime options"));
+const timeoutButton = findInlineButton(optionListCall, "Timeout");
+if (!timeoutButton?.callback_data) {
+  throw new Error(`Runtime option button is missing: ${optionListCall.reply_markup}`);
+}
+await click(timeoutButton.callback_data);
+await waitForTelegramCall((call) => call.text.includes("Current provider execution timeout: 600s"));
+
+await send("/sandbox");
+const sandboxListCall = await waitForTelegramCall((call) => call.text.startsWith("Codex sandbox"));
+const readOnlyButton = findInlineButton(sandboxListCall, "read-only");
+const dangerButton = findInlineButton(sandboxListCall, "danger-full-access");
+if (!readOnlyButton?.callback_data || !dangerButton?.callback_data) {
+  throw new Error(`Sandbox selection buttons are missing: ${sandboxListCall.reply_markup}`);
+}
+await click(readOnlyButton.callback_data);
+await waitForTelegramCall((call) => call.text.includes("Set Codex sandbox to read-only."));
+await click(dangerButton.callback_data);
+const sandboxConfirmCall = await waitForTelegramCall((call) => call.text.includes("Confirm Codex sandbox change"));
+if (!findInlineButton(sandboxConfirmCall, "Confirm danger-full-access")?.callback_data) {
+  throw new Error(`Danger sandbox confirmation button is missing: ${sandboxConfirmCall.reply_markup}`);
+}
+
+await send("/macro set button-test inspect the callback path");
+await send("/batch start");
+await send("/macro");
+const macroListCall = await waitForTelegramCall((call) => call.text.includes("Macros (1)"));
+const macroButton = findInlineButton(macroListCall, "button-test");
+if (!macroButton?.callback_data) {
+  throw new Error(`Macro execution button is missing: ${macroListCall.reply_markup}`);
+}
+await click(macroButton.callback_data);
+await send("/batch send");
+await waitForTelegramCall((call) => call.text.includes("mock provider completed"));
+
+await fs.appendFile(path.join(dataDir, ".env"), [
+  "TELEGRAM_BOT_TOKENS=000000:test-token",
+  "TELEGRAM_BOT_USERNAMES=remoteagent_test_bot",
+  "",
+].join("\n"), "utf8");
+await send("/bots");
+const botsCall = await waitForTelegramCall((call) => call.text.includes("Configured bots (1)"));
+const botLink = findInlineButton(botsCall, "@bot_0");
+const refreshButton = findInlineButton(botsCall, "Refresh");
+if (botLink?.url !== "https://t.me/bot_0" || !refreshButton?.callback_data) {
+  throw new Error(`Bot link or refresh button is missing: ${botsCall.reply_markup}`);
+}
+await click(refreshButton.callback_data);
+const refreshedBotsCalls = (await readTelegramCalls()).filter((call) => call.text.includes("Configured bots (1)"));
+if (refreshedBotsCalls.length < 2) {
+  throw new Error("Bot refresh callback did not render the bot list again");
 }
 
 providerMode = "timeout";

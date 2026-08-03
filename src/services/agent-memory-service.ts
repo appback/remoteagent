@@ -34,7 +34,7 @@ type DocumentPin = {
   updatedAt: string;
 };
 
-type MacroRecord = {
+export type MacroRecord = {
   alias: string;
   prompt: string;
   createdAt: string;
@@ -361,8 +361,7 @@ export class AgentMemoryService {
   }
 
   async getMacro(aliasOrIndex: string): Promise<MacroRecord | undefined> {
-    const macros = Object.values(await this.readMacros())
-      .sort((left, right) => left.alias.localeCompare(right.alias, "ko"));
+    const macros = await this.getMacros();
     const trimmed = aliasOrIndex.trim();
     if (/^[0-9]+$/.test(trimmed)) {
       const index = Number.parseInt(trimmed, 10);
@@ -372,9 +371,13 @@ export class AgentMemoryService {
     return macros.find((macro) => macro.alias === normalizedAlias);
   }
 
-  async listMacros(): Promise<string> {
-    const macros = Object.values(await this.readMacros())
+  async getMacros(): Promise<MacroRecord[]> {
+    return Object.values(await this.readMacros())
       .sort((left, right) => left.alias.localeCompare(right.alias, "ko"));
+  }
+
+  async listMacros(): Promise<string> {
+    const macros = await this.getMacros();
     if (macros.length === 0) {
       return "No macros are stored.";
     }
