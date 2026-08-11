@@ -11,6 +11,7 @@ const root = await fs.mkdtemp(path.join(os.tmpdir(), "remoteagent-cli-selftest-"
 const sourceDataDir = path.join(root, "source");
 const targetDataDir = path.join(root, "target");
 const bundlePath = path.join(root, "transfer.ra-secrets");
+const selectedBundlePath = path.join(root, "selected-transfer.ra-secrets");
 const passphrase = "correct-horse-battery-staple";
 
 try {
@@ -72,6 +73,16 @@ try {
   assert.doesNotMatch(bundleText, /plain-value-must-not-appear-in-bundle/);
   assert.doesNotMatch(bundleText, /another-private-value/);
   assert.match(bundleText, /remoteagent-secret-bundle/);
+  assert.match(bundleText, /"compression": "gzip"/);
+
+  const selectedExport = await exportSecrets(sourceDataDir, selectedBundlePath, passphrase, {
+    includeKeys: ["API_TOKEN"],
+  });
+  assert.equal(selectedExport.count, 1);
+  const selectedDataDir = path.join(root, "selected-target");
+  await importSecrets(selectedDataDir, selectedBundlePath, passphrase);
+  const selectedSecrets = JSON.parse(await fs.readFile(path.join(selectedDataDir, "managed", "secrets.json"), "utf8"));
+  assert.deepEqual(Object.keys(selectedSecrets), ["API_TOKEN"]);
 
   await fs.mkdir(path.join(targetDataDir, "managed"), { recursive: true });
   await fs.writeFile(path.join(targetDataDir, "managed", "secrets.json"), JSON.stringify({

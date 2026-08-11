@@ -13,7 +13,7 @@ export const TELEGRAM_COMMAND_MENU = [
   { command: "attach", description: "Attach an existing provider session" },
   { command: "state", description: "Show or edit session state notes" },
   { command: "option", description: "Show or change runtime options" },
-  { command: "secret", description: "Store or manage hidden secret values" },
+  { command: "secret", description: "Store, export, or manage hidden secrets" },
   { command: "docs", description: "Pin or find session documents" },
   { command: "macro", description: "Save or run reusable instructions" },
   { command: "model", description: "Show or change provider model" },

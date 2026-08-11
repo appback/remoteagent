@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { randomUUID } from "node:crypto";
@@ -14,6 +15,7 @@ import { ProviderSetupService } from "./services/provider-setup-service.js";
 import { RemoteShellService } from "./services/remote-shell-service.js";
 import { AgentMemoryService } from "./services/agent-memory-service.js";
 import { WorkspaceCleanupService } from "./services/workspace-cleanup-service.js";
+import { exportSecrets } from "./services/secret-transfer-service.js";
 import { deleteTelegramCommandMenu, setTelegramCommandMenu } from "./telegram-command-menu.js";
 import type { ChatSession, CodexSandboxMode, Provider, ProviderResponse } from "./types.js";
 import type { UserFromGetMe } from "grammy/types";
@@ -40,7 +42,7 @@ const HELP_TEXT = [
   "/state [clear|note <text>]",
   "/artifacts list|cleanup <days>",
   "/cleanup",
-  "/secret set|list|remove",
+  "/secret set|list|remove|export",
   "/docs pin|find|list|remove|reinforce",
   "/macro set|list|remove|<alias|number>",
   "/매크로 set|list|remove|<alias|number>",
@@ -972,7 +974,46 @@ ${bridge.formatStatus(mapping)}`);
         return;
       }
       await memoryService.setSecret(key, rest.trim());
+      if (ctx.chat && ctx.message?.message_id) {
+        await deleteTelegramMessage(token, ctx.chat.id, ctx.message.message_id).catch((error) => {
+          console.warn(`[secret] failed to delete source message for ${key}: ${error instanceof Error ? error.message : String(error)}`);
+        });
+      }
       await reply(ctx, `Stored secret key ${key}. Value is hidden from agents and chat output.`);
+      return;
+    }
+    if (action === "export") {
+      if (!key || !ctx.chat) {
+        await reply(ctx, formatSecretHelp(), { parse_mode: "Markdown" });
+        return;
+      }
+      const passphrase = await memoryService.getSecret(key);
+      if (!passphrase) {
+        await reply(ctx, `Secret key was not found: ${key}`);
+        return;
+      }
+      const selectedKeys = rest
+        ?.split(/\s+/)
+        .map((value) => value.trim().toUpperCase())
+        .filter(Boolean);
+      const mapping = await bridge.status(getBotId(), String(ctx.chat.id)).catch(() => undefined);
+      const exportDir = await fs.mkdtemp(path.join(os.tmpdir(), "remoteagent-secret-export-"));
+      const exportPath = path.join(
+        exportDir,
+        `remoteagent-secrets-${mapping?.session.publicId ?? "install"}-${new Date().toISOString().slice(0, 10)}.ra-secrets`,
+      );
+      try {
+        const result = await exportSecrets(config.dataDir, exportPath, passphrase, {
+          includeKeys: selectedKeys,
+          excludeKeys: [key],
+        });
+        await sendTelegramDocument(token, ctx.chat.id, {
+          path: result.outputPath,
+          caption: `Encrypted RemoteAgent Secret bundle (${result.count} key(s)). Secret values are not shown.`,
+        });
+      } finally {
+        await fs.rm(exportDir, { recursive: true, force: true }).catch(() => undefined);
+      }
       return;
     }
     if (action === "remove") {
@@ -2921,12 +2962,15 @@ function formatSecretHelp(): string {
     "/secret set KEY value",
     "/secret list",
     "/secret remove KEY",
+    "/secret export PASSPHRASE_KEY [KEY ...]",
     "```",
     "",
     "Example:",
     "```text",
     "/secret set GIFTISHOW_AUTH_KEY REAL...",
     "/secret set GIFTISHOW_TOKEN_KEY xNC...",
+    "/secret set REMOTEAGENT_TRANSFER_PASSPHRASE a-long-private-passphrase",
+    "/secret export REMOTEAGENT_TRANSFER_PASSPHRASE GIFTISHOW_AUTH_KEY GIFTISHOW_TOKEN_KEY",
     "```",
     "",
     "Then tell the agent:",
@@ -3665,6 +3709,26 @@ async function sendTelegramDocument(
   }
 
   return payload.result;
+}
+
+async function deleteTelegramMessage(botToken: string, chatId: number, messageId: number): Promise<void> {
+  const { stdout, stderr } = await execFileAsync("curl", [
+    "-sS",
+    "--max-time",
+    "20",
+    "-d",
+    `chat_id=${chatId}`,
+    "-d",
+    `message_id=${messageId}`,
+    `https://api.telegram.org/bot${botToken}/deleteMessage`,
+  ]);
+  if (stderr?.trim()) {
+    console.error(`curl stderr for deleteMessage: ${stderr.trim()}`);
+  }
+  const payload = JSON.parse(stdout) as { ok?: boolean; description?: string };
+  if (!payload.ok) {
+    throw new Error(payload.description || "Telegram API deleteMessage failed.");
+  }
 }
 
 async function sendTelegramMessage(

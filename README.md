@@ -339,6 +339,13 @@ remoteagent secret import ~/remoteagent-secrets.ra-secrets
 
 See [CLI bootstrap and secret migration](./docs/CLI_BOOTSTRAP_AND_SECRET_MIGRATION.md) for the complete interactive and automation-safe commands.
 
+Selected Secret keys can also be returned to the current private Telegram chat as a compressed, encrypted bundle without exposing values to the provider:
+
+```text
+/secret set REMOTEAGENT_TRANSFER_PASSPHRASE a-long-private-passphrase
+/secret export REMOTEAGENT_TRANSFER_PASSPHRASE KEY_ONE KEY_TWO
+```
+
 For one-line installs on a fresh machine:
 
 ```bash

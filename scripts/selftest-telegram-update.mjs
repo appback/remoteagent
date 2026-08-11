@@ -11,6 +11,7 @@ const workspace = path.join(tmp, "workspace");
 const workspaceRoot = path.join(tmp, "workspaces");
 const binDir = path.join(tmp, "bin");
 const telegramCalls = path.join(tmp, "telegram-calls.jsonl");
+const capturedDocument = path.join(tmp, "captured-document.ra-secrets");
 
 await fs.mkdir(workspace, { recursive: true });
 await fs.mkdir(workspaceRoot, { recursive: true });
@@ -22,6 +23,7 @@ method="unknown"
 text=""
 chat_id=""
 reply_markup=""
+document_path=""
 for arg in "$@"; do
   case "$arg" in
     https://api.telegram.org/bot*/sendMessage) method="sendMessage" ;;
@@ -32,6 +34,7 @@ for arg in "$@"; do
     chat_id=*) chat_id="\${arg#chat_id=}" ;;
     text=*) text="\${arg#text=}" ;;
     reply_markup=*) reply_markup="\${arg#reply_markup=}" ;;
+    document=@*) document_path="\${arg#document=@}" ;;
   esac
 done
 text_b64="$(printf '%s' "$text" | base64 -w 0)"
@@ -45,6 +48,7 @@ case "$method" in
     printf '{"ok":true,"result":true}'
     ;;
   sendDocument)
+    cp "$document_path" ${JSON.stringify(capturedDocument)}
     printf '{"ok":true,"result":{"message_id":1002,"document":{"file_id":"fake"}}}'
     ;;
   *)
@@ -72,6 +76,7 @@ const [
   { BotManagementService },
   { FileStore },
   { AgentMemoryService },
+  { importSecrets },
   { WorkspaceCleanupService },
   { buildFallbackBotInfo },
 ] = await Promise.all([
@@ -80,6 +85,7 @@ const [
   import(path.join(root, "dist", "services", "bot-management-service.js")),
   import(path.join(root, "dist", "store", "file-store.js")),
   import(path.join(root, "dist", "services", "agent-memory-service.js")),
+  import(path.join(root, "dist", "services", "secret-transfer-service.js")),
   import(path.join(root, "dist", "services", "workspace-cleanup-service.js")),
   import(path.join(root, "dist", "telegram-bot-identity.js")),
 ]);
@@ -295,6 +301,9 @@ await send("/start codex");
 await send("/option retry 6");
 await send("/option timeout 600");
 await send("/option intent 4");
+await send("/secret set REMOTEAGENT_TRANSFER_PASSPHRASE correct-horse-battery-staple");
+await send("/secret set API_TOKEN telegram-secret-export-value");
+await send("/secret export REMOTEAGENT_TRANSFER_PASSPHRASE API_TOKEN");
 await send("같은 값을 봐야하는데 로직문제네? 확인해줘\\n이미 수정되어 있을 수 있어.\\n나한테 수정했다고 보고했었거든");
 await send("/state");
 
@@ -316,6 +325,32 @@ if (!/^COMMAND_TIMEOUT_MS=600000$/m.test(envText)) {
 }
 if (!/^TELEGRAM_UNTAGGED_INTENT_RETRIES=4$/m.test(envText)) {
   throw new Error(`Option command did not persist untagged intent retry limit to .env: ${envText}`);
+}
+
+const importedSecretDataDir = path.join(tmp, "imported-secret-data");
+const importedSecretResult = await importSecrets(
+  importedSecretDataDir,
+  capturedDocument,
+  "correct-horse-battery-staple",
+);
+if (importedSecretResult.imported !== 1) {
+  throw new Error(`Expected one Telegram-exported Secret, got ${importedSecretResult.imported}`);
+}
+const importedSecretStore = JSON.parse(
+  await fs.readFile(path.join(importedSecretDataDir, "managed", "secrets.json"), "utf8"),
+);
+if (importedSecretStore.API_TOKEN?.value !== "telegram-secret-export-value") {
+  throw new Error("Telegram Secret export did not preserve the selected Secret value");
+}
+if (importedSecretStore.REMOTEAGENT_TRANSFER_PASSPHRASE) {
+  throw new Error("Telegram Secret export included its transfer passphrase key");
+}
+const secretTelegramCalls = await readTelegramCalls();
+if (secretTelegramCalls.filter((call) => call.method === "deleteMessage").length < 2) {
+  throw new Error("Secret source messages were not deleted after storage");
+}
+if (!secretTelegramCalls.some((call) => call.method === "sendDocument")) {
+  throw new Error("Encrypted Secret bundle was not sent as a Telegram document");
 }
 
 const sessionWorkspace = session.workspace;

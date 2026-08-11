@@ -66,3 +66,33 @@ remoteagent secret import ~/remoteagent-secrets.ra-secrets --passphrase-file /se
 ```
 
 The Telegram bot token and `TELEGRAM_OWNER_ID` are runtime configuration, not `/secret` values. Register the bot separately with `remoteagent bot add` on the new PC.
+
+## Encrypted delivery through Telegram
+
+RemoteAgent can send selected Secret values back to the current private chat without exposing their values to the provider or Telegram message text. First store a transfer passphrase that you know:
+
+```text
+/secret set REMOTEAGENT_TRANSFER_PASSPHRASE a-long-private-passphrase
+```
+
+Then export only the required keys:
+
+```text
+/secret export REMOTEAGENT_TRANSFER_PASSPHRASE APPBACK_RELEASE_STORE_PASSWORD APPBACK_RELEASE_KEY_PASSWORD APPBACK_RELEASE_KEYSTORE_BASE64 GOOGLE_PLAY_SERVICE_ACCOUNT_JSON
+```
+
+RemoteAgent performs these steps itself:
+
+1. Reads the passphrase and selected Secret values without sending them to Codex or Claude.
+2. Excludes the passphrase key from the bundle.
+3. Compresses the payload with gzip and encrypts it with AES-256-GCM.
+4. Sends the `.ra-secrets` file to the same Telegram chat.
+5. Removes the temporary server-side bundle after delivery.
+
+Import the received file on the destination PC with the CLI:
+
+```bash
+remoteagent secret import ~/Downloads/remoteagent-secrets-S001-20260811.ra-secrets
+```
+
+The `/secret set` source message is deleted from the private chat after successful storage when Telegram permits deletion, and local RemoteAgent logs redact its value. Telegram bot chats are not end-to-end encrypted, so the local CLI export remains the strongest option for especially sensitive credentials.

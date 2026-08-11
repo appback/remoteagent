@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, randomBytes, scrypt } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { gunzipSync, gzipSync } from "node:zlib";
 
 const BUNDLE_FORMAT = "remoteagent-secret-bundle";
 const BUNDLE_VERSION = 1;
@@ -21,6 +22,7 @@ type SecretPayload = {
 type SecretBundle = {
   format: typeof BUNDLE_FORMAT;
   version: typeof BUNDLE_VERSION;
+  compression?: "gzip";
   kdf: {
     name: "scrypt";
     salt: string;
@@ -38,6 +40,11 @@ export type SecretExportResult = {
   count: number;
 };
 
+export type SecretExportOptions = {
+  includeKeys?: string[];
+  excludeKeys?: string[];
+};
+
 export type SecretImportResult = {
   imported: number;
   overwritten: number;
@@ -45,10 +52,16 @@ export type SecretImportResult = {
   backupPath?: string;
 };
 
-export async function exportSecrets(dataDir: string, outputPath: string, passphrase: string): Promise<SecretExportResult> {
+export async function exportSecrets(
+  dataDir: string,
+  outputPath: string,
+  passphrase: string,
+  options: SecretExportOptions = {},
+): Promise<SecretExportResult> {
   assertPassphrase(passphrase);
   const secretsPath = path.join(dataDir, "managed", "secrets.json");
-  const secrets = await readSecrets(secretsPath, false);
+  const storedSecrets = await readSecrets(secretsPath, false);
+  const secrets = selectSecrets(storedSecrets, options);
   const payload: SecretPayload = {
     exportedAt: new Date().toISOString(),
     secrets,
@@ -58,13 +71,15 @@ export async function exportSecrets(dataDir: string, outputPath: string, passphr
   const key = await deriveKey(passphrase, salt);
   const cipher = createCipheriv("aes-256-gcm", key, iv);
   cipher.setAAD(AAD);
+  const compressedPayload = gzipSync(Buffer.from(JSON.stringify(payload), "utf8"));
   const encrypted = Buffer.concat([
-    cipher.update(JSON.stringify(payload), "utf8"),
+    cipher.update(compressedPayload),
     cipher.final(),
   ]);
   const bundle: SecretBundle = {
     format: BUNDLE_FORMAT,
     version: BUNDLE_VERSION,
+    compression: "gzip",
     kdf: {
       name: "scrypt",
       salt: salt.toString("base64"),
@@ -82,6 +97,38 @@ export async function exportSecrets(dataDir: string, outputPath: string, passphr
     outputPath: resolvedOutputPath,
     count: Object.keys(secrets).length,
   };
+}
+
+function selectSecrets(
+  secrets: Record<string, SecretRecord>,
+  options: SecretExportOptions,
+): Record<string, SecretRecord> {
+  const excluded = new Set((options.excludeKeys ?? []).map((key) => key.trim().toUpperCase()).filter(Boolean));
+  const requested = (options.includeKeys ?? []).map((key) => key.trim().toUpperCase()).filter(Boolean);
+  const selected: Record<string, SecretRecord> = {};
+
+  if (requested.length > 0) {
+    const missing = requested.filter((key) => !secrets[key]);
+    if (missing.length > 0) {
+      throw new Error(`Secret key was not found: ${missing.join(", ")}`);
+    }
+    for (const key of requested) {
+      if (!excluded.has(key)) {
+        selected[key] = secrets[key]!;
+      }
+    }
+  } else {
+    for (const [key, record] of Object.entries(secrets)) {
+      if (!excluded.has(key)) {
+        selected[key] = record;
+      }
+    }
+  }
+
+  if (Object.keys(selected).length === 0) {
+    throw new Error("No Secret values remain to export.");
+  }
+  return selected;
 }
 
 export async function importSecrets(
@@ -108,7 +155,15 @@ export async function importSecrets(
     throw new Error("Secret bundle could not be decrypted. Check the passphrase and file integrity.");
   }
 
-  const payload = parsePayload(plaintext.toString("utf8"));
+  let decodedPayload = plaintext;
+  if (bundle.compression === "gzip") {
+    try {
+      decodedPayload = gunzipSync(plaintext);
+    } catch {
+      throw new Error("Secret bundle compressed payload is invalid.");
+    }
+  }
+  const payload = parsePayload(decodedPayload.toString("utf8"));
   const secretsPath = path.join(dataDir, "managed", "secrets.json");
   const existing = await readSecrets(secretsPath, true);
   const incomingKeys = Object.keys(payload.secrets);
@@ -143,6 +198,7 @@ function parseBundle(text: string): SecretBundle {
   if (
     bundle.format !== BUNDLE_FORMAT
     || bundle.version !== BUNDLE_VERSION
+    || (bundle.compression !== undefined && bundle.compression !== "gzip")
     || bundle.kdf?.name !== "scrypt"
     || bundle.cipher?.name !== "aes-256-gcm"
     || typeof bundle.kdf.salt !== "string"
