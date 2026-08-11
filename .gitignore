@@ -4,3 +4,4 @@ dist
 .data
 *.tgz
 *.tar.gz
+*.ra-secrets

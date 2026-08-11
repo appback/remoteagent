@@ -1,6 +1,6 @@
 {
   "name": "appback-remoteagent",
-  "version": "0.18.0",
+  "version": "0.19.0",
   "description": "Personal installable session server for continuing local AI work across PC and Telegram",
   "license": "MIT",
   "type": "module",
@@ -20,6 +20,7 @@
     "check": "tsc --noEmit -p tsconfig.json",
     "selftest:telegram": "npm run build && node scripts/selftest-telegram-update.mjs",
     "selftest:codex-stream": "npm run build && node scripts/selftest-codex-stream.mjs",
+    "selftest:cli": "npm run build && node scripts/selftest-cli.mjs",
     "prepare": "npm run build",
     "prepublishOnly": "node scripts/prepublish-guard.mjs",
     "release:version": "bash scripts/release-version.sh",

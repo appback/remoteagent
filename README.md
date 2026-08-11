@@ -318,6 +318,27 @@ remoteagent-start
 
 `remoteagent-install` seeds provider install/login hook paths into `~/.remoteagent/.env` automatically, so `/install codex` and `/install claude` work on a fresh machine without manual hook wiring.
 
+Register the first Telegram bot without editing `.env` manually:
+
+```bash
+remoteagent bot add
+remoteagent-start
+```
+
+The command validates the BotFather token, stores the bot configuration, and configures the numeric Telegram owner user ID. Tokens are entered through a hidden prompt by default.
+
+To move installation-wide `/secret` values to another PC, export and import a password-encrypted bundle:
+
+```bash
+# Old PC
+remoteagent secret export ~/remoteagent-secrets.ra-secrets
+
+# New PC
+remoteagent secret import ~/remoteagent-secrets.ra-secrets
+```
+
+See [CLI bootstrap and secret migration](./docs/CLI_BOOTSTRAP_AND_SECRET_MIGRATION.md) for the complete interactive and automation-safe commands.
+
 For one-line installs on a fresh machine:
 
 ```bash
