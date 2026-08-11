@@ -45,6 +45,13 @@ fi
 
 mkdir -p "$DATA_DIR" "$DATA_DIR/logs"
 
+NODE_BIN_PATH="$(command -v node || true)"
+if [ -z "$NODE_BIN_PATH" ]; then
+  echo "node is required to install RemoteAgent." >&2
+  exit 1
+fi
+NODE_BIN_DIR="$(cd -P "$(dirname "$NODE_BIN_PATH")" && pwd)"
+
 if [ ! -f "$ENV_FILE" ]; then
   cp "$ROOT_DIR/.env.example" "$ENV_FILE"
   echo "Created $ENV_FILE"
@@ -84,6 +91,8 @@ upsert_env "BOT_RESTART_HELPER_PATH" "$ROOT_DIR/scripts/restart-after-bot-op.sh"
 
 cat > "$DATA_DIR/start-remoteagent.sh" <<EOF
 #!/usr/bin/env bash
+export PATH="$NODE_BIN_DIR:\$PATH"
+export NODE_BIN="$NODE_BIN_PATH"
 DATA_DIR="$DATA_DIR" "$ROOT_DIR/scripts/start.sh"
 EOF
 chmod +x "$DATA_DIR/start-remoteagent.sh"
