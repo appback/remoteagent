@@ -9,6 +9,7 @@ import {
   registerTelegramBot,
   waitForTelegramOwner,
 } from "../dist/services/cli-config-service.js";
+import { buildProviderEnv, buildRuntimePath } from "../dist/adapters/runtime-env.js";
 import { exportSecrets, importSecrets } from "../dist/services/secret-transfer-service.js";
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "remoteagent-cli-selftest-"));
@@ -19,6 +20,23 @@ const selectedBundlePath = path.join(root, "selected-transfer.ra-secrets");
 const passphrase = "correct-horse-battery-staple";
 
 try {
+  const expectedNodeBin = path.join(root, "nvm", "bin");
+  const expectedHome = path.join(root, "home");
+  const runtimePath = buildRuntimePath(
+    ["/usr/local/bin", "/usr/bin", "/usr/bin"].join(path.delimiter),
+    path.join(expectedNodeBin, "node"),
+    expectedHome,
+  ).split(path.delimiter);
+  assert.deepEqual(runtimePath, [
+    expectedNodeBin,
+    path.join(expectedHome, ".local", "bin"),
+    "/usr/local/bin",
+    "/usr/bin",
+  ]);
+  const providerEnv = buildProviderEnv();
+  assert.equal(providerEnv.PATH?.split(path.delimiter)[0], path.dirname(process.execPath));
+  assert.ok(providerEnv.PATH?.split(path.delimiter).includes(path.join(os.homedir(), ".local", "bin")));
+
   const binDir = path.join(root, "bin");
   const curlArgsPath = path.join(root, "curl-args.txt");
   const curlUpdateCallsPath = path.join(root, "curl-update-calls.txt");

@@ -32,6 +32,8 @@ remoteagent-start
 sudo systemctl restart remoteagent
 ```
 
+Provider install, login, and execution commands automatically prepend the directory of the Node executable running RemoteAgent and `~/.local/bin` to their child-process `PATH`. This keeps `/install codex`, `/install claude`, and `/login` working when RemoteAgent runs under systemd with Node installed through nvm, even if the service itself was started with a minimal system PATH.
+
 ## Secret migration
 
 RemoteAgent `/secret` values belong to the installation, not to an individual agent session. They are stored under `~/.remoteagent/managed/secrets.json`.

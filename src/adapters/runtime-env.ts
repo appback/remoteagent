@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const CHILD_ENV_BLOCKED_PREFIXES = ["TELEGRAM_"];
@@ -19,11 +20,26 @@ export function buildProviderEnv(extraEnv?: NodeJS.ProcessEnv): NodeJS.ProcessEn
   env.DATA_DIR = dataDir;
   env.REMOTEAGENT_DATA_DIR = dataDir;
   env.REMOTEAGENT_SECRET_BIN = resolveSecretHelperPath();
+  env.PATH = buildRuntimePath(env.PATH);
 
   if (extraEnv) {
     Object.assign(env, extraEnv);
   }
   return env;
+}
+
+export function buildRuntimePath(
+  existingPath = process.env.PATH,
+  nodeExecutable = process.execPath,
+  homeDir = os.homedir(),
+): string {
+  const entries = [
+    path.dirname(nodeExecutable),
+    path.join(homeDir, ".local", "bin"),
+    ...(existingPath ?? "").split(path.delimiter),
+  ].filter(Boolean);
+
+  return [...new Set(entries)].join(path.delimiter);
 }
 
 function resolveSecretHelperPath(): string {

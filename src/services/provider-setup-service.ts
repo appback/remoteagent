@@ -4,6 +4,7 @@ import path from "node:path";
 import process from "node:process";
 import { spawn } from "node:child_process";
 import type { Provider } from "../types.js";
+import { buildProviderEnv } from "../adapters/runtime-env.js";
 
 export type SetupExecutionResult = {
   code: number | null;
@@ -273,10 +274,7 @@ export class ProviderSetupService {
     return new Promise((resolve, reject) => {
       const child = spawn(launcher.file, launcher.args, {
         cwd: process.cwd(),
-        env: {
-          ...process.env,
-          ...extraEnv,
-        },
+        env: buildProviderEnv(extraEnv),
       });
 
       let stdout = "";

@@ -20,6 +20,7 @@ import type { BotPollingState } from "./services/bot-polling-state-service.js";
 import { ProviderRecoveryService } from "./services/provider-recovery-service.js";
 import { computePolicyPollIntervalMs, computeRecentMessageRanks } from "./services/polling-policy.js";
 import { terminateAllSpawnedExecutions } from "./adapters/windows-shell.js";
+import { buildProviderEnv } from "./adapters/runtime-env.js";
 import { setTelegramCommandMenu } from "./telegram-command-menu.js";
 import { buildBotInfoFromIdentity, buildFallbackBotInfo } from "./telegram-bot-identity.js";
 import type { ProviderAdapter } from "./adapters/provider-adapter.js";
@@ -666,10 +667,13 @@ function commandExists(command: string): boolean {
   }
 
   if (process.platform === "win32") {
-    return spawnSync("where", [trimmed], { stdio: "ignore" }).status === 0;
+    return spawnSync("where", [trimmed], { stdio: "ignore", env: buildProviderEnv() }).status === 0;
   }
 
-  return spawnSync("sh", ["-lc", 'command -v "$0" >/dev/null 2>&1', trimmed], { stdio: "ignore" }).status === 0;
+  return spawnSync("sh", ["-lc", 'command -v "$0" >/dev/null 2>&1', trimmed], {
+    stdio: "ignore",
+    env: buildProviderEnv(),
+  }).status === 0;
 }
 
 
