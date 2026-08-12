@@ -1,5 +1,9 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 export type TelegramBotIdentity = {
   id: number;
@@ -98,24 +102,35 @@ export async function readConfiguredOwnerId(dataDir: string): Promise<string | u
 
 export async function fetchTelegramBotIdentity(token: string): Promise<TelegramBotIdentity> {
   assertBotToken(token);
-  let response: Response;
+  let stdout: string;
   try {
-    response = await fetch(`https://api.telegram.org/bot${token}/getMe`, {
-      signal: AbortSignal.timeout(20_000),
-    });
-  } catch {
-    throw new Error("Telegram getMe request failed. Check this machine's network and DNS, then retry.");
+    const result = await execFileAsync("curl", [
+      "-4",
+      "-sS",
+      "--connect-timeout",
+      "10",
+      "--max-time",
+      "20",
+      `https://api.telegram.org/bot${token}/getMe`,
+    ]);
+    stdout = result.stdout;
+    if (result.stderr?.trim()) {
+      console.error(`curl stderr for Telegram getMe: ${result.stderr.trim()}`);
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message.replace(token, "[redacted]") : String(error);
+    throw new Error(`Telegram getMe request failed over IPv4: ${detail}`);
   }
 
   let payload: TelegramGetMeResponse;
   try {
-    payload = await response.json() as TelegramGetMeResponse;
+    payload = JSON.parse(stdout) as TelegramGetMeResponse;
   } catch {
-    throw new Error(`Telegram getMe returned an invalid response (HTTP ${response.status}).`);
+    throw new Error("Telegram getMe returned an invalid response.");
   }
 
-  if (!response.ok || !payload.ok || !payload.result?.id || !payload.result.username) {
-    throw new Error(payload.description || `Telegram rejected the supplied bot token (HTTP ${response.status}).`);
+  if (!payload.ok || !payload.result?.id || !payload.result.username) {
+    throw new Error(payload.description || "Telegram rejected the supplied bot token.");
   }
 
   return {

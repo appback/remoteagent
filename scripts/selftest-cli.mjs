@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { registerTelegramBot } from "../dist/services/cli-config-service.js";
+import { fetchTelegramBotIdentity, registerTelegramBot } from "../dist/services/cli-config-service.js";
 import { exportSecrets, importSecrets } from "../dist/services/secret-transfer-service.js";
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "remoteagent-cli-selftest-"));
@@ -15,6 +15,22 @@ const selectedBundlePath = path.join(root, "selected-transfer.ra-secrets");
 const passphrase = "correct-horse-battery-staple";
 
 try {
+  const binDir = path.join(root, "bin");
+  const curlArgsPath = path.join(root, "curl-args.txt");
+  await fs.mkdir(binDir, { recursive: true });
+  await fs.writeFile(path.join(binDir, "curl"), `#!/usr/bin/env bash
+printf '%s\\n' "$@" > ${JSON.stringify(curlArgsPath)}
+printf '{"ok":true,"result":{"id":100000,"username":"bootstrap_test_bot"}}'
+`, { mode: 0o755 });
+  const originalPath = process.env.PATH;
+  process.env.PATH = `${binDir}:${originalPath ?? ""}`;
+  const fetchedIdentity = await fetchTelegramBotIdentity("100000:abcdefghijklmnopqrstuvwxyz_123456");
+  assert.deepEqual(fetchedIdentity, { id: 100000, username: "bootstrap_test_bot" });
+  const curlArgs = await fs.readFile(curlArgsPath, "utf8");
+  assert.match(curlArgs, /^-4$/m);
+  assert.match(curlArgs, /\/getMe$/m);
+  process.env.PATH = originalPath;
+
   await fs.mkdir(sourceDataDir, { recursive: true });
   await fs.writeFile(path.join(sourceDataDir, ".env"), [
     "TELEGRAM_BOT_TOKEN=your-telegram-bot-token",
