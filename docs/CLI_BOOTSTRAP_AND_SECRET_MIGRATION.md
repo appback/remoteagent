@@ -11,9 +11,11 @@ remoteagent bot add
 remoteagent-start
 ```
 
-`remoteagent bot add` asks for the BotFather token without echoing it and then asks for the numeric Telegram owner user ID. It validates the token with Telegram `getMe` before writing `~/.remoteagent/.env`.
+`remoteagent bot add` asks for the BotFather token without echoing it and validates the token with Telegram `getMe`. On the first registration it then prints a one-time Telegram `/start` link and waits up to three minutes. Open that link from the Telegram account that will own the installation; RemoteAgent detects and stores that account's numeric user ID automatically. No manual owner ID lookup or entry is required.
 
-For automation, keep sensitive values out of shell history by using a permission-restricted token file:
+The confirmation update is consumed by the setup command. After `remoteagent-start`, send `/start` to the bot normally to begin using RemoteAgent.
+
+For unattended automation, keep sensitive values out of shell history by using a permission-restricted token file and pass the already verified owner ID explicitly:
 
 ```bash
 chmod 600 /secure/path/telegram-token

@@ -19,6 +19,31 @@ type TelegramGetMeResponse = {
   };
 };
 
+type TelegramGetUpdatesResponse = {
+  ok?: boolean;
+  description?: string;
+  result?: Array<{
+    update_id?: number;
+    message?: {
+      text?: string;
+      chat?: { id?: number; type?: string };
+      from?: {
+        id?: number;
+        is_bot?: boolean;
+        username?: string;
+        first_name?: string;
+        last_name?: string;
+      };
+    };
+  }>;
+};
+
+export type TelegramOwnerIdentity = {
+  id: string;
+  username?: string;
+  displayName: string;
+};
+
 export type RegisterTelegramBotOptions = {
   dataDir: string;
   token: string;
@@ -137,6 +162,98 @@ export async function fetchTelegramBotIdentity(token: string): Promise<TelegramB
     id: payload.result.id,
     username: payload.result.username,
   };
+}
+
+export async function waitForTelegramOwner(
+  token: string,
+  startPayload: string,
+  timeoutMs = 180_000,
+): Promise<TelegramOwnerIdentity> {
+  assertBotToken(token);
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(startPayload)) {
+    throw new Error("Telegram start payload must use 1-64 URL-safe characters.");
+  }
+
+  const startedAt = Date.now();
+  let offset = await nextTelegramUpdateOffset(token);
+  while (Date.now() - startedAt < timeoutMs) {
+    const remainingMs = timeoutMs - (Date.now() - startedAt);
+    const pollSeconds = Math.max(1, Math.min(15, Math.floor(remainingMs / 1000)));
+    const updates = await getTelegramUpdates(token, offset, pollSeconds);
+    for (const update of updates) {
+      if (typeof update.update_id === "number") {
+        offset = Math.max(offset, update.update_id + 1);
+      }
+      const message = update.message;
+      const sender = message?.from;
+      if (
+        message?.chat?.type !== "private"
+        || sender?.is_bot
+        || typeof sender?.id !== "number"
+        || message.text?.trim() !== `/start ${startPayload}`
+      ) {
+        continue;
+      }
+      return {
+        id: String(sender.id),
+        username: sender.username,
+        displayName: [sender.first_name, sender.last_name].filter(Boolean).join(" ") || sender.username || String(sender.id),
+      };
+    }
+  }
+
+  throw new Error("Timed out waiting for the Telegram owner confirmation. Run the command again and use the new /start link.");
+}
+
+async function nextTelegramUpdateOffset(token: string): Promise<number> {
+  const updates = await getTelegramUpdates(token, undefined, 0);
+  return updates.reduce((next, update) =>
+    typeof update.update_id === "number" ? Math.max(next, update.update_id + 1) : next, 0);
+}
+
+async function getTelegramUpdates(token: string, offset: number | undefined, timeoutSeconds: number) {
+  const args = [
+    "-4",
+    "-sS",
+    "--get",
+    "--connect-timeout",
+    "10",
+    "--max-time",
+    String(Math.max(20, timeoutSeconds + 10)),
+    "--data-urlencode",
+    `timeout=${timeoutSeconds}`,
+    "--data-urlencode",
+    "limit=100",
+    "--data-urlencode",
+    'allowed_updates=["message"]',
+  ];
+  if (offset !== undefined) {
+    args.push("--data-urlencode", `offset=${offset}`);
+  }
+  args.push(`https://api.telegram.org/bot${token}/getUpdates`);
+
+  let stdout: string;
+  try {
+    const result = await execFileAsync("curl", args);
+    stdout = result.stdout;
+    if (result.stderr?.trim()) {
+      console.error(`curl stderr for Telegram getUpdates: ${result.stderr.trim()}`);
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message.replace(token, "[redacted]") : String(error);
+    throw new Error(`Telegram getUpdates request failed over IPv4: ${detail}`);
+  }
+
+  let payload: TelegramGetUpdatesResponse;
+  try {
+    payload = JSON.parse(stdout) as TelegramGetUpdatesResponse;
+  } catch {
+    throw new Error("Telegram getUpdates returned an invalid response.");
+  }
+  if (!payload.ok || !Array.isArray(payload.result)) {
+    throw new Error(payload.description || "Telegram rejected the getUpdates request.");
+  }
+  return payload.result;
 }
 
 function assertBotToken(token: string): void {

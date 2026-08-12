@@ -1,9 +1,14 @@
 import fs from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import readline from "node:readline/promises";
-import { registerTelegramBot, readConfiguredOwnerId } from "./services/cli-config-service.js";
+import {
+  fetchTelegramBotIdentity,
+  registerTelegramBot,
+  readConfiguredOwnerId,
+  waitForTelegramOwner,
+} from "./services/cli-config-service.js";
 import { exportSecrets, importSecrets } from "./services/secret-transfer-service.js";
 
 async function main(): Promise<void> {
@@ -52,9 +57,27 @@ async function addBot(dataDir: string, args: string[]): Promise<void> {
     throw new Error(`Unexpected bot argument: ${args[0]}`);
   }
 
+  const identity = await fetchTelegramBotIdentity(token);
   const configuredOwner = await readConfiguredOwnerId(dataDir);
-  const ownerId = ownerOption || configuredOwner || await promptVisible("Telegram owner user ID: ");
-  const result = await registerTelegramBot({ dataDir, token, ownerId });
+  let ownerId = ownerOption || configuredOwner;
+  if (!ownerId) {
+    const startPayload = `ra_${randomBytes(8).toString("hex")}`;
+    console.log([
+      `Validated @${identity.username} (${identity.id}).`,
+      "",
+      "Open this Telegram link within 3 minutes to confirm the owner:",
+      `  https://t.me/${identity.username}?start=${startPayload}`,
+      "",
+      "Or send this exact command to the bot:",
+      `  /start ${startPayload}`,
+      "",
+      "Waiting for owner confirmation...",
+    ].join("\n"));
+    const owner = await waitForTelegramOwner(token, startPayload);
+    ownerId = owner.id;
+    console.log(`Detected Telegram owner: ${owner.displayName}${owner.username ? ` (@${owner.username})` : ""} (${owner.id})`);
+  }
+  const result = await registerTelegramBot({ dataDir, token, ownerId, identity });
 
   console.log([
     `${result.added ? "Registered" : "Updated"} @${result.identity.username} (${result.identity.id}).`,
@@ -129,18 +152,6 @@ function takeFlag(args: string[], name: string): boolean {
   }
   args.splice(index, 1);
   return true;
-}
-
-async function promptVisible(question: string): Promise<string> {
-  if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    throw new Error(`${question.trim()} is required as a command option in non-interactive mode.`);
-  }
-  const terminal = readline.createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    return (await terminal.question(question)).trim();
-  } finally {
-    terminal.close();
-  }
 }
 
 async function promptHidden(question: string): Promise<string> {

@@ -4,7 +4,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fetchTelegramBotIdentity, registerTelegramBot } from "../dist/services/cli-config-service.js";
+import {
+  fetchTelegramBotIdentity,
+  registerTelegramBot,
+  waitForTelegramOwner,
+} from "../dist/services/cli-config-service.js";
 import { exportSecrets, importSecrets } from "../dist/services/secret-transfer-service.js";
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "remoteagent-cli-selftest-"));
@@ -17,10 +21,25 @@ const passphrase = "correct-horse-battery-staple";
 try {
   const binDir = path.join(root, "bin");
   const curlArgsPath = path.join(root, "curl-args.txt");
+  const curlUpdateCallsPath = path.join(root, "curl-update-calls.txt");
   await fs.mkdir(binDir, { recursive: true });
   await fs.writeFile(path.join(binDir, "curl"), `#!/usr/bin/env bash
 printf '%s\\n' "$@" > ${JSON.stringify(curlArgsPath)}
-printf '{"ok":true,"result":{"id":100000,"username":"bootstrap_test_bot"}}'
+if printf '%s\\n' "$@" | grep -q '/getUpdates'; then
+  count=0
+  if [ -f ${JSON.stringify(curlUpdateCallsPath)} ]; then
+    count="$(cat ${JSON.stringify(curlUpdateCallsPath)})"
+  fi
+  count=$((count + 1))
+  printf '%s' "$count" > ${JSON.stringify(curlUpdateCallsPath)}
+  if [ "$count" -eq 1 ]; then
+    printf '{"ok":true,"result":[{"update_id":41,"message":{"text":"/start stale_payload","chat":{"id":777,"type":"private"},"from":{"id":777,"is_bot":false,"username":"stale"}}}]}'
+  else
+    printf '{"ok":true,"result":[{"update_id":42,"message":{"text":"/start ra_selftest","chat":{"id":8202993989,"type":"private"},"from":{"id":8202993989,"is_bot":false,"username":"roy","first_name":"Roy"}}}]}'
+  fi
+else
+  printf '{"ok":true,"result":{"id":100000,"username":"bootstrap_test_bot"}}'
+fi
 `, { mode: 0o755 });
   const originalPath = process.env.PATH;
   process.env.PATH = `${binDir}:${originalPath ?? ""}`;
@@ -29,6 +48,19 @@ printf '{"ok":true,"result":{"id":100000,"username":"bootstrap_test_bot"}}'
   const curlArgs = await fs.readFile(curlArgsPath, "utf8");
   assert.match(curlArgs, /^-4$/m);
   assert.match(curlArgs, /\/getMe$/m);
+  const detectedOwner = await waitForTelegramOwner(
+    "100000:abcdefghijklmnopqrstuvwxyz_123456",
+    "ra_selftest",
+    2_000,
+  );
+  assert.deepEqual(detectedOwner, {
+    id: "8202993989",
+    username: "roy",
+    displayName: "Roy",
+  });
+  const ownerCurlArgs = await fs.readFile(curlArgsPath, "utf8");
+  assert.match(ownerCurlArgs, /^-4$/m);
+  assert.match(ownerCurlArgs, /^offset=42$/m);
   process.env.PATH = originalPath;
 
   await fs.mkdir(sourceDataDir, { recursive: true });
