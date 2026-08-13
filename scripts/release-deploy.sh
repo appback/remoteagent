@@ -63,7 +63,7 @@ REMOTE
 }
 
 deploy_26() {
-  ssh ospadmin@192.168.0.26 "VERSION=$VERSION bash -s" <<'REMOTE'
+  ssh ospadmin@192.168.33.26 "VERSION=$VERSION bash -s" <<'REMOTE'
 set -euo pipefail
 export PATH="$HOME/.local/bin:$PATH"
 node - <<'NODE'

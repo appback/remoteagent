@@ -132,7 +132,7 @@ journalctl -u remoteagent --since "5 minutes ago" --no-pager | tail -80
 Server 26:
 
 ```bash
-ssh ospadmin@192.168.0.26 'bash -lc '"'"'
+ssh ospadmin@192.168.33.26 'bash -lc '"'"'
 npm list -g appback-remoteagent --depth=0
 pgrep -af "appback-remoteagent/dist/index.js"
 tail -80 ~/.remoteagent/logs/agent.log

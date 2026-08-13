@@ -191,8 +191,8 @@ ssh au2223@192.168.0.30 'export PATH="/home/au2223/.local/bin:/home/au2223/.nvm/
 For server 26:
 
 ```bash
-ssh ospadmin@192.168.0.26 'export PATH="$HOME/.local/bin:$PATH"; npm explore -g appback-remoteagent -- npm run maintenance:disk -- report'
-ssh ospadmin@192.168.0.26 'export PATH="$HOME/.local/bin:$PATH"; npm explore -g appback-remoteagent -- npm run maintenance:disk -- prune-safe'
+ssh ospadmin@192.168.33.26 'export PATH="$HOME/.local/bin:$PATH"; npm explore -g appback-remoteagent -- npm run maintenance:disk -- report'
+ssh ospadmin@192.168.33.26 'export PATH="$HOME/.local/bin:$PATH"; npm explore -g appback-remoteagent -- npm run maintenance:disk -- prune-safe'
 ```
 
 ## Git workflow
