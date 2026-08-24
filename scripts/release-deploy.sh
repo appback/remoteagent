@@ -52,7 +52,17 @@ if (running.length > 0) {
   process.exit(2);
 }
 NODE
-npm install -g "appback-remoteagent@$VERSION"
+for ATTEMPT in {1..12}; do
+  if npm install -g "appback-remoteagent@$VERSION"; then
+    break
+  fi
+  if [[ "$ATTEMPT" -eq 12 ]]; then
+    echo "Remote npm install failed after $ATTEMPT attempts." >&2
+    exit 1
+  fi
+  echo "Remote npm registry has not propagated yet; retrying in 5s ($ATTEMPT/12)."
+  sleep 5
+done
 remoteagent-install
 sudo -n systemctl restart remoteagent
 sleep 5
@@ -81,7 +91,17 @@ if (fs.existsSync(path)) {
   }
 }
 NODE
-npm install -g "appback-remoteagent@$VERSION"
+for ATTEMPT in {1..12}; do
+  if npm install -g "appback-remoteagent@$VERSION"; then
+    break
+  fi
+  if [[ "$ATTEMPT" -eq 12 ]]; then
+    echo "Remote npm install failed after $ATTEMPT attempts." >&2
+    exit 1
+  fi
+  echo "Remote npm registry has not propagated yet; retrying in 5s ($ATTEMPT/12)."
+  sleep 5
+done
 remoteagent-install
 ~/.remoteagent/stop-remoteagent.sh || true
 sleep 2
@@ -112,7 +132,17 @@ if (fs.existsSync(path)) {
   }
 }
 NODE
-npm install -g "appback-remoteagent@$VERSION"
+for ATTEMPT in {1..12}; do
+  if npm install -g "appback-remoteagent@$VERSION"; then
+    break
+  fi
+  if [[ "$ATTEMPT" -eq 12 ]]; then
+    echo "Remote npm install failed after $ATTEMPT attempts." >&2
+    exit 1
+  fi
+  echo "Remote npm registry has not propagated yet; retrying in 5s ($ATTEMPT/12)."
+  sleep 5
+done
 remoteagent-install
 ~/.remoteagent/stop-remoteagent.sh || true
 sleep 2

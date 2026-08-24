@@ -114,6 +114,7 @@ npm run release:deploy -- 0.15.5 all
 The deploy script performs:
 
 - npm registry version check for `appback-remoteagent@<version>`
+- bounded retry when a target server's npm registry edge has not received the new version yet
 - server 30 npm install, install hook, systemd restart, version/log verification
 - server 40 npm install, install hook, user-process restart, version/log verification
 - server 26 npm install, install hook, user-process restart, version/log verification
