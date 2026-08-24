@@ -39,6 +39,14 @@ deploy_30() {
   ssh au2223@192.168.33.30 "VERSION=$VERSION bash -s" <<'REMOTE'
 set -euo pipefail
 export PATH="/home/au2223/.local/bin:/home/au2223/.nvm/versions/node/v22.22.0/bin:$PATH"
+if [[ -L "$HOME/.npm" && ! -e "$HOME/.npm" ]]; then
+  echo "Broken npm cache symlink: $HOME/.npm -> $(readlink "$HOME/.npm")" >&2
+  exit 1
+fi
+if [[ -e "$HOME/.npm" && ! -d "$HOME/.npm" ]]; then
+  echo "npm cache path is not a directory: $HOME/.npm" >&2
+  exit 1
+fi
 node - <<'NODE'
 const fs = require("fs");
 const path = "/home/au2223/.remoteagent/bot-polling-state.json";
@@ -76,6 +84,14 @@ deploy_26() {
   ssh ospadmin@192.168.33.26 "VERSION=$VERSION bash -s" <<'REMOTE'
 set -euo pipefail
 export PATH="$HOME/.local/bin:$PATH"
+if [[ -L "$HOME/.npm" && ! -e "$HOME/.npm" ]]; then
+  echo "Broken npm cache symlink: $HOME/.npm -> $(readlink "$HOME/.npm")" >&2
+  exit 1
+fi
+if [[ -e "$HOME/.npm" && ! -d "$HOME/.npm" ]]; then
+  echo "npm cache path is not a directory: $HOME/.npm" >&2
+  exit 1
+fi
 node - <<'NODE'
 const fs = require("fs");
 const path = `${process.env.HOME}/.remoteagent/bot-polling-state.json`;
@@ -117,6 +133,14 @@ deploy_40() {
   ssh appback@192.168.33.40 "VERSION=$VERSION bash -s" <<'REMOTE'
 set -euo pipefail
 export PATH="$HOME/.local/bin:$HOME/.nvm/versions/node/v22.23.2/bin:$PATH"
+if [[ -L "$HOME/.npm" && ! -e "$HOME/.npm" ]]; then
+  echo "Broken npm cache symlink: $HOME/.npm -> $(readlink "$HOME/.npm")" >&2
+  exit 1
+fi
+if [[ -e "$HOME/.npm" && ! -d "$HOME/.npm" ]]; then
+  echo "npm cache path is not a directory: $HOME/.npm" >&2
+  exit 1
+fi
 node - <<'NODE'
 const fs = require("fs");
 const path = `${process.env.HOME}/.remoteagent/bot-polling-state.json`;
