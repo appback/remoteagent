@@ -74,7 +74,7 @@ The publish script performs:
 - `npm run build`
 - `npm pack`
 - guarded `npm publish`
-- exact published version and `latest` dist-tag verification
+- exact published version and `latest` dist-tag verification with bounded propagation retries
 
 The package publish entrypoint is `npm run release:publish`.
 `scripts/prepublish-guard.mjs` routes manual publish attempts back to that entrypoint.
