@@ -21,6 +21,12 @@ RemoteAgent should never leak raw provider event payloads directly to Telegram u
 - `provider.timeout.final`
   - example: `Codex timed out after 600s without returning a final reply`
   - behavior: do not retry automatically; explain the exact configured timeout that killed the provider process
+- `provider.usage_limit.fallback`
+  - example: `You've hit your usage limit ... try again at Aug 27th, 2026 3:52 AM`
+  - behavior: preserve the session's primary model and retry the same request once with `gpt-5.3-codex-spark`
+  - scope: the persisted fallback window belongs to the machine's Codex account, not to an individual RemoteAgent session
+  - recovery: after the reported reset time, try the primary model on the next request and clear fallback state only after that call succeeds
+  - exclusions: model capacity, HTTP 429, Telegram rate limits, 503 responses, and transport errors must not activate this fallback
 
 ## Current terminal behavior
 
@@ -35,6 +41,14 @@ When a provider process reaches `COMMAND_TIMEOUT_MS`:
 - do not say only that "response was delayed"
 - do not invent a cause such as context compaction, provider outage, or model quality unless the provider output explicitly says that
 - tell the operator to increase `/option timeout <seconds>` for long-running work
+
+When Codex reports an explicit account usage-limit error:
+
+- store the temporary state in `codex-usage-fallback.json`
+- do not modify the model stored in any session
+- use the same Codex thread id, workspace, prompt, and sandbox while overriding only the execution model
+- do not retry recursively if the fallback model also reports a usage-limit error
+- if the error does not contain a parseable future reset time, use Spark only for the current execution and probe the primary model again on the next request
 
 ## Maintenance rule
 

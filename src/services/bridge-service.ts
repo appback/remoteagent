@@ -16,9 +16,14 @@ import type {
 } from "../types.js";
 import { FileStore } from "../store/file-store.js";
 import { stopSpawnedExecution } from "../adapters/windows-shell.js";
+import {
+  CODEX_USAGE_FALLBACK_MODEL,
+  CodexUsageFallbackService,
+  parseCodexUsageLimit,
+} from "./codex-usage-fallback-service.js";
 
 const MODEL_PRESETS: Record<Provider, string[]> = {
-  codex: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.2", "gpt-5.1-codex-max"],
+  codex: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark", "gpt-5.2", "gpt-5.1-codex-max"],
   claude: ["sonnet", "opus", "haiku"],
 };
 
@@ -34,6 +39,7 @@ export type ModelSelection = {
 
 export class BridgeService {
   private readonly sessionLocks = new Map<string, Promise<void>>();
+  private readonly codexUsageFallback: CodexUsageFallbackService;
 
   constructor(
     private readonly store: FileStore,
@@ -43,7 +49,9 @@ export class BridgeService {
     private readonly isProviderInstalled: (provider: Provider) => boolean,
     private readonly preferredStartMode: BridgeMode,
     private readonly defaultCodexSandboxMode?: CodexSandboxMode,
-  ) {}
+  ) {
+    this.codexUsageFallback = new CodexUsageFallbackService(store.getDataDir());
+  }
 
   async createSession(botId: string, chatId: string, cwd?: string): Promise<ChatSession> {
     const provider = await this.resolveStartProvider();
@@ -629,8 +637,35 @@ export class BridgeService {
     for (const provider of providers) {
       const providerSession = this.ensureProviderSession(session, provider);
       this.ensureConfigured(provider);
+      const primaryModel = providerSession.model ?? this.defaultModelFor(provider);
+      const selection = provider === "codex"
+        ? await this.codexUsageFallback.selectExecutionModel(primaryModel)
+        : { model: primaryModel, recoveryProbe: false };
+      let executionModel = selection.model;
 
-      const response = await this.adapters[provider]!.send({
+      const forwardProgress = async (output: string, model: string): Promise<void> => {
+        const progressResponse: ProviderResponse = {
+          provider,
+          sessionId: providerSession.sessionId ?? session.sessionId,
+          publicSessionId: session.publicId,
+          model,
+          cwd: providerSession.cwd,
+          output,
+        };
+        await this.log({
+          timestamp: new Date().toISOString(),
+          remoteSessionId: session.sessionId,
+          botId,
+          chatId,
+          provider,
+          direction: "out",
+          sessionId: providerSession.sessionId,
+          text: output,
+        });
+        await onProgress?.(progressResponse);
+      };
+
+      const sendWithModel = (model: string): Promise<ProviderResponse> => this.adapters[provider]!.send({
         botId,
         chatId: chatId ?? requestSource,
         remoteSessionId: session.sessionId,
@@ -638,32 +673,60 @@ export class BridgeService {
         cwd: providerSession.cwd,
         sessionId: providerSession.sessionId,
         message,
-        model: providerSession.model,
+        model,
         sandboxMode: providerSession.sandboxMode,
-        onProgress: onProgress
-          ? async (output) => {
-              const progressResponse: ProviderResponse = {
-                provider,
-                sessionId: providerSession.sessionId ?? session.sessionId,
-                publicSessionId: session.publicId,
-                model: providerSession.model ?? this.defaultModelFor(provider),
-                cwd: providerSession.cwd,
-                output,
-              };
-              await this.log({
-                timestamp: new Date().toISOString(),
-                remoteSessionId: session.sessionId,
-                botId,
-                chatId,
-                provider,
-                direction: "out",
-                sessionId: providerSession.sessionId,
-                text: output,
-              });
-              await onProgress(progressResponse);
-            }
-          : undefined,
+        onProgress: onProgress ? (output) => forwardProgress(output, model) : undefined,
       });
+      const reportHarnessNotice = async (output: string, model: string): Promise<void> => {
+        try {
+          await forwardProgress(output, model);
+        } catch (error) {
+          if (error instanceof Error && error.name === "SilentTelegramAbort") {
+            throw error;
+          }
+          const messageText = error instanceof Error ? error.message : String(error);
+          console.warn(`[codex-usage-fallback] notice delivery failed for ${session.publicId}: ${messageText}`);
+          await this.log({
+            timestamp: new Date().toISOString(),
+            remoteSessionId: session.sessionId,
+            botId,
+            chatId,
+            provider: "system",
+            direction: "system",
+            sessionId: providerSession.sessionId,
+            text: `Codex usage fallback notice delivery failed: ${messageText}`,
+          });
+        }
+      };
+
+      let response: ProviderResponse;
+      try {
+        response = await sendWithModel(executionModel);
+      } catch (error) {
+        const messageText = error instanceof Error ? error.message : String(error);
+        const usageLimit = provider === "codex" ? parseCodexUsageLimit(messageText) : undefined;
+        if (!usageLimit || executionModel === CODEX_USAGE_FALLBACK_MODEL) {
+          throw error;
+        }
+
+        await this.codexUsageFallback.activate(usageLimit);
+        executionModel = CODEX_USAGE_FALLBACK_MODEL;
+        const resetText = usageLimit.resetAtLabel ? ` 초기화 예정: ${usageLimit.resetAtLabel}.` : "";
+        await reportHarnessNotice([
+          "REPORT:progress",
+          `기본 모델 ${primaryModel}의 사용 한도가 소진되어 이번 실행을 ${executionModel}로 임시 전환합니다.${resetText}`,
+          "세션의 기본 모델 설정은 변경하지 않습니다.",
+        ].join("\n"), executionModel);
+        response = await sendWithModel(executionModel);
+      }
+
+      if (provider === "codex" && selection.recoveryProbe && executionModel === primaryModel) {
+        await this.codexUsageFallback.clear();
+        await reportHarnessNotice([
+          "REPORT:progress",
+          `사용 한도 초기화 후 기본 모델 ${primaryModel} 호출이 성공하여 원래 모델로 복귀했습니다.`,
+        ].join("\n"), primaryModel);
+      }
 
       const updatedProviderSession = {
         ...providerSession,
@@ -702,7 +765,7 @@ export class BridgeService {
       responses.push({
         ...response,
         publicSessionId: session.publicId,
-        model: providerSession.model ?? this.defaultModelFor(provider),
+        model: executionModel,
       });
     }
 

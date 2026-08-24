@@ -104,6 +104,7 @@ let providerMode = "success";
 let untaggedIntentCalls = 0;
 let missingEvidenceCalls = 0;
 let streamingFinalProgressCalls = 0;
+let usageLimitCalls = 0;
 let queueHoldStartedResolve;
 let queueHoldReleaseResolve;
 let queueHoldStartedPromise = Promise.resolve();
@@ -113,6 +114,19 @@ const provider = {
     providerCalls.push(request);
     if (providerMode === "timeout") {
       throw new Error("Codex timed out after 600s without returning a final reply.");
+    }
+    if (providerMode === "usage-limit") {
+      usageLimitCalls += 1;
+      if (request.model !== "gpt-5.3-codex-spark") {
+        throw new Error("You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Aug 27th, 2099 3:52 AM.");
+      }
+      return {
+        provider: "codex",
+        sessionId: request.sessionId || "mock-thread",
+        publicSessionId: request.publicSessionId,
+        cwd: request.cwd,
+        output: "REPORT:result\nusage fallback completed with evidence: `fallback-test.log`",
+      };
     }
     if (providerMode === "untagged-intent") {
       untaggedIntentCalls += 1;
@@ -560,6 +574,36 @@ if (refreshedBotsCalls.length < 2) {
   throw new Error("Bot refresh callback did not render the bot list again");
 }
 
+const usageProviderCallsBefore = providerCalls.length;
+providerMode = "usage-limit";
+await send("/batch start");
+await send("usage limit fallback regression test");
+await send("/batch send");
+const usageCalls = await readTelegramCalls();
+const usageProviderModels = providerCalls.slice(usageProviderCallsBefore).map((call) => call.model);
+if (usageLimitCalls !== 2 || usageProviderModels.join(",") !== "gpt-5.6-terra,gpt-5.3-codex-spark") {
+  throw new Error(`Usage fallback did not make one primary and one Spark call: ${JSON.stringify(usageProviderModels)}`);
+}
+if (!usageCalls.some((call) => call.method === "sendMessage" && call.text.includes("임시 전환합니다"))) {
+  throw new Error("Usage fallback transition notice was not delivered to Telegram");
+}
+if (!usageCalls.some((call) =>
+  call.method === "sendMessage"
+  && call.text.includes("[CODEX | gpt-5.3-codex-spark | S001]")
+  && call.text.includes("usage fallback completed")
+)) {
+  throw new Error("Usage fallback result did not identify the actual Spark execution model");
+}
+const usageFallbackState = JSON.parse(await fs.readFile(path.join(dataDir, "codex-usage-fallback.json"), "utf8"));
+if (usageFallbackState.fallbackModel !== "gpt-5.3-codex-spark") {
+  throw new Error(`Usage fallback state was not persisted: ${JSON.stringify(usageFallbackState)}`);
+}
+const usageSessionState = JSON.parse(await fs.readFile(path.join(dataDir, "state.json"), "utf8"));
+if (usageSessionState.sessions[session.sessionId]?.codex?.model !== "gpt-5.6-terra") {
+  throw new Error("Temporary usage fallback overwrote the session's primary model");
+}
+await fs.unlink(path.join(dataDir, "codex-usage-fallback.json"));
+
 providerMode = "timeout";
 await send("/batch start");
 await send("timeout regression test");
@@ -752,6 +796,7 @@ console.log(JSON.stringify({
   queueRemoveById: firstQueueId,
   queueRemoveLatest: secondQueueId,
   timeoutFinalMessage: true,
+  usageLimitFallback: true,
   telegramSendMessages: evidenceCalls.filter((call) => call.method === "sendMessage").length,
 }, null, 2));
 

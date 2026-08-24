@@ -20,6 +20,7 @@
     "check": "tsc --noEmit -p tsconfig.json",
     "selftest:telegram": "npm run build && node scripts/selftest-telegram-update.mjs",
     "selftest:codex-stream": "npm run build && node scripts/selftest-codex-stream.mjs",
+    "selftest:model-fallback": "npm run build && node scripts/selftest-model-fallback.mjs",
     "selftest:cli": "npm run build && node scripts/selftest-cli.mjs",
     "prepare": "npm run build",
     "prepublishOnly": "node scripts/prepublish-guard.mjs",

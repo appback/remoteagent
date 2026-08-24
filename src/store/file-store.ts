@@ -84,6 +84,10 @@ export class FileStore {
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 
+  getDataDir(): string {
+    return this.dataDir;
+  }
+
   async listActiveSessionIds(botId?: string): Promise<Set<string>> {
     const state = await this.readState();
     const sessionIds = Object.values(state.chats)
