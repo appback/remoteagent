@@ -57,4 +57,12 @@ REMOTEAGENT_PUBLISH_GUARD_OK=1 npm publish "$TARBALL" --access public
 
 echo
 echo "Verifying registry version:"
-npm view "$PACKAGE_NAME" version
+PUBLISHED_VERSION="$(npm view "$PACKAGE_NAME@$VERSION" version --prefer-online)"
+LATEST_VERSION="$(npm view "$PACKAGE_NAME@latest" version --prefer-online)"
+echo "published=$PUBLISHED_VERSION"
+echo "latest=$LATEST_VERSION"
+
+if [[ "$PUBLISHED_VERSION" != "$VERSION" || "$LATEST_VERSION" != "$VERSION" ]]; then
+  echo "Registry verification failed: expected published/latest=$VERSION" >&2
+  exit 1
+fi
