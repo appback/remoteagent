@@ -66,7 +66,8 @@ npm run release:publish
 
 The publish script performs:
 
-- clean working tree check
+- tracked working tree check
+- a clean staging snapshot from committed `HEAD`; unrelated untracked files are listed but excluded
 - `npm whoami`
 - `npm owner ls appback-remoteagent`
 - `npm run check`

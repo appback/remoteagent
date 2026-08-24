@@ -12,10 +12,17 @@ if [[ "$PACKAGE_NAME" != "appback-remoteagent" ]]; then
   exit 1
 fi
 
-if [[ -n "$(git status --porcelain)" ]]; then
-  echo "Working tree is not clean. Commit and push before publishing." >&2
-  git status --short >&2
+if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
+  echo "Tracked files are not clean. Commit and push before publishing." >&2
+  git status --short --untracked-files=no >&2
   exit 1
+fi
+
+UNTRACKED="$(git ls-files --others --exclude-standard)"
+if [[ -n "$UNTRACKED" ]]; then
+  echo "Untracked files are excluded from the release snapshot:"
+  printf '%s\n' "$UNTRACKED"
+  echo
 fi
 
 echo "Publishing $PACKAGE_NAME@$VERSION"
@@ -30,11 +37,19 @@ echo
 npm run check
 npm run build
 
-TARBALL="$(npm pack --silent)"
+STAGING_DIR="$(mktemp -d)"
 cleanup() {
-  rm -f "$TARBALL"
+  rm -rf "$STAGING_DIR"
 }
 trap cleanup EXIT
+
+git archive --format=tar HEAD | tar -xf - -C "$STAGING_DIR"
+cd "$STAGING_DIR"
+npm ci --ignore-scripts
+npm run check
+npm run build
+
+TARBALL="$(npm pack --silent)"
 
 echo
 echo "Publishing tarball: $TARBALL"
