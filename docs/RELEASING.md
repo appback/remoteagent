@@ -86,6 +86,12 @@ Deploy to server 30:
 npm run release:deploy -- <version> 30
 ```
 
+Deploy to server 40:
+
+```bash
+npm run release:deploy -- <version> 40
+```
+
 Deploy to server 26:
 
 ```bash
@@ -108,6 +114,7 @@ The deploy script performs:
 
 - npm registry version check for `appback-remoteagent@<version>`
 - server 30 npm install, install hook, systemd restart, version/log verification
+- server 40 npm install, install hook, user-process restart, version/log verification
 - server 26 npm install, install hook, user-process restart, version/log verification
 
 ## 6. Verify
@@ -133,6 +140,17 @@ Server 26:
 
 ```bash
 ssh ospadmin@192.168.33.26 'bash -lc '"'"'
+npm list -g appback-remoteagent --depth=0
+pgrep -af "appback-remoteagent/dist/index.js"
+tail -80 ~/.remoteagent/logs/agent.log
+'"'"''
+```
+
+Server 40:
+
+```bash
+ssh appback@192.168.33.40 'bash -lc '"'"'
+export PATH="$HOME/.local/bin:$HOME/.nvm/versions/node/v22.23.2/bin:$PATH"
 npm list -g appback-remoteagent --depth=0
 pgrep -af "appback-remoteagent/dist/index.js"
 tail -80 ~/.remoteagent/logs/agent.log

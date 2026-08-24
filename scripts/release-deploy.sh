@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: npm run release:deploy -- <version> <30|26|all>" >&2
+  echo "Usage: npm run release:deploy -- <version> <30|40|26|all>" >&2
   echo "Example: npm run release:deploy -- 0.15.5 all" >&2
 }
 
@@ -20,7 +20,7 @@ if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 
 case "$TARGET" in
-  30|26|all)
+  30|40|26|all)
     ;;
   *)
     usage
@@ -80,6 +80,37 @@ if (fs.existsSync(path)) {
     process.exit(2);
   }
 }
+
+deploy_40() {
+  ssh appback@192.168.33.40 "VERSION=$VERSION bash -s" <<'REMOTE'
+set -euo pipefail
+export PATH="$HOME/.local/bin:$HOME/.nvm/versions/node/v22.23.2/bin:$PATH"
+node - <<'NODE'
+const fs = require("fs");
+const path = `${process.env.HOME}/.remoteagent/bot-polling-state.json`;
+if (fs.existsSync(path)) {
+  const state = JSON.parse(fs.readFileSync(path, "utf8"));
+  const running = Object.values(state.bots || {})
+    .filter((bot) => Array.isArray(bot.runningSessionIds) && bot.runningSessionIds.length > 0)
+    .map((bot) => `${bot.username || bot.botId}: ${bot.runningSessionIds.join(", ")}`);
+  if (running.length > 0) {
+    console.error("RemoteAgent has active provider work. Retry deploy after it finishes:");
+    for (const item of running) console.error(`- ${item}`);
+    process.exit(2);
+  }
+}
+NODE
+npm install -g "appback-remoteagent@$VERSION"
+remoteagent-install
+~/.remoteagent/stop-remoteagent.sh || true
+sleep 2
+~/.remoteagent/start-remoteagent.sh
+sleep 5
+npm list -g appback-remoteagent --depth=0
+pgrep -af 'appback-remoteagent/dist/index.js'
+tail -80 ~/.remoteagent/logs/agent.log
+REMOTE
+}
 NODE
 npm install -g "appback-remoteagent@$VERSION"
 remoteagent-install
@@ -96,6 +127,9 @@ REMOTE
 case "$TARGET" in
   30)
     deploy_30
+    ;;
+  40)
+    deploy_40
     ;;
   26)
     deploy_26
