@@ -129,7 +129,7 @@ npm view appback-remoteagent version
 Server 30:
 
 ```bash
-ssh au2223@192.168.0.30 'bash -lc '"'"'
+ssh au2223@192.168.33.30 'bash -lc '"'"'
 export PATH="/home/au2223/.local/bin:/home/au2223/.nvm/versions/node/v22.22.0/bin:$PATH"
 systemctl is-active remoteagent
 node -p "require(\"/home/au2223/.nvm/versions/node/v22.22.0/lib/node_modules/appback-remoteagent/package.json\").version"

@@ -36,7 +36,7 @@ if [[ "$REGISTRY_VERSION" != "$VERSION" ]]; then
 fi
 
 deploy_30() {
-  ssh au2223@192.168.0.30 "VERSION=$VERSION bash -s" <<'REMOTE'
+  ssh au2223@192.168.33.30 "VERSION=$VERSION bash -s" <<'REMOTE'
 set -euo pipefail
 export PATH="/home/au2223/.local/bin:/home/au2223/.nvm/versions/node/v22.22.0/bin:$PATH"
 node - <<'NODE'
@@ -80,6 +80,18 @@ if (fs.existsSync(path)) {
     process.exit(2);
   }
 }
+NODE
+npm install -g "appback-remoteagent@$VERSION"
+remoteagent-install
+~/.remoteagent/stop-remoteagent.sh || true
+sleep 2
+~/.remoteagent/start-remoteagent.sh
+sleep 5
+npm list -g appback-remoteagent --depth=0
+pgrep -af 'appback-remoteagent/dist/index.js'
+tail -80 ~/.remoteagent/logs/agent.log
+REMOTE
+}
 
 deploy_40() {
   ssh appback@192.168.33.40 "VERSION=$VERSION bash -s" <<'REMOTE'
@@ -111,18 +123,6 @@ pgrep -af 'appback-remoteagent/dist/index.js'
 tail -80 ~/.remoteagent/logs/agent.log
 REMOTE
 }
-NODE
-npm install -g "appback-remoteagent@$VERSION"
-remoteagent-install
-~/.remoteagent/stop-remoteagent.sh || true
-sleep 2
-~/.remoteagent/start-remoteagent.sh
-sleep 5
-npm list -g appback-remoteagent --depth=0
-pgrep -af 'appback-remoteagent/dist/index.js'
-tail -80 ~/.remoteagent/logs/agent.log
-REMOTE
-}
 
 case "$TARGET" in
   30)
@@ -136,6 +136,7 @@ case "$TARGET" in
     ;;
   all)
     deploy_30
+    deploy_40
     deploy_26
     ;;
 esac
