@@ -64,6 +64,83 @@ cc111
 Old `.110` stanzas named `hub`, `tc`, `pc`, and `cc` were removed after the
 services moved to `.111`.
 
+## Server `.40` DR Conversion: 2026-08-27
+
+The development workload previously sharing `.40` was moved before adding
+standby databases. This keeps backup and recovery capacity isolated from test
+builds and duplicate agent runtimes.
+
+### Workloads moved to `.50`
+
+- Damoa test deployment:
+  `/home/appback/deploy/damoa-test` on `.40` to
+  `/opt/appback/dev/damoa-test` on `.50`
+- Damoa test ingress:
+  `dev.appback.app` is terminated by cloudflared on `.30` and now forwards to
+  `http://192.168.33.50:3213`
+- Ten duplicate `appback-ai-agent` PM2 processes remain active on `.50`; their
+  `.40` copies were stopped
+
+The `.50` firewall permits the Damoa test port only from `.30`. The public
+endpoint and the internal `.30 -> .50` endpoint both returned HTTP 200 after
+cutover.
+
+### Cutover verification
+
+The final source snapshot is retained at:
+
+```text
+/home/appback/backup/migrations/damoa-test-cutover-20260827T075116Z
+```
+
+The copied snapshot is retained on `.50` at:
+
+```text
+/opt/appback/backups/migrations/damoa-test-cutover-20260827T075116Z
+```
+
+The source and destination SHA-256 values matched for the database dump,
+object-store archive, and source environment snapshot. After restore, all 83
+public PostgreSQL table row counts produced an identical aggregate hash. All
+non-MinIO-internal user objects also produced an identical file hash list.
+
+The Damoa test edge uses Docker DNS re-resolution for both `damoa-api` and
+`tc-minio`. Nginx configuration validation, API readiness, edge health, and the
+public `dev.appback.app` response were verified after the final restore.
+`route_snapshot_unavailable` refresh warnings appeared in both the old `.40`
+API logs and the `.50` API logs, so they were not introduced by the migration.
+
+### `.40` retained rollback state
+
+The old Damoa test containers, volumes, deployment directory, and immutable
+images remain on `.40`, but every `damoa-test-*` container is stopped. They are
+rollback material and must not be started while `dev.appback.app` points to
+`.50`.
+
+Before stopping the duplicate PM2 agents, `.40` retained its previous PM2 dump
+and crontab under:
+
+```text
+/home/appback/backup/dr-conversion-20260827T075410Z
+```
+
+The `.40` PM2 reboot entry was removed and its daemon was stopped. Backup
+retention cron jobs and the RemoteAgent service remain active. No deployment
+directory, Docker volume, image, external-disk data, pgBackRest data, or
+RemoteAgent workspace was deleted during this conversion.
+
+Rollback order:
+
+1. Stop the Damoa test stack on `.50`.
+2. Restore the saved `.40` crontab only if the duplicate PM2 agents must also
+   return.
+3. Start the `.40` Damoa test stack and verify its internal readiness.
+4. Change the `.30` cloudflared route back to `192.168.33.40:3213`, validate the
+   configuration, restart cloudflared, and verify the public endpoint.
+
+Do not run `.40` and `.50` as simultaneous writable copies of the Damoa test
+database or object store.
+
 ## Accumulation Audit: 2026-08-27
 
 The repository did not contain unknown or orphan pgBackRest stanzas. The active
