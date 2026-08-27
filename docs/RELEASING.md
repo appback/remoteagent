@@ -117,7 +117,7 @@ The deploy script performs:
 - bounded retry when a target server's npm registry edge has not received the new version yet
 - fail-fast validation for a broken or non-directory `~/.npm` cache path before remote installation
 - server 30 npm install, install hook, systemd restart, version/log verification
-- server 40 npm install, install hook, user-process restart, version/log verification
+- server 40 npm install, install hook, systemd restart using `SUDO_APPBACK_33_40`, version/log verification
 - server 26 npm install, install hook, user-process restart, version/log verification
 
 ## 6. Verify
@@ -155,7 +155,10 @@ Server 40:
 ssh appback@192.168.33.40 'bash -lc '"'"'
 export PATH="$HOME/.local/bin:$HOME/.nvm/versions/node/v22.23.2/bin:$PATH"
 npm list -g appback-remoteagent --depth=0
-pgrep -af "appback-remoteagent/dist/index.js"
+systemctl is-enabled remoteagent
+systemctl is-active remoteagent
+systemctl show remoteagent -p MainPID -p NRestarts
+systemctl status remoteagent --no-pager -n 20
 tail -80 ~/.remoteagent/logs/agent.log
 '"'"''
 ```

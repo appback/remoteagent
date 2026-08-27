@@ -66,7 +66,7 @@ Current policy:
 
 ## Runtime model
 
-Server 30 runs RemoteAgent as a `systemd` service.
+Servers 30 and 40 run RemoteAgent as a `systemd` service.
 
 - unit: `remoteagent.service`
 - working directory: the installed `appback-remoteagent` package root
@@ -76,6 +76,12 @@ Server 30 runs RemoteAgent as a `systemd` service.
 The service environment is loaded from:
 
 - `/home/au2223/.remoteagent/.env`
+- `/home/appback/.remoteagent/.env` on server 40
+
+Server 40 uses the global npm package under Node.js `v22.23.2`. Its unit has
+`Restart=always`, so a transient disk or process failure is recovered without
+waiting for a manual Telegram health check. Deployment restarts this unit with
+the `SUDO_APPBACK_33_40` RemoteAgent secret and never prints the secret value.
 
 ## Single-instance rule
 

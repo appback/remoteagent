@@ -168,13 +168,27 @@ for ATTEMPT in {1..12}; do
   sleep 5
 done
 remoteagent-install
-~/.remoteagent/stop-remoteagent.sh || true
-sleep 2
-~/.remoteagent/start-remoteagent.sh
-sleep 5
+if systemctl cat remoteagent >/dev/null 2>&1; then
+  HELPER="$HOME/.nvm/versions/node/v22.23.2/lib/node_modules/appback-remoteagent/dist/secret-helper.js"
+  SUDO_PASSWORD="$(node "$HELPER" get SUDO_APPBACK_33_40)"
+  printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' systemctl restart remoteagent
+  unset SUDO_PASSWORD
+  sleep 7
+  systemctl is-active remoteagent
+else
+  ~/.remoteagent/stop-remoteagent.sh || true
+  sleep 2
+  ~/.remoteagent/start-remoteagent.sh
+  sleep 5
+fi
 npm list -g appback-remoteagent --depth=0
 pgrep -af 'appback-remoteagent/dist/index.js'
-tail -80 ~/.remoteagent/logs/agent.log
+if systemctl cat remoteagent >/dev/null 2>&1; then
+  systemctl status remoteagent --no-pager -n 20
+  tail -80 ~/.remoteagent/logs/agent.log
+else
+  tail -80 ~/.remoteagent/logs/agent.log
+fi
 REMOTE
 }
 
