@@ -287,6 +287,36 @@ MinIO follows the same policy independently:
 - `.40` uses read-only application credentials
 - `.40` is not written to during a `.110` outage
 
+## Container DNS Continuity
+
+Recreating MinIO may assign it a different Docker network address. A healthy
+MinIO container and a healthy edge container do not prove that the edge is
+using the current address: an Nginx worker can retain the address resolved when
+it started and continue returning 502 for uncached objects.
+
+The `.110` edge configuration therefore uses Docker DNS `127.0.0.11` with
+bounded re-resolution for both application upstreams:
+
+```nginx
+resolver 127.0.0.11 valid=10s ipv6=off;
+
+upstream damoa_api_upstream {
+    zone damoa_api_upstream 64k;
+    server damoa-api:3100 resolve;
+}
+
+upstream damoa_media_upstream {
+    zone damoa_media_upstream 64k;
+    server appback-minio:9000 resolve;
+}
+```
+
+`/home/appback/deploy/damoa/media-edge.conf` is mounted read-only at
+`/etc/nginx/conf.d/default.conf`. After recreating either MinIO or the Damoa
+API, validation must request at least one known uncached media object through
+the edge and confirm a 200 response. Container health checks alone are not an
+acceptable continuity test.
+
 ## Validation Evidence Required
 
 For every standby:
