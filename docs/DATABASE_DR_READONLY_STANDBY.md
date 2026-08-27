@@ -145,6 +145,62 @@ uses retention count 4.
 7. Remove `.111` Damoa migration dumps only after the `.110` restore path is
    independently verified.
 
+## Corrections Applied: 2026-08-27
+
+The accumulation incident was corrected in the following order.
+
+1. Recreated only `damoa-db` so its bind-mounted pgBackRest configuration uses
+   the current host file. The effective container configuration is now strict
+   SFTP host-key verification with SHA-256, `full=1`, `diff=6`, `archive=1`,
+   and synchronous archive submission.
+2. Added all verified `.40` SSH host keys to the pinned `known_hosts` file and
+   proved a strict pgBackRest repository connection before running a backup.
+3. Created and verified full backup `20260827-043735F`. Expiration removed the
+   superseded Damoa backup chain and its WAL. The `.40` pgBackRest repository
+   fell from about 229 GB to 18 GB, and root filesystem use fell from 74% to
+   26%.
+4. Applied these reloadable Damoa PostgreSQL settings:
+
+   ```text
+   wal_keep_size=1GB
+   wal_compression=pglz
+   max_wal_size=8GB
+   checkpoint_timeout=15min
+   ```
+
+   A PostgreSQL checkpoint then reduced `.110` `pg_wal` from about 32.6 GB to
+   about 2 GB. No WAL file was deleted manually. The `.110` root filesystem is
+   now 13% used.
+5. Repaired the isolated Damoa restore verifier and completed an actual
+   restore, WAL replay, read-only query, and shutdown test for the new full
+   backup. The verified database system ID was `7666642961956692002`.
+6. Removed 18 GB of obsolete pre-migration Damoa dumps from `.111` after the
+   restore test passed. Also removed about 1.5 GB of deployment rollback
+   entries older than 35 days. The `.111` root filesystem fell from 64% to 57%
+   used.
+7. Installed bounded 35-day cleanup jobs for `.111` deployment rollback
+   entries and `.40` Damoa media and Appback MinIO history. The shared cleanup
+   command is dry-run by default, only considers immediate children of an
+   explicitly supplied root, and requires `--apply` before deletion.
+
+Continuous Damoa WAL archiving was observed advancing after the backup and
+expiration. The active pgBackRest stanza set remains exactly `damoa`, `hub111`,
+`tc111`, `pc111`, and `cc111`.
+
+The database tuning mitigates storage growth but does not remove its source.
+Damoa catalog synchronization still performs unusually high update/replace
+volume across campaign route, media, coordinate, and source tables. That
+application write amplification requires a separate code and query review.
+
+The following data was intentionally retained:
+
+- `.111` legacy Title Clash originals, about 995 MB, until ownership and
+  duplication are independently verified.
+- `.40` `usb-enclosure-safety-copy`, about 3.2 GB, until the preserved 4 TB
+  MinIO disk is mounted read-only and compared.
+- `.40` RemoteAgent workspaces referenced by active session state. They are not
+  orphan workspaces and must not be deleted by a backup cleanup job.
+
 ## Important Limitation
 
 The pgBackRest repository is recovery material, not a queryable standby. A
