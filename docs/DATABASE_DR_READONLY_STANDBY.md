@@ -64,6 +64,87 @@ cc111
 Old `.110` stanzas named `hub`, `tc`, `pc`, and `cc` were removed after the
 services moved to `.111`.
 
+## Accumulation Audit: 2026-08-27
+
+The repository did not contain unknown or orphan pgBackRest stanzas. The active
+repository directories were limited to `damoa`, `hub111`, `tc111`, `pc111`, and
+`cc111`. The non-database backup sets were also small:
+
+```text
+appback-minio current + history: about 1.4 GB
+damoa-media current + history: about 3.9 GB
+```
+
+The following unresolved accumulation risks were found.
+
+### Damoa WAL growth
+
+The `damoa` archive occupied about 187 GB and was growing by approximately
+37-60 GB per day. PostgreSQL reported about 909 GB of WAL generated since the
+statistics reset on 2026-08-24. This was real WAL, not duplicate archive files.
+
+The write workload repeatedly updates or replaces large portions of several
+catalog tables. PostgreSQL was also configured with `max_wal_size=1GB`,
+`checkpoint_timeout=5min`, `wal_compression=off`, and had 1,746 requested
+checkpoints during the sampled period. Full-page images therefore account for
+a significant part of the WAL volume.
+
+The `.110` data directory also retained about 32.6 GB in `pg_wal` because
+`wal_keep_size=32GB`, even though no replication slot or live standby existed.
+
+### Stale bind-mounted pgBackRest configuration
+
+The host path `/opt/appback/pgbackrest/config/pgbackrest.conf` had already been
+replaced with the Damoa-only retention policy, but `damoa-db` still had the old
+unlinked inode bind-mounted. The running container therefore continued to use:
+
+```text
+repo1-retention-full=4
+repo1-retention-diff=14
+archive-async=y
+```
+
+instead of the host file's intended `full=1`, `diff=6`, explicit archive
+retention, and Damoa-only stanza. Replacing a bind-mounted file atomically does
+not update the inode already mounted into a running container. The database
+container must be recreated or the mounted inode must otherwise be updated and
+verified before relying on the new policy.
+
+At the observed WAL rate, the `.40` internal disk's approximately 119 GB free
+space may be exhausted before the next weekly full backup. A successful new
+full backup will not expire the old chain while the running container still
+uses retention count 4.
+
+### Backups without bounded retention
+
+- `.40` `appback-minio/history` had seven daily change sets but no explicit
+  age/count cleanup in the backup script or user cron.
+- `.111` retained about 18 GB of Damoa pre-migration dumps even though Damoa now
+  runs on `.110`.
+- `.111` retained about 3.6 GB of deployment rollback dumps and about 995 MB of
+  legacy Title Clash originals without a general retention job.
+- `.40` retained about 3.2 GB under `usb-enclosure-safety-copy`. Keep it until
+  the old 4 TB MinIO disk is mounted read-only and verified, then reassess it.
+- `.40` RemoteAgent workspaces consumed about 21 GB. The two large workspaces
+  were still referenced by sessions, so they were not orphans and must not be
+  removed automatically.
+
+### Required correction order
+
+1. Make the running `damoa-db` consume the current pgBackRest configuration and
+   verify the effective settings from inside the container.
+2. Run and verify a new Damoa full backup, then confirm expiration reclaimed the
+   previous backup chain and its WAL.
+3. Add disk thresholds and projected-days-to-full monitoring for the `.40`
+   repository.
+4. Reduce Damoa WAL at the source by reviewing the catalog synchronization
+   write pattern and PostgreSQL checkpoint/WAL settings.
+5. Reduce `wal_keep_size` while no streaming standby exists; select a new value
+   as part of standby deployment rather than retaining an unused 32 GB.
+6. Add explicit retention to MinIO history and deployment rollback dumps.
+7. Remove `.111` Damoa migration dumps only after the `.110` restore path is
+   independently verified.
+
 ## Important Limitation
 
 The pgBackRest repository is recovery material, not a queryable standby. A
