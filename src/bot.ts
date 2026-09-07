@@ -111,6 +111,7 @@ const RECOGNIZED_COMMANDS = new Set([
 ]);
 const TELEGRAM_STALE_UPDATE_GRACE_SECONDS = 10;
 const TELEGRAM_PROCESS_STARTED_AT_SECONDS = Math.floor(Date.now() / 1000);
+const TELEGRAM_LONG_TEXT_FILE_THRESHOLD = 3900;
 const workLoopTails = new Map<string, Promise<void>>();
 const workLoopGenerations = new Map<string, number>();
 const queuedWorkLoops = new Map<string, QueuedWorkLoopEntry>();
@@ -306,6 +307,26 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
   const messageBatcher = new TelegramMessageBatcher(
     config.telegramMessageBatchMs,
     async (target, botId, chatId, text) => {
+      let request = text;
+      if (text.length > TELEGRAM_LONG_TEXT_FILE_THRESHOLD) {
+        const saved = await saveLongTelegramText(botId, chatId, text);
+        const mapping = await bridge.status(botId, chatId).catch(() => undefined);
+        await memoryService.recordArtifact({
+          session: mapping?.session,
+          botId,
+          chatId,
+          kind: "text",
+          filePath: saved.path,
+          fileName: saved.fileName,
+          mimeType: "text/plain",
+        });
+        request = formatLongTelegramTextPrompt(saved.path, text.length);
+        await bridge.logSystem(
+          botId,
+          chatId,
+          `Telegram long text saved as UTF-8 attachment (${text.length} chars): ${saved.path}`,
+        );
+      }
       await bridge.logSystem(botId, chatId, `Telegram text dispatch (${text.length} chars).`);
       await runWithPendingAnimation(target.botToken, target.telegramChatId, async (helpers) => {
         return {
@@ -313,7 +334,7 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
             bridge,
             botId,
             chatId,
-            text,
+            request,
             "Telegram text request",
             botManagement,
             helpers,
@@ -3618,6 +3639,35 @@ async function downloadTelegramFile(
 function safePathSegment(value: string): string {
   const safe = value.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
   return safe || "file";
+}
+
+async function saveLongTelegramText(
+  botId: string,
+  chatId: string,
+  text: string,
+): Promise<{ path: string; fileName: string }> {
+  const directory = path.join(
+    config.dataDir,
+    "uploads",
+    "telegram",
+    safePathSegment(botId),
+    safePathSegment(chatId),
+  );
+  await fs.mkdir(directory, { recursive: true });
+  const fileName = `${Date.now()}-telegram-long-message-${randomUUID()}.txt`;
+  const outputPath = path.join(directory, fileName);
+  await fs.writeFile(outputPath, text, { encoding: "utf8", mode: 0o600 });
+  return { path: outputPath, fileName };
+}
+
+function formatLongTelegramTextPrompt(filePath: string, characterCount: number): string {
+  return [
+    "The user sent a long Telegram text that RemoteAgent stored as a UTF-8 text file.",
+    `File: ${filePath}`,
+    `Character count: ${characterCount}`,
+    "Read the entire file directly and treat its complete contents as the user's active instruction.",
+    "Do not process only a preview and do not ask the user to resend the split messages.",
+  ].join("\n");
 }
 
 async function normalizeTelegramDelivery(chunks: string[]): Promise<{ chunks: string[]; documents: TelegramOutgoingDocument[] }> {

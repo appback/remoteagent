@@ -556,6 +556,50 @@ await click(macroButton.callback_data);
 await send("/batch send");
 await waitForTelegramCall((call) => call.text.includes("mock provider completed"));
 
+const longTextProviderCallsBefore = providerCalls.length;
+const longPartOne = `LONG_PART_ONE:${"a".repeat(2200)}`;
+const longPartTwo = `LONG_PART_TWO:${"b".repeat(2200)}`;
+providerMode = "success";
+await send("/batch start");
+await send(longPartOne);
+await send(longPartTwo);
+await send("/batch send");
+await waitForTelegramCall((call) => call.text.includes("mock provider completed"));
+
+const longTextProviderCalls = providerCalls.slice(longTextProviderCallsBefore);
+if (longTextProviderCalls.length !== 1) {
+  throw new Error(`Split long Telegram input should make one provider call, got ${longTextProviderCalls.length}`);
+}
+const longTextProviderMessage = longTextProviderCalls[0]?.message ?? "";
+if (!longTextProviderMessage.includes("stored as a UTF-8 text file")) {
+  throw new Error(`Long Telegram input was not replaced with a file prompt: ${longTextProviderMessage}`);
+}
+if (longTextProviderMessage.includes(longPartOne) || longTextProviderMessage.includes(longPartTwo)) {
+  throw new Error("Long Telegram input was copied into the provider prompt instead of being file-backed");
+}
+const longTextFile = longTextProviderMessage.match(/^File: (.+\.txt)$/m)?.[1];
+if (!longTextFile) {
+  throw new Error(`Long Telegram input prompt did not include an absolute text file path: ${longTextProviderMessage}`);
+}
+const expectedLongTextDirectory = path.join(
+  dataDir,
+  "uploads",
+  "telegram",
+  "remoteagent_test_bot",
+  "111222333",
+);
+if (path.dirname(longTextFile) !== expectedLongTextDirectory) {
+  throw new Error(`Long Telegram input was stored outside the managed upload directory: ${longTextFile}`);
+}
+const storedLongText = await fs.readFile(longTextFile, "utf8");
+if (storedLongText !== `${longPartOne}\n${longPartTwo}`) {
+  throw new Error("Stored Telegram text did not preserve all batched message parts in order");
+}
+const longTextMode = (await fs.stat(longTextFile)).mode & 0o777;
+if (longTextMode !== 0o600) {
+  throw new Error(`Stored Telegram text permissions should be 0600, got ${longTextMode.toString(8)}`);
+}
+
 await fs.appendFile(path.join(dataDir, ".env"), [
   "TELEGRAM_BOT_TOKENS=000000:test-token",
   "TELEGRAM_BOT_USERNAMES=remoteagent_test_bot",
@@ -797,6 +841,7 @@ console.log(JSON.stringify({
   queueRemoveLatest: secondQueueId,
   timeoutFinalMessage: true,
   usageLimitFallback: true,
+  longTelegramTextStoredAsFile: true,
   telegramSendMessages: evidenceCalls.filter((call) => call.method === "sendMessage").length,
 }, null, 2));
 

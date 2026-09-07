@@ -29,6 +29,8 @@ RemoteAgent is currently organized around six core capabilities.
 | Telegram attachments | Telegram can send images, text, Markdown, PDF, Word documents, spreadsheet files, archives, and audio/voice inputs into the runtime | Supported |
 | Telegram Mini App UI | A richer Telegram-native UI can sit on top of the same runtime and session model | Planned next |
 
+Consecutive Telegram text updates received within the message batch window are treated as one user input. When their combined text exceeds 3,900 characters, RemoteAgent stores the complete UTF-8 text under `DATA_DIR/uploads/telegram`, indexes it as an artifact, and sends the provider one instruction containing the file path. This prevents Telegram-split long inputs from starting separate provider executions. Provider responses continue to use Telegram-safe message chunking.
+
 ## Product direction
 
 RemoteAgent is a self-hosted personal runtime, not a hosted SaaS.
