@@ -15,6 +15,7 @@ import type {
   TelegramContact,
 } from "../types.js";
 import { FileStore } from "../store/file-store.js";
+import { getAstraReasoning } from "./codex-reasoning.js";
 import { stopSpawnedExecution } from "../adapters/windows-shell.js";
 import {
   CODEX_USAGE_FALLBACK_MODEL,
@@ -474,7 +475,7 @@ export class BridgeService {
     return responses.map((response) => {
       const sessionLabel = response.publicSessionId ?? response.sessionId;
       const modelLabel = response.model?.trim() || this.defaultModelFor(response.provider);
-      const effortLabel = response.provider === "codex" && modelLabel === "gpt-6-astra" ? " | medium" : "";
+      const effortLabel = response.provider === "codex" && modelLabel === "gpt-6-astra" ? ` | ${response.reasoningEffort ?? getAstraReasoning()}` : "";
       const header = `[${response.provider.toUpperCase()} | ${modelLabel}${effortLabel} | ${sessionLabel}]`;
       return `${header}\n${response.output}`;
     });
@@ -643,9 +644,11 @@ export class BridgeService {
         ? await this.codexUsageFallback.selectExecutionModel(primaryModel)
         : { model: primaryModel, recoveryProbe: false };
       let executionModel = selection.model;
+      const reasoningEffort = getAstraReasoning();
 
       const forwardProgress = async (output: string, model: string): Promise<void> => {
         const progressResponse: ProviderResponse = {
+          reasoningEffort: provider === "codex" && model === "gpt-6-astra" ? reasoningEffort : undefined,
           provider,
           sessionId: providerSession.sessionId ?? session.sessionId,
           publicSessionId: session.publicId,
@@ -667,6 +670,7 @@ export class BridgeService {
       };
 
       const sendWithModel = (model: string): Promise<ProviderResponse> => this.adapters[provider]!.send({
+        reasoningEffort: provider === "codex" && model === "gpt-6-astra" ? reasoningEffort : undefined,
         botId,
         chatId: chatId ?? requestSource,
         remoteSessionId: session.sessionId,
@@ -767,6 +771,7 @@ export class BridgeService {
         ...response,
         publicSessionId: session.publicId,
         model: executionModel,
+        reasoningEffort: provider === "codex" && executionModel === "gpt-6-astra" ? reasoningEffort : undefined,
       });
     }
 

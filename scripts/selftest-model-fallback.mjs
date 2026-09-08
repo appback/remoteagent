@@ -63,6 +63,9 @@ try {
   );
 
   let bridge = createBridge();
+  process.env.CODEX_REASONING_EFFORT = "max";
+  assert.match(bridge.formatResponses([{provider: "codex", model: primaryModel, reasoningEffort: "high", publicSessionId: "S081", output: "done"}])[0], /\| high \| S081/);
+  process.env.CODEX_REASONING_EFFORT = "medium";
   assert.equal(bridge.formatResponses([{provider: "codex", model: primaryModel, publicSessionId: "S081", output: "done"}])[0], "[CODEX | gpt-6-astra | medium | S081]\ndone");
   const started = await bridge.startSession("test-bot", "test-chat", "codex");
   const originalSessionId = started.session.sessionId;

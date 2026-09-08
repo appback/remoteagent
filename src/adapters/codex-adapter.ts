@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import type { CodexSandboxMode, ProviderRequest, ProviderResponse } from "../types.js";
 import type { ProviderAdapter } from "./provider-adapter.js";
 import { spawnWithPlatformShell } from "./windows-shell.js";
+import { getAstraReasoning } from "../services/codex-reasoning.js";
 
 export class CodexAdapter implements ProviderAdapter {
   constructor(
@@ -86,7 +87,7 @@ export class CodexAdapter implements ProviderAdapter {
       args.push("-m", request.model);
     }
     if (request.model === "gpt-6-astra") {
-      args.push("-c", 'model_reasoning_effort="medium"');
+      args.push("-c", `model_reasoning_effort=${JSON.stringify(request.reasoningEffort ?? getAstraReasoning())}`);
     }
 
     this.appendSandboxArgs(args, sandboxMode);
@@ -115,7 +116,7 @@ export class CodexAdapter implements ProviderAdapter {
       args.push("-m", request.model);
     }
     if (request.model === "gpt-6-astra") {
-      args.push("-c", 'model_reasoning_effort="medium"');
+      args.push("-c", `model_reasoning_effort=${JSON.stringify(request.reasoningEffort ?? getAstraReasoning())}`);
     }
 
     this.appendSandboxArgs(args, sandboxMode);

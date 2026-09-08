@@ -17,6 +17,7 @@ import { AgentMemoryService } from "./services/agent-memory-service.js";
 import { WorkspaceCleanupService } from "./services/workspace-cleanup-service.js";
 import { exportSecrets } from "./services/secret-transfer-service.js";
 import { deleteTelegramCommandMenu, setTelegramCommandMenu } from "./telegram-command-menu.js";
+import { ASTRA_REASONING_LEVELS, getAstraReasoning, isAstraReasoning } from "./services/codex-reasoning.js";
 import type { ChatSession, CodexSandboxMode, Provider, ProviderResponse } from "./types.js";
 import type { UserFromGetMe } from "grammy/types";
 
@@ -38,7 +39,7 @@ const HELP_TEXT = [
   "/stop",
   "/sandbox codex <read-only|workspace-write|danger-full-access>",
   "/status",
-  "/option [retry <count>|timeout <seconds>|intent <count>|command-menu <on|off|refresh>]",
+  "/option [retry <count>|timeout <seconds>|intent <count>|reasoning <low|medium|high|xhigh|max>|command-menu <on|off|refresh>]",
   "/state [clear|note <text>]",
   "/artifacts list|cleanup <days>",
   "/cleanup",
@@ -140,7 +141,7 @@ type InlineAction =
   | { kind: "sandbox.set"; mode: CodexSandboxMode; confirmed?: boolean }
   | { kind: "bots.refresh" };
 
-type RuntimeOptionName = "retry" | "timeout" | "intent" | "command-menu";
+type RuntimeOptionName = "retry" | "timeout" | "intent" | "reasoning" | "command-menu";
 
 type InlineActionRecord = {
   action: InlineAction;
@@ -817,13 +818,14 @@ ${bridge.formatStatus(mapping)}`);
         ],
         [
           actionButton(ctx, "Intent", { kind: "option.show", option: "intent" }),
+          actionButton(ctx, "Reasoning", { kind: "option.show", option: "reasoning" }),
           actionButton(ctx, "Command menu", { kind: "option.show", option: "command-menu" }),
         ],
       ]));
       return;
     }
 
-    if (option !== "retry" && option !== "timeout" && option !== "intent" && option !== "command-menu") {
+    if (option !== "retry" && option !== "timeout" && option !== "intent" && option !== "reasoning" && option !== "command-menu") {
       await reply(ctx, "Usage: `/option retry <count>`, `/option timeout <seconds>`, `/option intent <count>`, or `/option command-menu <on|off|refresh>`\n\n`retry` controls automatic continuation turns. `timeout` controls one provider execution limit. `intent` controls retries for untagged intent-only provider replies. `command-menu` controls Telegram slash-command autocomplete for all configured bots.", {
         parse_mode: "Markdown",
       });
@@ -834,6 +836,18 @@ ${bridge.formatStatus(mapping)}`);
       await reply(ctx, formatRuntimeOptionDetail(option), {
         parse_mode: "Markdown",
       });
+      return;
+    }
+
+    if (option === "reasoning") {
+      const effort = value.toLowerCase();
+      if (!isAstraReasoning(effort)) {
+        await reply(ctx, `Invalid reasoning effort. Use /option reasoning <${ASTRA_REASONING_LEVELS.join("|")}>.`);
+        return;
+      }
+      await upsertInstalledEnvValue("CODEX_REASONING_EFFORT", effort);
+      process.env.CODEX_REASONING_EFFORT = effort;
+      await reply(ctx, `Set Astra reasoning effort to ${effort}. Applies to the next Astra execution for all bots on this server; running executions keep their current effort.\n\nSaved: CODEX_REASONING_EFFORT=${effort}`);
       return;
     }
 
@@ -3024,12 +3038,14 @@ function formatRuntimeOptions(): string {
     `- retry: ${formatRetryLimit(config.telegramAutoProgressMaxTurns)} (TELEGRAM_AUTO_PROGRESS_MAX_TURNS)`,
     `- timeout: ${formatTimeoutSeconds(config.commandTimeoutMs)} (COMMAND_TIMEOUT_MS)`,
     `- intent: ${formatRetryLimit(config.telegramUntaggedIntentRetries)} (TELEGRAM_UNTAGGED_INTENT_RETRIES)`,
+    `- reasoning: ${getAstraReasoning()} (Astra, server-wide, CODEX_REASONING_EFFORT)`,
     `- command-menu: ${config.telegramCommandMenuEnabled ? "on" : "off"} (TELEGRAM_COMMAND_MENU_ENABLED)`,
     "",
     "Usage:",
     "/option retry <count>",
     "/option timeout <seconds>",
     "/option intent <count>",
+    "/option reasoning <low|medium|high|xhigh|max>",
     "/option command-menu <on|off|refresh>",
     "",
     "`retry 0` disables the automatic continuation limit.",
@@ -3039,6 +3055,9 @@ function formatRuntimeOptions(): string {
 }
 
 function formatRuntimeOptionDetail(option: RuntimeOptionName): string {
+  if (option === "reasoning") {
+    return `Current Astra reasoning effort: ${getAstraReasoning()}\n\nUsage: /option reasoning <low|medium|high|xhigh|max>\nApplies to the next Astra execution for all bots on this server. No restart required.`;
+  }
   if (option === "retry") {
     return `Current automatic continuation retry limit: ${formatRetryLimit(config.telegramAutoProgressMaxTurns)}\n\nUsage: \`/option retry <count>\``;
   }

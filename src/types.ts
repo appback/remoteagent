@@ -66,6 +66,7 @@ export type BridgeState = {
 };
 
 export type ProviderRequest = {
+  reasoningEffort?: string;
   botId?: string;
   chatId: string;
   remoteSessionId: string;
@@ -79,6 +80,7 @@ export type ProviderRequest = {
 };
 
 export type ProviderResponse = {
+  reasoningEffort?: string;
   provider: Provider;
   sessionId: string;
   publicSessionId?: string;

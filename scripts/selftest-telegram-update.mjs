@@ -323,6 +323,13 @@ await send("/start codex");
 await send("/option retry 6");
 await send("/option timeout 600");
 await send("/option intent 4");
+await send("/option reasoning high");
+if (process.env.CODEX_REASONING_EFFORT !== "high" || !(await fs.readFile(path.join(dataDir, ".env"), "utf8")).includes("CODEX_REASONING_EFFORT=high")) {
+  throw new Error("Reasoning option was not applied and persisted");
+}
+await send("/option reasoning invalid");
+if (process.env.CODEX_REASONING_EFFORT !== "high") throw new Error("Invalid reasoning changed runtime setting");
+await send("/option reasoning medium");
 await send("/secret set REMOTEAGENT_TRANSFER_PASSPHRASE correct-horse-battery-staple");
 await send("/secret set API_TOKEN telegram-secret-export-value");
 await send("/secret export REMOTEAGENT_TRANSFER_PASSPHRASE API_TOKEN");
