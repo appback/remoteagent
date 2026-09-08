@@ -34,6 +34,12 @@ await fs.chmod(fakeCodex, 0o755);
 
 const { CodexAdapter } = await import(path.join(root, "dist", "adapters", "codex-adapter.js"));
 const adapter = new CodexAdapter(fakeCodex, 5000, "read-only");
+for (const method of ["buildExecArgs", "buildResumeArgs"]) {
+  const args = adapter[method]({model: "gpt-6-astra", cwd: tmp, sessionId: "stream-thread"}, path.join(tmp, "output"), "read-only");
+  if (args[args.indexOf("-m") + 1] !== "gpt-6-astra" || !args.some((arg, i) => arg === "-c" && args[i + 1] === 'model_reasoning_effort="medium"')) {
+    throw new Error(`Astra medium missing from ${method}`);
+  }
+}
 const progress = [];
 let settled = false;
 const responsePromise = adapter.send({

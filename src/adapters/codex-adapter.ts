@@ -85,6 +85,9 @@ export class CodexAdapter implements ProviderAdapter {
     if (request.model) {
       args.push("-m", request.model);
     }
+    if (request.model === "gpt-6-astra") {
+      args.push("-c", 'model_reasoning_effort="medium"');
+    }
 
     this.appendSandboxArgs(args, sandboxMode);
 
@@ -110,6 +113,9 @@ export class CodexAdapter implements ProviderAdapter {
 
     if (request.model) {
       args.push("-m", request.model);
+    }
+    if (request.model === "gpt-6-astra") {
+      args.push("-c", 'model_reasoning_effort="medium"');
     }
 
     this.appendSandboxArgs(args, sandboxMode);

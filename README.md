@@ -105,7 +105,7 @@ Current command surface implemented in `src/bot.ts`:
 | `/new` | Creates and binds a new session using the saved default mode in a new managed workspace |
 | `/switch <session>` | Rebinds this chat to an existing RemoteAgent session |
 | `/status` | Shows current session, workspace, provider, and sandbox state |
-| `/model [name]` | Lists selectable provider models or changes the current session model |
+| `/model [name]` | Lists selectable provider models or changes the current session model. New Codex sessions default to `gpt-6-astra` with `medium` reasoning. Use `/model gpt-6-astra` for an existing session. |
 | `/sandbox [codex <mode>]` | Lists Codex sandbox choices or changes the current session sandbox |
 | `/option retry <count>` | Sets the automatic continuation turn limit and persists it to `~/.remoteagent/.env` |
 | `/option timeout <seconds>` | Sets the provider execution timeout and persists it to `~/.remoteagent/.env` |

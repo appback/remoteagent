@@ -23,11 +23,11 @@ import {
 } from "./codex-usage-fallback-service.js";
 
 const MODEL_PRESETS: Record<Provider, string[]> = {
-  codex: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark", "gpt-5.2", "gpt-5.1-codex-max"],
+  codex: ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark", "gpt-5.2", "gpt-5.1-codex-max"],
   claude: ["sonnet", "opus", "haiku"],
 };
 
-const DEFAULT_CODEX_MODEL = "gpt-5.6-sol";
+const DEFAULT_CODEX_MODEL = "gpt-6-astra";
 type ProviderProgressHandler = (response: ProviderResponse) => void | Promise<void>;
 
 export type ModelSelection = {
@@ -474,7 +474,8 @@ export class BridgeService {
     return responses.map((response) => {
       const sessionLabel = response.publicSessionId ?? response.sessionId;
       const modelLabel = response.model?.trim() || this.defaultModelFor(response.provider);
-      const header = `[${response.provider.toUpperCase()} | ${modelLabel} | ${sessionLabel}]`;
+      const effortLabel = response.provider === "codex" && modelLabel === "gpt-6-astra" ? " | medium" : "";
+      const header = `[${response.provider.toUpperCase()} | ${modelLabel}${effortLabel} | ${sessionLabel}]`;
       return `${header}\n${response.output}`;
     });
   }
