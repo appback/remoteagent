@@ -21,7 +21,6 @@ import { ProviderRecoveryService } from "./services/provider-recovery-service.js
 import { computePolicyPollIntervalMs, computeRecentMessageRanks } from "./services/polling-policy.js";
 import { terminateAllSpawnedExecutions } from "./adapters/windows-shell.js";
 import { buildProviderEnv } from "./adapters/runtime-env.js";
-import { setTelegramCommandMenu } from "./telegram-command-menu.js";
 import { buildBotInfoFromIdentity, buildFallbackBotInfo } from "./telegram-bot-identity.js";
 import type { ProviderAdapter } from "./adapters/provider-adapter.js";
 import type { Provider } from "./types.js";
@@ -108,19 +107,13 @@ async function main(): Promise<void> {
   ));
   const bots = config.telegramBotTokens.map((token, index) => createBot(token, bridge, botManagement, botInfos[index]!));
 
-  if (config.telegramCommandMenuEnabled) {
-    for (const bot of bots) {
-      const username = bot.botInfo.username;
-      await configureTelegramCommandMenu(bot).catch((error) => {
-        console.error(`Failed to configure command menu for @${username}:`, error);
-      });
-      console.log(`Bot @${username} is ready`);
-    }
-  } else {
+  if (!config.telegramCommandMenuEnabled) {
     console.log("Telegram command menu registration is disabled.");
-    for (const bot of bots) {
-      console.log(`Bot @${bot.botInfo.username} is ready`);
-    }
+  } else {
+    console.log("Telegram command menu startup refresh is skipped; use /option command-menu refresh to apply changes.");
+  }
+  for (const bot of bots) {
+    console.log(`Bot @${bot.botInfo.username} is ready`);
   }
 
   await botManagement.reportPendingOperationResult().catch((error) => {
@@ -184,28 +177,6 @@ function startArtifactCleanupSchedule(memoryService: AgentMemoryService): void {
     void run();
   }, config.artifactCleanupIntervalMs);
   interval.unref();
-}
-
-async function configureTelegramCommandMenu(bot: Bot): Promise<void> {
-  const token = (bot as unknown as { token?: string }).token;
-  if (!token) {
-    throw new Error("Telegram bot token is unavailable for command menu registration.");
-  }
-
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    try {
-      await setTelegramCommandMenu(token);
-      return;
-    } catch (error) {
-      lastError = error;
-      if (attempt < 3) {
-        await sleep(1000 * attempt);
-      }
-    }
-  }
-
-  throw lastError;
 }
 
 main().catch((error: unknown) => {

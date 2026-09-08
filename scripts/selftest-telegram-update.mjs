@@ -12,6 +12,7 @@ const workspaceRoot = path.join(tmp, "workspaces");
 const binDir = path.join(tmp, "bin");
 const telegramCalls = path.join(tmp, "telegram-calls.jsonl");
 const capturedDocument = path.join(tmp, "captured-document.ra-secrets");
+const rateLimitOnce = path.join(tmp, "telegram-rate-limit-once");
 
 await fs.mkdir(workspace, { recursive: true });
 await fs.mkdir(workspaceRoot, { recursive: true });
@@ -27,6 +28,7 @@ document_path=""
 for arg in "$@"; do
   case "$arg" in
     https://api.telegram.org/bot*/sendMessage) method="sendMessage" ;;
+    https://api.telegram.org/bot*/sendChatAction) method="sendChatAction" ;;
     https://api.telegram.org/bot*/editMessageText) method="editMessageText" ;;
     https://api.telegram.org/bot*/deleteMessage) method="deleteMessage" ;;
     https://api.telegram.org/bot*/sendDocument) method="sendDocument" ;;
@@ -40,6 +42,11 @@ done
 text_b64="$(printf '%s' "$text" | base64 -w 0)"
 reply_markup_b64="$(printf '%s' "$reply_markup" | base64 -w 0)"
 printf '%s\\t%s\\t%s\\t%s\\n' "$method" "$chat_id" "$text_b64" "$reply_markup_b64" >> ${JSON.stringify(telegramCalls)}
+if [[ "$method" == "sendMessage" && -n "\${TELEGRAM_SELFTEST_RATE_LIMIT_FILE:-}" && -f "\${TELEGRAM_SELFTEST_RATE_LIMIT_FILE}" ]]; then
+  rm -f "\${TELEGRAM_SELFTEST_RATE_LIMIT_FILE}"
+  printf '{"ok":false,"error_code":429,"description":"Too Many Requests: retry after 1","parameters":{"retry_after":1}}'
+  exit 0
+fi
 case "$method" in
   sendMessage|editMessageText)
     printf '{"ok":true,"result":{"message_id":1001}}'
@@ -69,6 +76,7 @@ process.env.TELEGRAM_AUTO_PROGRESS_MAX_TURNS = "1";
 process.env.TELEGRAM_EMPTY_RESPONSE_RETRIES = "0";
 process.env.TELEGRAM_RETRYABLE_ERROR_RETRIES = "0";
 process.env.LOCAL_UI_ENABLED = "false";
+process.env.TELEGRAM_SELFTEST_RATE_LIMIT_FILE = rateLimitOnce;
 
 const [
   { createBot },
@@ -320,6 +328,13 @@ await send("/secret set API_TOKEN telegram-secret-export-value");
 await send("/secret export REMOTEAGENT_TRANSFER_PASSPHRASE API_TOKEN");
 await send("같은 값을 봐야하는데 로직문제네? 확인해줘\\n이미 수정되어 있을 수 있어.\\n나한테 수정했다고 보고했었거든");
 await send("/state");
+await fs.writeFile(rateLimitOnce, "once", "utf8");
+const rateLimitStartedAt = Date.now();
+await send("/status");
+const rateLimitElapsedMs = Date.now() - rateLimitStartedAt;
+if (rateLimitElapsedMs < 1000) {
+  throw new Error(`Telegram retry_after was not honored: elapsedMs=${rateLimitElapsedMs}`);
+}
 
 const state = JSON.parse(await fs.readFile(path.join(dataDir, "state.json"), "utf8"));
 const sessions = Object.values(state.sessions);
@@ -843,6 +858,7 @@ console.log(JSON.stringify({
   usageLimitFallback: true,
   longTelegramTextStoredAsFile: true,
   telegramSendMessages: evidenceCalls.filter((call) => call.method === "sendMessage").length,
+  telegramRateLimitElapsedMs: rateLimitElapsedMs,
 }, null, 2));
 
 process.exit(0);

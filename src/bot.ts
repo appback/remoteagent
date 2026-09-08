@@ -1793,6 +1793,10 @@ async function runWithPendingAnimation(
             typingStopped = true;
             return;
           }
+          if (isTelegramRateLimitError(error)) {
+            console.warn(`[telegram-chat-action] chat=${chatId} paused by Telegram rate limit: ${formatTelegramDeliveryError(error)}`);
+            return;
+          }
           console.warn(`[telegram-chat-action] chat=${chatId} failed: ${error instanceof Error ? error.message : String(error)}`);
         })
         .finally(() => {
@@ -1811,6 +1815,9 @@ async function runWithPendingAnimation(
   try {
     const helpers: PendingAnimationHelpers = {
       reportProgress: async (chunks, parseMode, messageOptions) => {
+        if (getTelegramRateLimitDelayMs(botToken) > 0) {
+          return;
+        }
         const normalized = await normalizeTelegramDelivery(chunks);
         const progressChunks = flattenChunks(normalized.chunks, 3900);
         if (progressChunks.length === 0 && normalized.documents.length === 0) {
@@ -1823,12 +1830,12 @@ async function runWithPendingAnimation(
           ...(rendered.parseMode ? { parse_mode: rendered.parseMode } : {}),
         };
         for (const chunk of rendered.chunks) {
-          await sendTelegramMessage(botToken, chatId, chunk, extra).catch((error) => {
+          await sendTelegramMessage(botToken, chatId, chunk, extra, "progress").catch((error) => {
             console.warn(`[telegram-progress-delivery] chat=${chatId} dropped progress message: ${formatTelegramDeliveryError(error)}`);
           });
         }
         if (normalized.documents.length > 0) {
-          await sendTelegramDocuments(botToken, chatId, normalized.documents).catch((error) => {
+          await sendTelegramDocuments(botToken, chatId, normalized.documents, "progress").catch((error) => {
             console.warn(`[telegram-progress-delivery] chat=${chatId} dropped progress document(s): ${formatTelegramDeliveryError(error)}`);
           });
         }
@@ -3717,9 +3724,29 @@ async function sendTelegramDocuments(
   botToken: string,
   chatId: number,
   documents: TelegramOutgoingDocument[],
+  deliveryClass: "final" | "progress" = "final",
 ): Promise<void> {
+  if (deliveryClass === "progress" && getTelegramRateLimitDelayMs(botToken) > 0) {
+    return;
+  }
   for (const document of documents) {
-    await sendTelegramDocument(botToken, chatId, document);
+    if (deliveryClass === "progress") {
+      await sendTelegramDocument(botToken, chatId, document);
+      continue;
+    }
+    await serializeTelegramMessage(botToken, async () => {
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        await waitForTelegramRateLimit(botToken);
+        try {
+          await sendTelegramDocument(botToken, chatId, document);
+          return;
+        } catch (error) {
+          if (!isTelegramRateLimitError(error) || attempt >= 3) {
+            throw error;
+          }
+        }
+      }
+    });
   }
 }
 
@@ -3753,9 +3780,27 @@ async function sendTelegramDocument(
     console.error(`curl stderr for sendDocument: ${stderr.trim()}`);
   }
 
-  const payload = JSON.parse(stdout) as { ok?: boolean; result?: TelegramMessageResult; description?: string };
+  const payload = JSON.parse(stdout) as {
+    ok?: boolean;
+    result?: TelegramMessageResult;
+    description?: string;
+    error_code?: number;
+    parameters?: { retry_after?: number };
+  };
   if (!payload.ok || !payload.result) {
-    throw new Error(payload.description || "Telegram API sendDocument failed.");
+    const retryAfterSeconds = payload.parameters?.retry_after;
+    const retryAfterMs = typeof retryAfterSeconds === "number" && retryAfterSeconds > 0
+      ? Math.ceil(retryAfterSeconds * 1000) + 250
+      : undefined;
+    if (payload.error_code === 429 || retryAfterMs !== undefined) {
+      registerTelegramRateLimit(botToken, retryAfterMs ?? 5_250);
+    }
+    throw new TelegramApiError(
+      "sendDocument",
+      payload.description || "Telegram API sendDocument failed.",
+      payload.error_code,
+      retryAfterMs,
+    );
   }
 
   return payload.result;
@@ -3786,11 +3831,32 @@ async function sendTelegramMessage(
   chatId: number,
   text: string,
   extra?: TelegramMessageOptions,
+  deliveryClass: "final" | "progress" = "final",
+): Promise<TelegramMessageResult> {
+  if (deliveryClass === "progress") {
+    if (getTelegramRateLimitDelayMs(botToken) > 0) {
+      throw new TelegramDeliveryDeferredError("Telegram progress delivery skipped during rate-limit cooldown.");
+    }
+    return sendTelegramMessageNow(botToken, chatId, text, extra, deliveryClass);
+  }
+
+  return serializeTelegramMessage(botToken, () => sendTelegramMessageNow(botToken, chatId, text, extra, deliveryClass));
+}
+
+async function sendTelegramMessageNow(
+  botToken: string,
+  chatId: number,
+  text: string,
+  extra: TelegramMessageOptions | undefined,
+  deliveryClass: "final" | "progress",
 ): Promise<TelegramMessageResult> {
   const startedAt = Date.now();
   try {
     let lastError: unknown;
     for (let attempt = 1; attempt <= 3; attempt += 1) {
+      if (deliveryClass === "final") {
+        await waitForTelegramRateLimit(botToken);
+      }
       try {
         try {
           return await callTelegramApi<TelegramMessageResult>(botToken, "sendMessage", {
@@ -3812,6 +3878,15 @@ async function sendTelegramMessage(
         }
       } catch (error) {
         lastError = error;
+        if (isTelegramRateLimitError(error)) {
+          if (deliveryClass === "progress" || attempt >= 3) {
+            throw error;
+          }
+          const delayMs = getTelegramRateLimitDelayMs(botToken);
+          console.warn(`[telegram-sendMessage-rate-limit] chat=${chatId} attempt=${attempt}/3 retryAfterMs=${delayMs}`);
+          await waitForTelegramRateLimit(botToken);
+          continue;
+        }
         if (attempt >= 3 || !isRetryableTelegramDeliveryError(error)) {
           throw error;
         }
@@ -3849,6 +3924,9 @@ async function sendTelegramChatAction(
   chatId: number,
   action: "typing",
 ): Promise<void> {
+  if (getTelegramRateLimitDelayMs(botToken) > 0) {
+    return;
+  }
   await callTelegramApi<boolean>(botToken, "sendChatAction", {
     chat_id: String(chatId),
     action,
@@ -3886,9 +3964,27 @@ async function callTelegramApi<T>(
     console.error(`curl stderr for ${method}: ${stderr.trim()}`);
   }
 
-  const payload = JSON.parse(stdout) as { ok?: boolean; result?: T; description?: string };
+  const payload = JSON.parse(stdout) as {
+    ok?: boolean;
+    result?: T;
+    description?: string;
+    error_code?: number;
+    parameters?: { retry_after?: number };
+  };
   if (!payload.ok) {
-    throw new TelegramApiError(method, payload.description || `Telegram API ${method} failed.`);
+    const retryAfterSeconds = payload.parameters?.retry_after;
+    const retryAfterMs = typeof retryAfterSeconds === "number" && retryAfterSeconds > 0
+      ? Math.ceil(retryAfterSeconds * 1000) + 250
+      : undefined;
+    if (payload.error_code === 429 || retryAfterMs !== undefined) {
+      registerTelegramRateLimit(botToken, retryAfterMs ?? 5_250);
+    }
+    throw new TelegramApiError(
+      method,
+      payload.description || `Telegram API ${method} failed.`,
+      payload.error_code,
+      retryAfterMs,
+    );
   }
 
   return payload.result as T;
@@ -3898,9 +3994,64 @@ class TelegramApiError extends Error {
   constructor(
     readonly method: string,
     readonly description: string,
+    readonly errorCode?: number,
+    readonly retryAfterMs?: number,
   ) {
     super(description);
     this.name = "TelegramApiError";
+  }
+}
+
+class TelegramDeliveryDeferredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TelegramDeliveryDeferredError";
+  }
+}
+
+const telegramRateLimitUntil = new Map<string, number>();
+const telegramMessageQueues = new Map<string, Promise<void>>();
+
+function telegramBotKey(botToken: string): string {
+  return botToken.split(":", 1)[0] || botToken;
+}
+
+function registerTelegramRateLimit(botToken: string, retryAfterMs: number): void {
+  const key = telegramBotKey(botToken);
+  const until = Date.now() + Math.max(250, retryAfterMs);
+  telegramRateLimitUntil.set(key, Math.max(telegramRateLimitUntil.get(key) ?? 0, until));
+}
+
+function getTelegramRateLimitDelayMs(botToken: string): number {
+  const key = telegramBotKey(botToken);
+  const until = telegramRateLimitUntil.get(key) ?? 0;
+  const delayMs = until - Date.now();
+  if (delayMs <= 0) {
+    telegramRateLimitUntil.delete(key);
+    return 0;
+  }
+  return delayMs;
+}
+
+async function waitForTelegramRateLimit(botToken: string): Promise<void> {
+  const delayMs = getTelegramRateLimitDelayMs(botToken);
+  if (delayMs > 0) {
+    await sleep(delayMs);
+  }
+}
+
+async function serializeTelegramMessage<T>(botToken: string, task: () => Promise<T>): Promise<T> {
+  const key = telegramBotKey(botToken);
+  const previous = telegramMessageQueues.get(key) ?? Promise.resolve();
+  const current = previous.catch(() => undefined).then(task);
+  const tail = current.then(() => undefined, () => undefined);
+  telegramMessageQueues.set(key, tail);
+  try {
+    return await current;
+  } finally {
+    if (telegramMessageQueues.get(key) === tail) {
+      telegramMessageQueues.delete(key);
+    }
   }
 }
 
@@ -3925,6 +4076,10 @@ function formatTelegramDeliveryError(error: unknown): string {
 function isRetryableTelegramDeliveryError(error: unknown): boolean {
   const message = formatTelegramDeliveryError(error);
   return /timed out|timeout|Bad Gateway|502|503|504|ECONNRESET|connection reset|EAI_AGAIN|ENOTFOUND/i.test(message);
+}
+
+function isTelegramRateLimitError(error: unknown): boolean {
+  return error instanceof TelegramApiError && (error.errorCode === 429 || error.retryAfterMs !== undefined);
 }
 
 function isTelegramForbiddenError(error: unknown): boolean {
