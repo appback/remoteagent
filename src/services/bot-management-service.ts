@@ -551,7 +551,9 @@ export class BotManagementService {
       : singleTokenLine
         ? [singleTokenLine.slice("TELEGRAM_BOT_TOKEN=".length).trim()].filter(Boolean)
         : [];
-    const configuredUsernames = usernameLine ? this.parseCsv(usernameLine.slice("TELEGRAM_BOT_USERNAMES=".length)) : [];
+    const configuredUsernames = usernameLine
+      ? usernameLine.slice("TELEGRAM_BOT_USERNAMES=".length).split(",").map((value) => value.trim())
+      : [];
     const usernames = await this.normalizeUsernamesFromTelegram(tokens, configuredUsernames);
 
     return {

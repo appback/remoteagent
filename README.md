@@ -329,6 +329,13 @@ remoteagent-start
 
 The command validates the BotFather token and shows a one-time Telegram `/start` link. Open that link from the account that will own the installation; RemoteAgent detects the sender's numeric user ID and stores it as the owner automatically. The token is entered through a hidden prompt, and the owner ID does not need to be looked up or typed manually.
 
+Remove a configured bot by username or numeric Bot ID, then restart the runtime:
+
+```bash
+remoteagent bot remove @example_bot
+sudo systemctl restart remoteagent
+```
+
 To move installation-wide `/secret` values to another PC, export and import a password-encrypted bundle:
 
 ```bash

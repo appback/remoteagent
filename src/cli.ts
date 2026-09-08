@@ -6,6 +6,7 @@ import process from "node:process";
 import {
   fetchTelegramBotIdentity,
   registerTelegramBot,
+  removeTelegramBot,
   readConfiguredOwnerId,
   waitForTelegramOwner,
 } from "./services/cli-config-service.js";
@@ -26,6 +27,10 @@ async function main(): Promise<void> {
   const [group, action] = args;
   if (group === "bot" && action === "add") {
     await addBot(dataDir, args.slice(2));
+    return;
+  }
+  if (group === "bot" && action === "remove") {
+    await removeBot(dataDir, args.slice(2));
     return;
   }
   if (group === "secret" && action === "export") {
@@ -81,6 +86,27 @@ async function addBot(dataDir: string, args: string[]): Promise<void> {
 
   console.log([
     `${result.added ? "Registered" : "Updated"} @${result.identity.username} (${result.identity.id}).`,
+    `Configured bots: ${result.botCount}`,
+    `Configuration: ${result.envPath}`,
+    "Start or restart RemoteAgent to apply it:",
+    "  remoteagent-start",
+    "  # systemd runtime: sudo systemctl restart remoteagent",
+  ].join("\n"));
+}
+
+async function removeBot(dataDir: string, args: string[]): Promise<void> {
+  if (args.some((arg) => arg.startsWith("--"))) {
+    throw new Error(`Unknown bot remove option: ${args.find((arg) => arg.startsWith("--"))}`);
+  }
+  const selector = args.shift();
+  if (!selector || args.length > 0) {
+    throw new Error("Usage: remoteagent bot remove <username|id>");
+  }
+
+  const result = await removeTelegramBot({ dataDir, selector });
+  const label = result.username ? `@${result.username}` : `bot ${result.id}`;
+  console.log([
+    `Removed ${label} (${result.id}).`,
     `Configured bots: ${result.botCount}`,
     `Configuration: ${result.envPath}`,
     "Start or restart RemoteAgent to apply it:",
@@ -219,6 +245,7 @@ Usage:
   remoteagent                         Start the foreground runtime
   remoteagent bot add [token] [--owner <telegram-user-id>]
   remoteagent bot add --token-file <file> --owner <telegram-user-id>
+  remoteagent bot remove <username|id>
   remoteagent secret export [file] [--passphrase-file <file>]
   remoteagent secret import <file> [--replace] [--passphrase-file <file>]
 

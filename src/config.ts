@@ -43,15 +43,14 @@ function readTelegramBotTokens(): string[] {
 }
 
 function readTelegramBotUsernames(): string[] {
-  const raw = process.env.TELEGRAM_BOT_USERNAMES?.trim();
-  if (!raw) {
+  const raw = process.env.TELEGRAM_BOT_USERNAMES;
+  if (raw === undefined || raw === "") {
     return [];
   }
 
   return raw
-    .split(/[\r\n,]+/)
-    .map((value) => value.trim())
-    .filter(Boolean);
+    .split(",")
+    .map((value) => value.trim());
 }
 
 function readOptional(name: string): string | undefined {

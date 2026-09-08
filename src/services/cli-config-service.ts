@@ -58,6 +58,18 @@ export type RegisterTelegramBotResult = {
   botCount: number;
 };
 
+export type RemoveTelegramBotOptions = {
+  dataDir: string;
+  selector: string;
+};
+
+export type RemoveTelegramBotResult = {
+  id: number;
+  username?: string;
+  envPath: string;
+  botCount: number;
+};
+
 export async function registerTelegramBot(options: RegisterTelegramBotOptions): Promise<RegisterTelegramBotResult> {
   const token = options.token.trim();
   const ownerId = options.ownerId.trim();
@@ -74,7 +86,7 @@ export async function registerTelegramBot(options: RegisterTelegramBotOptions): 
   });
   const values = parseEnv(original);
   const configuredTokens = parseCsv(values.get("TELEGRAM_BOT_TOKENS") || values.get("TELEGRAM_BOT_TOKEN") || "");
-  const configuredUsernames = parseCsv(values.get("TELEGRAM_BOT_USERNAMES") || "");
+  const configuredUsernames = parseCsvSlots(values.get("TELEGRAM_BOT_USERNAMES") || "");
   const validIndexes = configuredTokens
     .map((configuredToken, index) => isBotToken(configuredToken) ? index : -1)
     .filter((index) => index >= 0);
@@ -111,6 +123,58 @@ export async function registerTelegramBot(options: RegisterTelegramBotOptions): 
     envPath,
     added,
     botCount: tokens.length,
+  };
+}
+
+export async function removeTelegramBot(options: RemoveTelegramBotOptions): Promise<RemoveTelegramBotResult> {
+  const selector = options.selector.trim().replace(/^@/, "").toLowerCase();
+  if (!selector) {
+    throw new Error("Usage: remoteagent bot remove <username|id>");
+  }
+
+  const envPath = path.join(options.dataDir, ".env");
+  const original = await fs.readFile(envPath, "utf8").catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") {
+      throw new Error(`RemoteAgent configuration was not found: ${envPath}`);
+    }
+    throw error;
+  });
+  const values = parseEnv(original);
+  const configuredTokens = parseCsv(values.get("TELEGRAM_BOT_TOKENS") || values.get("TELEGRAM_BOT_TOKEN") || "");
+  const configuredUsernames = parseCsvSlots(values.get("TELEGRAM_BOT_USERNAMES") || "");
+  const validIndexes = configuredTokens
+    .map((token, index) => isBotToken(token) ? index : -1)
+    .filter((index) => index >= 0);
+  const tokens = validIndexes.map((index) => configuredTokens[index]!);
+  const usernames = validIndexes.map((index) => configuredUsernames[index] || "");
+  const targetIndex = tokens.findIndex((token, index) =>
+    token.slice(0, token.indexOf(":")) === selector
+    || usernames[index]?.toLowerCase() === selector,
+  );
+
+  if (targetIndex < 0) {
+    throw new Error(`Telegram bot was not found: ${options.selector.trim()}`);
+  }
+  if (tokens.length <= 1) {
+    throw new Error("Cannot remove the last configured bot.");
+  }
+
+  const removedToken = tokens[targetIndex]!;
+  const removedUsername = usernames[targetIndex] || undefined;
+  const remainingTokens = tokens.filter((_, index) => index !== targetIndex);
+  const remainingUsernames = usernames.filter((_, index) => index !== targetIndex);
+  const next = upsertEnv(original, {
+    TELEGRAM_BOT_TOKEN: remainingTokens[0]!,
+    TELEGRAM_BOT_TOKENS: remainingTokens.join(","),
+    TELEGRAM_BOT_USERNAMES: remainingUsernames.join(","),
+  });
+  await atomicWrite(envPath, next, 0o600);
+
+  return {
+    id: Number(removedToken.slice(0, removedToken.indexOf(":"))),
+    username: removedUsername,
+    envPath,
+    botCount: remainingTokens.length,
   };
 }
 
@@ -277,6 +341,10 @@ function parseCsv(value: string): string[] {
     .split(/[\r\n,]+/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function parseCsvSlots(value: string): string[] {
+  return value.split(",").map((item) => item.trim());
 }
 
 function parseEnv(text: string): Map<string, string> {

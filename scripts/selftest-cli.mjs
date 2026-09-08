@@ -7,6 +7,7 @@ import path from "node:path";
 import {
   fetchTelegramBotIdentity,
   registerTelegramBot,
+  removeTelegramBot,
   waitForTelegramOwner,
 } from "../dist/services/cli-config-service.js";
 import { buildProviderEnv, buildRuntimePath } from "../dist/adapters/runtime-env.js";
@@ -14,6 +15,7 @@ import { exportSecrets, importSecrets } from "../dist/services/secret-transfer-s
 
 const root = await fs.mkdtemp(path.join(os.tmpdir(), "remoteagent-cli-selftest-"));
 const sourceDataDir = path.join(root, "source");
+const sparseUsernameDataDir = path.join(root, "sparse-usernames");
 const targetDataDir = path.join(root, "target");
 const bundlePath = path.join(root, "transfer.ra-secrets");
 const selectedBundlePath = path.join(root, "selected-transfer.ra-secrets");
@@ -111,6 +113,55 @@ fi
   assert.match(envText, /TELEGRAM_OWNER_ID=8202993989/);
   assert.doesNotMatch(envText, /your-telegram-bot-token/);
   assert.match(envText, /TELEGRAM_BOT_USERNAMES=first_remoteagent_bot,second_remoteagent_bot/);
+
+  const removedByUsername = await removeTelegramBot({
+    dataDir: sourceDataDir,
+    selector: "@second_remoteagent_bot",
+  });
+  assert.equal(removedByUsername.id, 100002);
+  assert.equal(removedByUsername.username, "second_remoteagent_bot");
+  assert.equal(removedByUsername.botCount, 1);
+  const envAfterUsernameRemoval = await fs.readFile(path.join(sourceDataDir, ".env"), "utf8");
+  assert.match(envAfterUsernameRemoval, /TELEGRAM_BOT_TOKEN=100001:abcdefghijklmnopqrstuvwxyz_123456/);
+  assert.match(envAfterUsernameRemoval, /TELEGRAM_BOT_TOKENS=100001:abcdefghijklmnopqrstuvwxyz_123456/);
+  assert.match(envAfterUsernameRemoval, /TELEGRAM_BOT_USERNAMES=first_remoteagent_bot/);
+  assert.doesNotMatch(envAfterUsernameRemoval, /second_remoteagent_bot/);
+
+  await assert.rejects(
+    removeTelegramBot({ dataDir: sourceDataDir, selector: "100001" }),
+    /Cannot remove the last configured bot/,
+  );
+  await assert.rejects(
+    removeTelegramBot({ dataDir: sourceDataDir, selector: "missing_bot" }),
+    /Telegram bot was not found/,
+  );
+
+  await registerTelegramBot({
+    dataDir: sourceDataDir,
+    token: "100002:abcdefghijklmnopqrstuvwxyz_654321",
+    ownerId: "8202993989",
+    identity: { id: 100002, username: "second_remoteagent_bot" },
+  });
+  const removedById = await removeTelegramBot({ dataDir: sourceDataDir, selector: "100001" });
+  assert.equal(removedById.username, "first_remoteagent_bot");
+  assert.equal(removedById.botCount, 1);
+
+  await fs.mkdir(sparseUsernameDataDir, { recursive: true });
+  await fs.writeFile(path.join(sparseUsernameDataDir, ".env"), [
+    "TELEGRAM_BOT_TOKEN=100001:abcdefghijklmnopqrstuvwxyz_123456",
+    "TELEGRAM_BOT_TOKENS=100001:abcdefghijklmnopqrstuvwxyz_123456,100002:abcdefghijklmnopqrstuvwxyz_654321",
+    "TELEGRAM_BOT_USERNAMES=,second_remoteagent_bot",
+    "TELEGRAM_OWNER_ID=8202993989",
+    "",
+  ].join("\n"), { mode: 0o600 });
+  const removedSparseUsername = await removeTelegramBot({
+    dataDir: sparseUsernameDataDir,
+    selector: "second_remoteagent_bot",
+  });
+  assert.equal(removedSparseUsername.id, 100002);
+  const sparseEnv = await fs.readFile(path.join(sparseUsernameDataDir, ".env"), "utf8");
+  assert.match(sparseEnv, /TELEGRAM_BOT_TOKENS=100001:abcdefghijklmnopqrstuvwxyz_123456/);
+  assert.doesNotMatch(sparseEnv, /100002:abcdefghijklmnopqrstuvwxyz_654321/);
 
   const sourceSecrets = {
     API_TOKEN: {

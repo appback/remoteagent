@@ -22,6 +22,22 @@ chmod 600 /secure/path/telegram-token
 remoteagent bot add --token-file /secure/path/telegram-token --owner 123456789
 ```
 
+Remove a configured bot by username or numeric Bot ID, then restart the runtime:
+
+```bash
+remoteagent bot remove @example_bot
+sudo systemctl restart remoteagent
+```
+
+```bash
+remoteagent bot remove 123456789
+sudo systemctl restart remoteagent
+```
+
+The command updates `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_TOKENS`, and
+`TELEGRAM_BOT_USERNAMES` together. It does not print bot tokens and refuses to
+remove the final configured bot.
+
 After adding or updating a bot, apply the configuration with the runtime command appropriate to the installation:
 
 ```bash
