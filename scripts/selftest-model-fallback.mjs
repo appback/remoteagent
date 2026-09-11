@@ -121,6 +121,14 @@ try {
   );
   assert.deepEqual(calls.map((call) => call.model), [primaryModel, CODEX_USAGE_FALLBACK_MODEL]);
 
+  await bridge.restoreCodexModel();
+  await assert.rejects(fs.stat(fallbackStatePath), { code: "ENOENT" });
+  failPrimaryWithUsageLimit = false;
+  calls.length = 0;
+  await bridge.routeMessage("test-bot", "test-chat", "after coupon reset");
+  assert.deepEqual(calls.map(call => call.model), [primaryModel]);
+  assert.equal((await store.getChatSession("test-bot", "test-chat"))?.session.sessionId, originalSessionId);
+
   console.log(JSON.stringify({
     ok: true,
     detectedExactUsageError: true,
@@ -130,6 +138,7 @@ try {
     fallbackSharedAcrossSessions: true,
     primaryRestoredAfterSuccessfulProbe: true,
     fallbackAttemptLimit: 1,
+    manualRestoreUsesPrimary: true,
   }, null, 2));
 } finally {
   await fs.rm(root, { recursive: true, force: true });

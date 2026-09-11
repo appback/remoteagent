@@ -34,7 +34,7 @@ const HELP_TEXT = [
   "/batch start|send|cancel|status",
   "/attach codex <thread_id>",
   "/attach claude <session_id>",
-  "/model [name]",
+  "/model [name|restore]",
   "/queue [remove <id>|del]",
   "/stop",
   "/sandbox codex <read-only|workspace-write|danger-full-access>",
@@ -136,6 +136,7 @@ type InlineAction =
   | { kind: "session.switch"; selector: string }
   | { kind: "session.list"; showAll: boolean }
   | { kind: "model.set"; model: string }
+  | { kind: "model.restore" }
   | { kind: "macro.run"; alias: string }
   | { kind: "option.show"; option: RuntimeOptionName }
   | { kind: "sandbox.set"; mode: CodexSandboxMode; confirmed?: boolean }
@@ -707,9 +708,15 @@ ${bridge.formatStatus(mapping)}`);
     const model = args[0]?.trim();
 
     if (rest?.trim()) {
-      await reply(ctx, "Usage: `/model` or `/model <name|number>`", {
+      await reply(ctx, "Usage: `/model`, `/model <name|number>`, or `/model restore`", {
         parse_mode: "Markdown",
       });
+      return;
+    }
+
+    if (model?.toLowerCase() === "restore") {
+      await ensureOwnerControlAccess(ctx);
+      await reply(ctx, await bridge.restoreCodexModel());
       return;
     }
 
@@ -718,6 +725,7 @@ ${bridge.formatStatus(mapping)}`);
       const rows = selection.presets.map((preset) => [
         actionButton(ctx, `${preset === selection.currentModel ? "✓ " : ""}${preset}`, { kind: "model.set", model: preset }),
       ]);
+      rows.push([actionButton(ctx, "원래 모델 복귀", { kind: "model.restore" })]);
       await reply(ctx, await bridge.formatModelSelection(botId, chatId), {
         parse_mode: "Markdown",
         ...(keyboardOptions(rows) ?? {}),
@@ -1383,6 +1391,11 @@ ${bridge.formatStatus(mapping)}`);
       }
       if (action.kind === "model.set") {
         await reply(ctx, await setChatModel(ctx, action.model));
+        return;
+      }
+      if (action.kind === "model.restore") {
+        await ensureOwnerControlAccess(ctx);
+        await reply(ctx, await bridge.restoreCodexModel());
         return;
       }
       if (action.kind === "macro.run") {

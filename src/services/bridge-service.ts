@@ -258,6 +258,7 @@ export class BridgeService {
       ...presets.map((item, index) => ` ${index + 1}. ${item}`),
       "",
       "Use `/model <name>` or `/model <number>` to change it.",
+      "Use `/model restore` to clear temporary Codex fallback for all bots on this server. The next execution uses each session's configured model.",
     ];
 
     if (presets.length === 0) {
@@ -265,6 +266,11 @@ export class BridgeService {
     }
 
     return lines.join("\n");
+  }
+
+  async restoreCodexModel(): Promise<string> {
+    await this.codexUsageFallback.clear();
+    return "이 서버의 Codex 임시 전환 상태를 해제했습니다. 다음 실행부터 각 세션에 설정된 원래 모델을 사용합니다.\n진행 중인 작업과 세션의 모델 설정은 유지됩니다. 실제 사용 한도가 남아 있으면 다시 임시 전환될 수 있습니다.";
   }
 
   async getModelSelection(botId: string, chatId: string): Promise<ModelSelection> {

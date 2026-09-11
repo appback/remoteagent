@@ -106,6 +106,7 @@ Current command surface implemented in `src/bot.ts`:
 | `/switch <session>` | Rebinds this chat to an existing RemoteAgent session |
 | `/status` | Shows current session, workspace, provider, and sandbox state |
 | `/model [name]` | Lists selectable provider models or changes the current session model. New Codex sessions default to `gpt-6-astra`. Use `/model gpt-6-astra` for an existing session. |
+| `/model restore` | Clears temporary Codex fallback after a usage reset or credit purchase. Server-wide; next execution uses each session's configured model. Running work is preserved. Also available through the model menu's restore button. |
 | `/option reasoning [low\|medium\|high\|xhigh\|max]` | Shows or changes Astra reasoning for all bots on this server. Defaults to `medium`; persisted as `CODEX_REASONING_EFFORT`. Applies on the next execution without restarting. Running replies retain their actual execution effort in the header. |
 | `/sandbox [codex <mode>]` | Lists Codex sandbox choices or changes the current session sandbox |
 | `/option retry <count>` | Sets the automatic continuation turn limit and persists it to `~/.remoteagent/.env` |

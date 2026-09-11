@@ -531,6 +531,20 @@ await waitForTelegramCall((call) => call.text.includes("Switched this chat to se
 
 await send("/model");
 const modelListCall = await waitForTelegramCall((call) => call.text.includes("availablePresets:"));
+const restoreButton = findInlineButton(modelListCall, "원래 모델 복귀");
+if (!restoreButton?.callback_data) throw new Error("Model restore button missing");
+const fallbackPath = path.join(dataDir, "codex-usage-fallback.json");
+const fallbackFixture = JSON.stringify({fallbackModel: "gpt-5.3-codex-spark", activatedAt: new Date().toISOString(), resetAt: "2099-01-01T00:00:00Z"});
+const beforeRestore = await fs.readFile(path.join(dataDir, "state.json"), "utf8");
+await fs.writeFile(fallbackPath, fallbackFixture);
+await click(restoreButton.callback_data);
+if (await pathExists(fallbackPath)) throw new Error("Restore button did not clear fallback");
+await fs.writeFile(fallbackPath, fallbackFixture);
+await send("/model restore");
+await send("/model restore");
+if (await pathExists(fallbackPath)) throw new Error("Restore command did not clear fallback");
+const afterRestore = await fs.readFile(path.join(dataDir, "state.json"), "utf8");
+if (JSON.stringify(JSON.parse(beforeRestore).sessions) !== JSON.stringify(JSON.parse(afterRestore).sessions)) throw new Error("Restore changed sessions");
 const modelButton = findInlineButton(modelListCall, "gpt-5.6-terra");
 if (!modelButton?.callback_data) {
   throw new Error(`Model selection button is missing: ${modelListCall.reply_markup}`);
