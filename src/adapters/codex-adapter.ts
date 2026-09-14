@@ -276,17 +276,30 @@ export class CodexAdapter implements ProviderAdapter {
   private formatProcessError(stdout: string, stderr: string, timedOut = false, code?: number | null): string {
     const structured = this.extractStructuredError(stdout, stderr);
     if (structured) {
-      return structured;
+      return this.addUpgradeGuidance(structured);
     }
 
     const text = this.extractPlainTextError(stdout, stderr);
     if (text) {
-      return text;
+      return this.addUpgradeGuidance(text);
     }
 
     return timedOut
       ? this.formatTimeoutError()
       : `Codex process exited with code ${code ?? "unknown"} without stdout/stderr.`;
+  }
+
+  private addUpgradeGuidance(message: string): string {
+    if (!/requires a newer version of Codex/i.test(message)) {
+      return message;
+    }
+    return [
+      message,
+      "",
+      "현재 Codex 버전이 선택한 모델을 지원하지 않습니다.",
+      "Telegram에서 /install codex 를 실행하면 최신 버전으로 업데이트됩니다.",
+      "업데이트가 완료되면 같은 세션에서 요청을 다시 보내 주세요.",
+    ].join("\n");
   }
 
   private extractStructuredError(stdout: string, stderr: string): string | undefined {

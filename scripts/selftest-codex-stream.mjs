@@ -34,6 +34,13 @@ await fs.chmod(fakeCodex, 0o755);
 
 const { CodexAdapter } = await import(path.join(root, "dist", "adapters", "codex-adapter.js"));
 const adapter = new CodexAdapter(fakeCodex, 5000, "read-only");
+const upgradeError = "The 'gpt-6-astra' model requires a newer version of Codex. Please upgrade to the latest app or CLI and try again.";
+for (const raw of [upgradeError, JSON.stringify({type: "error", status: 400, error: {type: "invalid_request_error", message: upgradeError}})]) {
+  const formatted = adapter.formatProcessError(raw, "", false, 1);
+  if (!formatted.includes(upgradeError) || !formatted.includes("/install codex")) throw new Error("Missing Codex upgrade guidance");
+}
+const unrelatedError = "This request was blocked by our safety systems. Reason: Potentially unintended activity.";
+if (adapter.formatProcessError(unrelatedError, "", false, 1) !== unrelatedError) throw new Error("Unrelated error was changed");
 for (const method of ["buildExecArgs", "buildResumeArgs"]) {
   for (const reasoningEffort of ["low", "medium", "high", "xhigh", "max"]) {
     const args = adapter[method]({model: "gpt-6-astra", reasoningEffort, cwd: tmp, sessionId: "stream-thread"}, path.join(tmp, "output"), "read-only");
