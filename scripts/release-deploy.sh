@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: npm run release:deploy -- <version> <30|40|26|all>" >&2
+  echo "Usage: npm run release:deploy -- <version> <30|40|26|50|all>" >&2
   echo "Example: npm run release:deploy -- 0.15.5 all" >&2
 }
 
@@ -20,7 +20,7 @@ if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 
 case "$TARGET" in
-  30|40|26|all)
+  30|40|26|50|all)
     ;;
   *)
     usage
@@ -192,6 +192,31 @@ fi
 REMOTE
 }
 
+deploy_50() {
+  ssh root@192.168.33.50 "runuser -u daone -- env VERSION=$VERSION PATH=/home/daone/.nvm/versions/node/v22.23.2/bin:/usr/local/bin:/usr/bin:/bin bash -s" <<'REMOTE'
+set -euo pipefail
+cd "$HOME"
+node --input-type=module - <<'NODE'
+import fs from 'node:fs';
+const state = JSON.parse(fs.readFileSync(`${process.env.HOME}/.remoteagent/bot-polling-state.json`, 'utf8'));
+if (Object.values(state.bots || {}).some(bot => bot.runningSessionIds?.length)) {
+  throw new Error('Active provider work; deployment aborted.');
+}
+NODE
+remoteagent-stop
+trap 'remoteagent-start' EXIT
+npm install -g "appback-remoteagent@$VERSION"
+test "$(node -p 'require(process.env.HOME + "/.nvm/versions/node/v22.23.2/lib/node_modules/appback-remoteagent/package.json").version')" = "$VERSION"
+# Existing npm installation keeps the same launcher and configuration paths.
+remoteagent-start
+trap - EXIT
+sleep 5
+kill -0 "$(cat "$HOME/.remoteagent/remoteagent.pid")"
+npm list -g appback-remoteagent --depth=0
+tail -n 12 "$HOME/.remoteagent/logs/agent.log"
+REMOTE
+}
+
 case "$TARGET" in
   30)
     deploy_30
@@ -201,6 +226,9 @@ case "$TARGET" in
     ;;
   26)
     deploy_26
+    ;;
+  50)
+    deploy_50
     ;;
   all)
     deploy_30

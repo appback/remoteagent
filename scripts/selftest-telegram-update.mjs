@@ -527,6 +527,14 @@ if (calls.some((call) => /미완료 TODO|\/task|새 작업으로 접수/.test(ca
   throw new Error(`Task gate language leaked to Telegram replies. Calls: ${JSON.stringify(calls, null, 2)}`);
 }
 
+await send("/login");
+const loginMenu = await waitForTelegramCall(call => call.text.includes("Choose an account to authenticate"));
+for (const label of ["GitHub", "Codex", "Claude"]) {
+  if (!findInlineButton(loginMenu, label)?.callback_data?.startsWith("remoteagent:action:")) {
+    throw new Error(`Missing login button: ${label}`);
+  }
+}
+
 await send("/new");
 await send("/list");
 const sessionListCall = await waitForTelegramCall((call) => call.text.includes("Sessions (2/2)"));

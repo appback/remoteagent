@@ -176,12 +176,12 @@ export class ProviderSetupService {
         if (/not logged in/i.test(statusText)) {
           return [
             "Codex is installed but not logged in yet.",
-            "Next step: run `/login codex` in this chat.",
+            "Next step: run /login and select Codex.",
             "If you prefer machine-side auth, you can use `codex login --device-auth` and complete the login in your browser.",
           ].join("\n");
         }
       } catch {
-        return "Codex is installed. If this machine is not authenticated yet, run `/login codex` or use `codex login --device-auth` on the machine.";
+        return "Codex is installed. To authenticate this server account, run /login and select Codex.";
       }
     }
 
@@ -192,11 +192,11 @@ export class ProviderSetupService {
         if (/not logged in|loggedIn:\s*false/i.test(statusText)) {
           return [
             "Claude Code is installed but not logged in yet.",
-            "Next step: run `/login claude` or complete the configured Claude login flow on this machine.",
+            "Next step: run /login and select Claude.",
           ].join("\n");
         }
       } catch {
-        return "Claude Code is installed. If this machine is not authenticated yet, run `/login claude` or complete the configured login flow.";
+        return "Claude Code is installed. To authenticate this server account, run /login and select Claude.";
       }
     }
 

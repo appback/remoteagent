@@ -26,7 +26,7 @@ export const TELEGRAM_COMMAND_MENU = [
   { command: "bots", description: "List configured Telegram bots" },
   { command: "bot", description: "Manage Telegram bots" },
   { command: "install", description: "Install or update Codex or Claude" },
-  { command: "login", description: "Run provider login flow" },
+  { command: "login", description: "Choose GitHub, Codex or Claude login" },
   { command: "reset", description: "Clear this chat binding" },
   { command: "help", description: "Show command help" },
 ];

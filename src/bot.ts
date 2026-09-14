@@ -12,6 +12,7 @@ import { config } from "./config.js";
 import { BridgeService } from "./services/bridge-service.js";
 import { BotManagementService } from "./services/bot-management-service.js";
 import { ProviderSetupService } from "./services/provider-setup-service.js";
+import { LoginService, type LoginTarget } from "./services/login-service.js";
 import { RemoteShellService } from "./services/remote-shell-service.js";
 import { AgentMemoryService } from "./services/agent-memory-service.js";
 import { WorkspaceCleanupService } from "./services/workspace-cleanup-service.js";
@@ -54,8 +55,7 @@ const HELP_TEXT = [
   "/bot remove <username|id>",
   "/bot reload",
   "/install codex|claude",
-  "/login codex",
-  "/login claude [token]",
+  "/login - choose GitHub, Codex or Claude",
   "/reset",
   "/! <command>",
   "/!cmd <command>",
@@ -133,6 +133,7 @@ type QueuedWorkLoopEntry = {
 };
 
 type InlineAction =
+  | { kind: "login.start"; target: LoginTarget; force?: boolean }
   | { kind: "session.switch"; selector: string }
   | { kind: "session.list"; showAll: boolean }
   | { kind: "model.set"; model: string }
@@ -1253,32 +1254,38 @@ ${bridge.formatStatus(mapping)}`);
     });
   });
 
+  const loginService = new LoginService(15 * 60_000, { codex: config.codexBin, claude: config.claudeBin });
+  const startLogin = async (ctx: Context, target: LoginTarget, force = false) => {
+    await ensureOwnerControlAccess(ctx);
+    if (!ctx.chat) throw new Error("Telegram chat context is missing.");
+    const result = await loginService.start(target, force, async text => { await reply(ctx, text); });
+    await reply(ctx, result.text, result.alreadyLoggedIn ? keyboardOptions([[
+      actionButton(ctx, "Log in again", { kind: "login.start", target, force: true }),
+    ]]) : undefined);
+  };
+
   bot.command("login", async (ctx) => {
     await ensureOwnerControlAccess(ctx);
     const { args, rest } = parseCommand(ctx.message?.text, 1);
     const provider = args[0]?.toLowerCase();
-
-    if (provider === "codex") {
-      await runWithPendingAnimation(token, ctx.chat.id, async () => {
-        const output = await setupService.startCodexLogin();
-        await bridge.rememberDefaultStartMode("codex");
-        return { chunks: flattenChunks([output], 3900) };
-      });
+    if (!provider) {
+      await reply(ctx, "Choose an account to authenticate on this server. Authentication belongs to the OS account, not an individual session.", keyboardOptions([
+        [actionButton(ctx, "GitHub", { kind: "login.start", target: "github" })],
+        [actionButton(ctx, "Codex", { kind: "login.start", target: "codex" })],
+        [actionButton(ctx, "Claude", { kind: "login.start", target: "claude" })],
+      ]));
       return;
     }
-
-    if (provider !== "claude") {
-      await reply(ctx, "Usage: `/login codex` or `/login claude` or `/login claude <token>`", { parse_mode: "Markdown" });
+    if (provider === "claude" && rest?.trim()) {
+      await reply(ctx, await setupService.finishClaudeLogin(rest));
       return;
     }
-
-    await runWithPendingAnimation(token, ctx.chat.id, async () => {
-      const output = rest?.trim()
-        ? await setupService.finishClaudeLogin(rest)
-        : await setupService.startClaudeLogin();
-      await bridge.rememberDefaultStartMode("claude");
-      return { chunks: flattenChunks([output], 3900) };
-    });
+    const target = provider === "git" ? "github" : provider;
+    if (target !== "github" && target !== "codex" && target !== "claude") {
+      await reply(ctx, "Use /login to choose GitHub, Codex or Claude. Direct commands: /login github, /login codex, /login claude. /login git is a GitHub alias.");
+      return;
+    }
+    await startLogin(ctx, target);
   });
 
   const setChatSandbox = async (ctx: Context, sandboxMode: CodexSandboxMode): Promise<string> => {
@@ -1374,6 +1381,10 @@ ${bridge.formatStatus(mapping)}`);
     });
 
     try {
+      if (action.kind === "login.start") {
+        await startLogin(ctx, action.target, action.force);
+        return;
+      }
       if (action.kind === "session.switch") {
         await reply(ctx, await switchChatSession(ctx, action.selector));
         return;

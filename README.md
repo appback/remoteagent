@@ -122,8 +122,8 @@ Current command surface implemented in `src/bot.ts`:
 | `/bot remove <username\|id>` | Removes a configured Telegram bot, restarts the runtime, and confirms the result after restart |
 | `/bot reload` | Restarts the runtime and confirms the result after restart |
 | `/install codex\|claude` | Runs the configured provider install or update command for the bot owner |
-| `/login codex` | Starts the Codex device-auth login flow and returns a browser URL when available |
-| `/login claude [token]` | Starts or finishes the configured Claude Code login flow for the bot owner |
+| `/login` | Owner-only GitHub / Codex / Claude selection buttons; returns authentication URL and any device code, then reports completion |
+| `/login github\|codex\|claude` | Starts the selected login directly; `git` is an alias for `github` |
 | `/reset` | Clears the current chat binding |
 | `/batch start` | Starts manual batching of multiple text messages |
 | `/batch send` | Sends the collected batch |
@@ -186,7 +186,7 @@ Current Claude behavior:
 - fresh pairing from Telegram
 - attach to existing `session_id`
 - continue the same Claude Code session across turns
-- optional owner-only install/login flow through `/install claude` and `/login claude [token]`
+- owner-only installation through `/install claude` and browser authentication through `/login` → Claude
 
 ### 5. Telegram attachments
 
@@ -302,8 +302,7 @@ Recommended Linux hooks in this repo:
 - `CLAUDE_COMMAND`
 - `CLAUDE_PERMISSION_MODE`
 - `CLAUDE_INSTALL_COMMAND`
-- `CLAUDE_LOGIN_START_COMMAND`
-- `CLAUDE_LOGIN_FINISH_COMMAND`
+- `CLAUDE_LOGIN_FINISH_COMMAND` (legacy `/login claude <token>` compatibility only)
 - `REMOTEAGENT_SERVICE_NAME`
 - `BOT_RESTART_HELPER_PATH`
 - `LOCAL_UI_ENABLED`
@@ -387,14 +386,19 @@ Then open Telegram and start with one of these common flows. `/start` without a 
 /start claude
 /install codex
 /install claude
+/login
+/login github
 /login codex
 /login claude
-/login claude <token>
 /attach codex <thread_id>
 /attach claude <session_id>
 ```
 
 Once a chat is bound, ordinary text messages continue the active session. Supported attachments can also be sent directly as normal Telegram messages.
+
+`/login` authenticates the server's RemoteAgent OS account without creating a new
+session or changing its model. Already authenticated accounts offer a **Log in
+again** button. See [Login guide](docs/LOGIN.md) for prerequisites and expiry.
 
 ## Architecture and operations
 
