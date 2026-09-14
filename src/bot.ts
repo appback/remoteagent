@@ -39,7 +39,7 @@ const HELP_TEXT = [
   "/stop",
   "/sandbox codex <read-only|workspace-write|danger-full-access>",
   "/status",
-  "/option [retry <count>|timeout <seconds>|intent <count>|reasoning <low|medium|high|xhigh|max>|command-menu <on|off|refresh>]",
+  "/option [retry <count>|timeout <seconds>|reasoning <low|medium|high|xhigh|max>|command-menu <on|off|refresh>]",
   "/state [clear|note <text>]",
   "/artifacts list|cleanup <days>",
   "/cleanup",
@@ -825,7 +825,6 @@ ${bridge.formatStatus(mapping)}`);
           actionButton(ctx, "Timeout", { kind: "option.show", option: "timeout" }),
         ],
         [
-          actionButton(ctx, "Intent", { kind: "option.show", option: "intent" }),
           actionButton(ctx, "Reasoning", { kind: "option.show", option: "reasoning" }),
           actionButton(ctx, "Command menu", { kind: "option.show", option: "command-menu" }),
         ],
@@ -834,9 +833,12 @@ ${bridge.formatStatus(mapping)}`);
     }
 
     if (option !== "retry" && option !== "timeout" && option !== "intent" && option !== "reasoning" && option !== "command-menu") {
-      await reply(ctx, "Usage: `/option retry <count>`, `/option timeout <seconds>`, `/option intent <count>`, or `/option command-menu <on|off|refresh>`\n\n`retry` controls automatic continuation turns. `timeout` controls one provider execution limit. `intent` controls retries for untagged intent-only provider replies. `command-menu` controls Telegram slash-command autocomplete for all configured bots.", {
-        parse_mode: "Markdown",
-      });
+      await reply(ctx, formatRuntimeOptions());
+      return;
+    }
+
+    if (option === "intent") {
+      await reply(ctx, "The intent option has been retired. Untagged replies are delivered without content-based retries.");
       return;
     }
 
@@ -893,9 +895,7 @@ ${bridge.formatStatus(mapping)}`);
     if (!Number.isInteger(parsed) || parsed < 0 || String(parsed) !== value.trim()) {
       await reply(ctx, option === "retry"
         ? "Invalid retry count. Use `0` or a positive integer, for example `/option retry 6`."
-        : option === "intent"
-          ? "Invalid intent retry count. Use `0` or a positive integer, for example `/option intent 4`."
-          : "Invalid timeout. Use seconds as a positive integer, for example `/option timeout 600`.", {
+        : "Invalid timeout. Use seconds as a positive integer, for example `/option timeout 600`.", {
         parse_mode: "Markdown",
       });
       return;
@@ -909,13 +909,6 @@ ${bridge.formatStatus(mapping)}`);
       return;
     }
 
-    if (option === "intent") {
-      config.telegramUntaggedIntentRetries = parsed;
-      await upsertInstalledEnvValue("TELEGRAM_UNTAGGED_INTENT_RETRIES", String(parsed));
-      await bridge.logSystem(botId, chatId, `Runtime option TELEGRAM_UNTAGGED_INTENT_RETRIES set to ${parsed}.`);
-      await reply(ctx, `Set untagged intent retry limit to ${formatRetryLimit(parsed)}.\n\nSaved: TELEGRAM_UNTAGGED_INTENT_RETRIES=${parsed}`);
-      return;
-    }
 
     if (parsed < 10) {
       await reply(ctx, "Invalid timeout. Use at least 10 seconds, for example `/option timeout 600`.", {
@@ -2000,11 +1993,8 @@ async function routeTelegramWorkLoop(
   const emptyResponseRetries = config.telegramEmptyResponseRetries;
   const retryableErrorRetries = config.telegramRetryableErrorRetries;
   const retryableErrorDelayMs = config.telegramRetryableErrorDelayMs;
-  const untaggedIntentRetries = config.telegramUntaggedIntentRetries;
   let emptyResponseRetryCount = 0;
   let retryableErrorCount = 0;
-  let untaggedIntentRetryCount = 0;
-  let missingEvidenceRetryCount = 0;
   let deliveredProgressCount = 0;
   let providerCompleted = false;
   const streamedProgressKeys = new Set<string>();
@@ -2078,23 +2068,12 @@ async function routeTelegramWorkLoop(
       retryableErrorCount = 0;
 
       if (parsed.kind === "progress") {
-        untaggedIntentRetryCount = 0;
-        missingEvidenceRetryCount = 0;
         const key = progressDeliveryKey(parsed.chunks);
         if (!streamedProgressKeys.has(key)) {
           streamedProgressKeys.add(key);
           deliveredProgressCount += 1;
           if (currentSession) {
-            const progress = await memoryService.recordProgress(currentSession.session, parsed.chunks.join("\n"));
-            if (progress.repeated) {
-              const repeatedMessage = [
-                "Repeated progress detected. The same work pattern has appeared 3 or more times.",
-                "Automatic continuation stopped so the task can be inspected instead of looping.",
-              ].join("\n");
-              await bridge.logSystem(botId, chatId, repeatedMessage);
-              autoContinue.clear(botId, chatId, sessionId);
-              return [repeatedMessage];
-            }
+            await memoryService.recordProgress(currentSession.session, parsed.chunks.join("\n"));
           }
           await ensureStillBound(`${turnLabel} progress delivery`);
           await helpers.reportProgress(parsed.chunks);
@@ -2110,26 +2089,6 @@ async function routeTelegramWorkLoop(
       }
 
       if (parsed.kind === "result") {
-        untaggedIntentRetryCount = 0;
-        const resultText = parsed.chunks.join("\n");
-        const evidenceIssue = classifyMissingResultEvidence(resultText);
-        if (evidenceIssue && missingEvidenceRetryCount < 1) {
-          missingEvidenceRetryCount += 1;
-          const retryMessage = `${turnLabel} returned a result without required evidence: ${evidenceIssue}`;
-          await bridge.logSystem(botId, chatId, retryMessage);
-          prompt = appendManagedContext(formatMissingEvidenceRetryPrompt(resultText, evidenceIssue), managedContext);
-          continue;
-        }
-        if (evidenceIssue) {
-          const blockedMessage = [
-            "Provider reported a completed result without concrete evidence after a retry.",
-            `Reason: ${evidenceIssue}`,
-            "Automatic continuation stopped so the work is not accepted on an unsupported claim.",
-          ].join("\n");
-          await bridge.logSystem(botId, chatId, blockedMessage);
-          autoContinue.clear(botId, chatId, sessionId);
-          return [blockedMessage];
-        }
         await ensureStillBound(`${turnLabel} final delivery`);
         if (currentSession) {
           await memoryService.completeTask(currentSession.session, parsed.chunks.join("\n"));
@@ -2140,19 +2099,9 @@ async function routeTelegramWorkLoop(
       }
 
       if (parsed.kind === "blocked") {
-        untaggedIntentRetryCount = 0;
-        missingEvidenceRetryCount = 0;
         await ensureStillBound(`${turnLabel} final delivery`);
         autoContinue.clear(botId, chatId, sessionId);
         return parsed.chunks;
-      }
-
-      if (looksLikeUntaggedIntentOnlyResponse(parsed.chunks.join("\n")) && untaggedIntentRetryCount < untaggedIntentRetries) {
-        untaggedIntentRetryCount += 1;
-        const retryMessage = `${turnLabel} returned an untagged intent-only response; asking provider to do concrete work before replying.`;
-        await bridge.logSystem(botId, chatId, retryMessage);
-        prompt = appendManagedContext(formatUntaggedIntentRetryPrompt(parsed.chunks.join("\n")), managedContext);
-        continue;
       }
 
       await bridge.logSystem(botId, chatId, `${turnLabel} returned an untagged response; treating it as final output.`);
@@ -2390,11 +2339,8 @@ function parseReportResponses(
     const header = lines.slice(0, reportLineIndex).join("\n").trim();
     const reportLine = lines[reportLineIndex]!.trim();
     const match = /^REPORT:(progress|result|blocked)$/i.exec(reportLine);
-    let kind = (match?.[1]?.toLowerCase() as ReportKind | undefined) ?? "unknown";
+    const kind = (match?.[1]?.toLowerCase() as ReportKind | undefined) ?? "unknown";
     const body = lines.slice(reportLineIndex + 1).join("\n").trim();
-    if ((kind === "progress" || kind === "result") && looksLikeBlockedBody(body)) {
-      kind = "blocked";
-    }
     return {
       kind,
       text: body ? [header, body].filter(Boolean).join("\n") : "",
@@ -2509,120 +2455,8 @@ function escapeTelegramHtmlAttribute(value: string): string {
   return escapeTelegramHtml(value).replace(/"/g, "&quot;");
 }
 
-function looksLikeUntaggedIntentOnlyResponse(text: string): boolean {
-  const normalized = text.trim();
-  if (!normalized) {
-    return false;
-  }
-
-  const hasConcreteEvidence = [
-    /REPORT:/i,
-    /(완료|통과|실패|확인 결과|검증 결과|원인|근거|수정했습니다|배포했습니다|커밋|푸시)/,
-    /\b(git status|git diff|npm run|node --check|docker|journalctl|grep|rg)\b/i,
-    /`[^`]+`/,
-    /:\d{1,5}\b/,
-  ].some((pattern) => pattern.test(normalized));
-  if (hasConcreteEvidence) {
-    return false;
-  }
-
-  return [
-    /(하겠습니다|진행하겠습니다|확인하겠습니다|수정하겠습니다|검증하겠습니다|대조하겠습니다|보겠습니다)/,
-    /(진행해서|확인해서|수정해서|검증해서).*(하겠습니다|진행하겠습니다)/,
-    /\b(I will|I'll|I am going to|going to|will continue|will check|will verify)\b/i,
-  ].some((pattern) => pattern.test(normalized));
-}
-
-function formatUntaggedIntentRetryPrompt(lastResponse: string): string {
-  return [
-    "The previous response did not follow the REPORT protocol and only stated intent without concrete evidence.",
-    "Do not repeat the plan or say what you will do.",
-    "Do concrete work now before replying again.",
-    "Reply with exactly one first line: REPORT:progress, REPORT:result, or REPORT:blocked.",
-    "If you cannot continue, use REPORT:blocked and state the exact blocker.",
-    "",
-    "Previous invalid response:",
-    lastResponse.trim(),
-  ].join("\n");
-}
-
-function classifyMissingResultEvidence(text: string): string | undefined {
-  const normalized = text.trim();
-  if (!normalized) {
-    return undefined;
-  }
-
-  if (!looksLikeCompletedWorkClaim(normalized)) {
-    return undefined;
-  }
-
-  if (hasConcreteResultEvidence(normalized)) {
-    return undefined;
-  }
-
-  return "REPORT:result claims completed work but does not include concrete evidence.";
-}
-
-function looksLikeCompletedWorkClaim(text: string): boolean {
-  return [
-    /(수정|반영|배포|커밋|푸시|전송|생성|삭제|추가|적용|구현|저장|업데이트|등록|제거|정리|마이그레이션|검증|테스트|빌드).{0,24}(완료|했습니다|됐습니다|성공|통과)/,
-    /(완료했습니다|완료됐습니다|끝났습니다|처리했습니다)/,
-    /\b(fixed|implemented|deployed|committed|pushed|sent|created|deleted|updated|added|removed|migrated|verified|passed|completed|built)\b/i,
-  ].some((pattern) => pattern.test(text));
-}
-
-function hasConcreteResultEvidence(text: string): boolean {
-  return [
-    /```/,
-    /`[^`]+`/,
-    /\b[0-9a-f]{7,40}\b/i,
-    /sha256:[0-9a-f]{20,}/i,
-    /\b(HTTP\s+\d{3}|exit\s+\d+|active|passed|failed)\b/i,
-    /\b(npm run|git status|git diff|node --check|docker|journalctl|curl|psql|grep|rg|bash)\b/i,
-    /\/[A-Za-z0-9._/-]{3,}/,
-    /\b[A-Za-z0-9._/-]+\.(?:js|ts|tsx|jsx|sql|md|json|yml|yaml|sh|py|css|html|txt|log)\b/,
-    /:\d{1,5}\b/,
-    /(근거|검증|변경 파일|커밋|푸시|배포|로그|명령|출력|파일|라인|경로|상태)\s*:/,
-  ].some((pattern) => pattern.test(text));
-}
-
-function formatMissingEvidenceRetryPrompt(lastResponse: string, issue: string): string {
-  return [
-    "The previous REPORT:result was not accepted by RemoteAgent.",
-    issue,
-    "RemoteAgent does not inspect code or decide whether the work is correct.",
-    "You, the provider, must either provide concrete evidence for the completed work or change the reply to REPORT:progress or REPORT:blocked.",
-    "Do not repeat a bare completion claim.",
-    "Reply with exactly one first line: REPORT:progress, REPORT:result, or REPORT:blocked.",
-    "",
-    "Accepted evidence examples: file paths, line references, commands and outputs, log paths, commit IDs, image digests, deployment status, or explicit verification output.",
-    "",
-    "Previous unsupported result:",
-    lastResponse.trim(),
-  ].join("\n");
-}
-
 function isEmptyResponseError(message: string): boolean {
   return /empty response|failed without any output|without stdout\/stderr/i.test(message);
-}
-
-function looksLikeBlockedBody(text: string): boolean {
-  if (!text.trim()) {
-    return false;
-  }
-
-  const blockedPatterns = [
-    /\b(sudo|usermod|setfacl|chmod|chown|relogin|re-login|new login session)\b/i,
-    /\b(waiting on|need you to|you need to|please run|please do|manual step|admin step|external fix)\b/i,
-    /\b(permission denied|permission change|ssh access|api key|login required|authentication required)\b/i,
-    /적용되면.*(다시|이어서|계속)/i,
-    /해주시면.*(다시|이어서|계속)/i,
-    /권한.*(필요|없)/i,
-    /로그인 세션.*필요/i,
-    /관리자.*조치/i,
-  ];
-
-  return blockedPatterns.some((pattern) => pattern.test(text));
 }
 
 function classifyRetryableProviderIssue(message: string, retryAfterMs: number): RetryableProviderIssue | undefined {
@@ -3050,19 +2884,16 @@ function formatRuntimeOptions(): string {
     "Runtime options",
     `- retry: ${formatRetryLimit(config.telegramAutoProgressMaxTurns)} (TELEGRAM_AUTO_PROGRESS_MAX_TURNS)`,
     `- timeout: ${formatTimeoutSeconds(config.commandTimeoutMs)} (COMMAND_TIMEOUT_MS)`,
-    `- intent: ${formatRetryLimit(config.telegramUntaggedIntentRetries)} (TELEGRAM_UNTAGGED_INTENT_RETRIES)`,
     `- reasoning: ${getAstraReasoning()} (Astra, server-wide, CODEX_REASONING_EFFORT)`,
     `- command-menu: ${config.telegramCommandMenuEnabled ? "on" : "off"} (TELEGRAM_COMMAND_MENU_ENABLED)`,
     "",
     "Usage:",
     "/option retry <count>",
     "/option timeout <seconds>",
-    "/option intent <count>",
     "/option reasoning <low|medium|high|xhigh|max>",
     "/option command-menu <on|off|refresh>",
     "",
     "`retry 0` disables the automatic continuation limit.",
-    "`intent 0` disables untagged intent-only response retries.",
     "`command-menu refresh` reapplies Telegram slash-command autocomplete without changing the saved option.",
   ].join("\n");
 }
@@ -3075,7 +2906,7 @@ function formatRuntimeOptionDetail(option: RuntimeOptionName): string {
     return `Current automatic continuation retry limit: ${formatRetryLimit(config.telegramAutoProgressMaxTurns)}\n\nUsage: \`/option retry <count>\``;
   }
   if (option === "intent") {
-    return `Current untagged intent retry limit: ${formatRetryLimit(config.telegramUntaggedIntentRetries)}\n\nUsage: \`/option intent <count>\``;
+    return "The intent option has been retired. Untagged replies are delivered without content-based retries.";
   }
   if (option === "command-menu") {
     return `Current Telegram command menu: ${config.telegramCommandMenuEnabled ? "on" : "off"}\n\nUsage: \`/option command-menu on\`, \`/option command-menu off\`, or \`/option command-menu refresh\``;

@@ -111,7 +111,7 @@ Current command surface implemented in `src/bot.ts`:
 | `/sandbox [codex <mode>]` | Lists Codex sandbox choices or changes the current session sandbox |
 | `/option retry <count>` | Sets the automatic continuation turn limit and persists it to `~/.remoteagent/.env` |
 | `/option timeout <seconds>` | Sets the provider execution timeout and persists it to `~/.remoteagent/.env` |
-| `/option intent <count>` | Sets retries for untagged intent-only provider replies and persists it to `~/.remoteagent/.env` |
+| `/option intent <count>` | Retired compatibility command; explains that untagged replies are delivered without content-based retries. |
 | `/state` | Shows the session ledger that is injected as provider context |
 | `/state clear` | Clears the current session ledger without deleting the session |
 | `/state note <text>` | Adds an operator note to the session ledger |

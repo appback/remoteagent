@@ -109,6 +109,8 @@ if (persistedBotIdentity.username !== "appbackadmin_bot") {
 
 const providerCalls = [];
 let providerMode = "success";
+let literalResponse = "";
+let explicitResponses = [];
 let untaggedIntentCalls = 0;
 let missingEvidenceCalls = 0;
 let streamingFinalProgressCalls = 0;
@@ -136,6 +138,9 @@ const provider = {
         output: "REPORT:result\nusage fallback completed with evidence: `fallback-test.log`",
       };
     }
+    if (providerMode === "literal-result") {
+      return {provider: "codex", sessionId: request.sessionId || "mock-thread", cwd: request.cwd, output: literalResponse};
+    }
     if (providerMode === "untagged-intent") {
       untaggedIntentCalls += 1;
       return {
@@ -160,7 +165,10 @@ const provider = {
           : "REPORT:result\n수정 완료했습니다.\n\n근거:\n- 변경 파일: `src/example.ts`\n- 검증: `npm run check` 통과",
       };
     }
-    if (providerMode === "queue-hold") {
+    if (providerMode === "explicit-status") {
+      return {provider: "codex", sessionId: request.sessionId || "mock-thread", cwd: request.cwd, output: explicitResponses.shift() ?? "REPORT:result\nunexpected extra call"};
+    }
+    if (providerMode === "queue-hold" || providerMode === "stop-hold") {
       queueHoldStartedResolve?.();
       await queueHoldReleasePromise;
       return {
@@ -168,7 +176,7 @@ const provider = {
         sessionId: request.sessionId || "mock-thread",
         publicSessionId: request.publicSessionId,
         cwd: request.cwd,
-        output: "REPORT:result\nactive queue test completed",
+        output: providerMode === "stop-hold" ? "REPORT:progress\nstop regression progress" : "REPORT:result\nactive queue test completed",
       };
     }
     if (providerMode === "streaming-progress") {
@@ -359,8 +367,8 @@ if (!/^TELEGRAM_AUTO_PROGRESS_MAX_TURNS=6$/m.test(envText)) {
 if (!/^COMMAND_TIMEOUT_MS=600000$/m.test(envText)) {
   throw new Error(`Option command did not persist command timeout to .env: ${envText}`);
 }
-if (!/^TELEGRAM_UNTAGGED_INTENT_RETRIES=4$/m.test(envText)) {
-  throw new Error(`Option command did not persist untagged intent retry limit to .env: ${envText}`);
+if (/^TELEGRAM_UNTAGGED_INTENT_RETRIES=/m.test(envText)) {
+  throw new Error("Retired intent option should not persist configuration");
 }
 
 const importedSecretDataDir = path.join(tmp, "imported-secret-data");
@@ -509,7 +517,7 @@ if (!calls.some((call) => call.method === "sendMessage" && /Set automatic contin
 if (!calls.some((call) => call.method === "sendMessage" && /Set provider execution timeout to 600s/.test(call.text))) {
   throw new Error(`Did not see option timeout acknowledgement. Calls: ${JSON.stringify(calls, null, 2)}`);
 }
-if (!calls.some((call) => call.method === "sendMessage" && /Set untagged intent retry limit to 4/.test(call.text))) {
+if (!calls.some((call) => call.method === "sendMessage" && /intent option has been retired/.test(call.text))) {
   throw new Error(`Did not see option intent acknowledgement. Calls: ${JSON.stringify(calls, null, 2)}`);
 }
 if (!calls.some((call) => call.method === "sendMessage" && /Workspace cleanup finished for S001/.test(call.text))) {
@@ -725,14 +733,8 @@ const untaggedCalls = (await fs.readFile(telegramCalls, "utf8"))
       text: Buffer.from(textB64, "base64").toString("utf8"),
     };
   });
-if (untaggedIntentCalls !== 2) {
-  throw new Error(`Expected untagged intent response to be retried once, got ${untaggedIntentCalls}`);
-}
-if (!untaggedCalls.some((call) => /untagged intent recovered/.test(call.text))) {
-  throw new Error(`Did not see recovered result after untagged intent retry. Calls: ${JSON.stringify(untaggedCalls, null, 2)}`);
-}
-if (untaggedCalls.some((call) => call.method === "sendMessage" && /^계속 진행해서 확인하겠습니다\.$/.test(call.text.trim()))) {
-  throw new Error(`Untagged intent-only response leaked as final Telegram message. Calls: ${JSON.stringify(untaggedCalls, null, 2)}`);
+if (untaggedIntentCalls !== 1 || !untaggedCalls.some(call => call.text.includes("계속 진행해서 확인하겠습니다."))) {
+  throw new Error("Untagged response was not delivered in one execution");
 }
 
 providerMode = "missing-evidence";
@@ -752,17 +754,23 @@ const evidenceCalls = (await fs.readFile(telegramCalls, "utf8"))
       text: Buffer.from(textB64, "base64").toString("utf8"),
     };
   });
-if (missingEvidenceCalls !== 2) {
-  throw new Error(`Expected missing evidence result to be retried once, got ${missingEvidenceCalls}`);
+if (missingEvidenceCalls !== 1 || !evidenceCalls.some(call => call.text.includes("수정 완료했습니다."))) {
+  throw new Error("Final response was not delivered in one execution");
 }
-if (!evidenceCalls.some((call) =>
-  /변경 파일: (?:`|<code>)src\/example\.ts(?:`|<\/code>)/.test(call.text)
-  && /(?:`|<code>)npm run check(?:`|<\/code>) 통과/.test(call.text)
-)) {
-  throw new Error(`Did not see recovered result with concrete evidence. Calls: ${JSON.stringify(evidenceCalls, null, 2)}`);
-}
-if (evidenceCalls.some((call) => call.method === "sendMessage" && /^수정 완료했습니다\.$/.test(call.text.trim()))) {
-  throw new Error(`Evidence-free completion leaked as final Telegram message. Calls: ${JSON.stringify(evidenceCalls, null, 2)}`);
+for (const body of [
+  "플레이스미션을 누락했고, 표시 방식도 잘못 정리했습니다.\n‘더보기 목록’이 아니라 기존 넘기기 UI를 재사용하는 요구로 정정합니다.",
+  "앞선 답변은 요구사항 정정이며, 코드 수정·검증·병합 완료 보고가 아닙니다. 이번 정정으로 변경한 파일이나 커밋은 없습니다.",
+  "sudo 권한이 필요하지 않습니다. API key 변경도 없습니다.",
+]) {
+  providerMode = "literal-result";
+  literalResponse = "REPORT:result\n" + body;
+  const countBefore = providerCalls.length;
+  await send("/batch start");
+  await send("S091 regression");
+  await send("/batch send");
+  if (providerCalls.length !== countBefore + 1) throw new Error("Result triggered extra provider execution");
+  const delivered = await readTelegramCalls();
+  if (!delivered.some(call => call.text.includes(body))) throw new Error("Result body not delivered");
 }
 
 providerMode = "streaming-progress";
@@ -859,6 +867,33 @@ if (providerCalls.length !== queueProviderCallsBefore + 1) {
   throw new Error(`Removed queued instructions reached the provider: ${providerCalls.length - queueProviderCallsBefore} calls`);
 }
 
+providerMode = "explicit-status";
+explicitResponses = ["REPORT:progress\nsudo 권한 변경은 필요 없습니다. 다음 단계를 진행합니다.", "REPORT:result\nexplicit continuation finished"];
+const explicitBefore = providerCalls.length;
+await send("/batch start");
+await send("explicit status regression");
+await send("/batch send");
+if (providerCalls.length !== explicitBefore + 2) throw new Error("Explicit progress was overridden by body words");
+explicitResponses = ["REPORT:blocked\n명시적으로 중단합니다."];
+const blockedBefore = providerCalls.length;
+await send("/batch start");
+await send("explicit blocked regression");
+await send("/batch send");
+if (providerCalls.length !== blockedBefore + 1) throw new Error("Explicit blocked response retried");
+
+providerMode = "stop-hold";
+queueHoldStartedPromise = new Promise(resolve => { queueHoldStartedResolve = resolve; });
+queueHoldReleasePromise = new Promise(resolve => { queueHoldReleaseResolve = resolve; });
+const stopBefore = providerCalls.length;
+await send("/batch start");
+await send("stop regression");
+const stoppedRun = send("/batch send");
+await queueHoldStartedPromise;
+await send("/stop");
+queueHoldReleaseResolve();
+await stoppedRun;
+if (providerCalls.length !== stopBefore + 1) throw new Error("Stop allowed automatic continuation");
+
 console.log(JSON.stringify({
   ok: true,
   dataDir,
@@ -867,7 +902,7 @@ console.log(JSON.stringify({
   recoveredTodoItems: recoveredActive.length,
   retryOption: 6,
   timeoutOptionMs: 600000,
-  intentRetryOption: 4,
+  intentOptionRetired: true,
   providerCalls: providerCalls.length,
   untaggedIntentCalls,
   missingEvidenceCalls,
