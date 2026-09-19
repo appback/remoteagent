@@ -37,12 +37,17 @@ try {
 } catch (e) { if (e.code !== 'ENOENT') throw e; }
 // systemd quoted fields still expand percent specifiers; escape those explicitly.
 const quote = value => '"' + value.replace(/%/g, '%%').replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
-const text = `[Unit]\nDescription=RemoteAgent (user)\nAfter=network.target\n\n[Service]\nType=simple\nWorkingDirectory=${quote(home)}\nEnvironment=${quote(`DATA_DIR=${data}`)}\nEnvironment=${quote(`PATH=${path.dirname(process.execPath)}:${home}/.local/bin:/usr/local/bin:/usr/bin:/bin`)}\nExecStart=${quote(process.execPath)} ${quote(path.join(root, 'dist/index.js'))}\nRestart=on-failure\nRestartSec=5\nTimeoutStopSec=30\nUMask=0077\nStandardOutput=${quote(`append:${path.join(data, 'logs/agent.log')}`)}\nStandardError=${quote(`append:${path.join(data, 'logs/agent.log')}`)}\n\n[Install]\nWantedBy=default.target\n`;
+const literalPath = value => {
+  if (/[\r\n\0]/.test(value)) throw new Error('Invalid service path');
+  return value.replace(/%/g, '%%');
+};
+const text = `[Unit]\nDescription=RemoteAgent (user)\nAfter=network.target\n\n[Service]\nType=simple\nWorkingDirectory=${literalPath(home)}\nEnvironment=${quote(`DATA_DIR=${data}`)}\nEnvironment=${quote(`PATH=${path.dirname(process.execPath)}:${home}/.local/bin:/usr/local/bin:/usr/bin:/bin`)}\nExecStart=${quote(process.execPath)} ${quote(path.join(root, 'dist/index.js'))}\nRestart=on-failure\nRestartSec=5\nTimeoutStopSec=30\nUMask=0077\nStandardOutput=append:${literalPath(path.join(data, 'logs/agent.log'))}\nStandardError=append:${literalPath(path.join(data, 'logs/agent.log'))}\n\n[Install]\nWantedBy=default.target\n`;
 await fs.mkdir(path.dirname(unit), { recursive: true });
 await fs.mkdir(path.join(data, 'logs'), { recursive: true, mode: 0o700 });
 const oldUnit = await fs.readFile(unit).catch(e => { if (e.code === 'ENOENT') return undefined; throw e; });
 await fs.writeFile(unit, text, { mode: 0o600 });
 try {
+  call('systemd-analyze', ['--user', 'verify', unit]);
   call('systemctl', ['--user', 'daemon-reload']);
   if (action === 'migrate' && systemExists) {
     // Only this explicit migration may request administrator credentials.
