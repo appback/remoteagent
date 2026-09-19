@@ -108,3 +108,16 @@ echo "RemoteAgent is installed."
 echo "Provider install/login hooks were configured in $ENV_FILE"
 echo "Set TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKENS in $ENV_FILE"
 echo "Start with: remoteagent-start"
+
+if [ "$(uname -s)" = Linux ] && [ "$(id -u)" != 0 ]; then
+  if systemctl is-active --quiet remoteagent || systemctl is-enabled --quiet remoteagent; then
+    echo "Existing system service retained. After work finishes: remoteagent service migrate"
+  elif systemctl --user show-environment >/dev/null 2>&1; then
+    "$NODE_BIN_PATH" "$ROOT_DIR/scripts/user-service.mjs" install || {
+      echo "User service setup needs attention; existing runtime was not stopped." >&2
+      exit 1
+    }
+  else
+    echo "User service manager unavailable. Sign in via SSH and run: remoteagent service install"
+  fi
+fi

@@ -4,6 +4,15 @@ set -euo pipefail
 DATA_DIR="${DATA_DIR:-$HOME/.remoteagent}"
 PID_FILE="$DATA_DIR/remoteagent.pid"
 
+if systemctl --user cat remoteagent >/dev/null 2>&1; then
+  if systemctl is-active --quiet remoteagent; then
+    echo "Both service scopes exist. Check system service before stopping." >&2
+    exit 1
+  fi
+  systemctl --user stop remoteagent
+  exit 0
+fi
+
 if command -v systemctl >/dev/null 2>&1 && systemctl cat remoteagent >/dev/null 2>&1; then
   if sudo -n true >/dev/null 2>&1; then
     sudo systemctl stop remoteagent

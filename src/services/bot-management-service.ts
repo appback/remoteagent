@@ -471,46 +471,70 @@ export class BotManagementService {
     await fs.access(this.restartHelperPath).catch(() => {
       throw new Error(`Restart helper is missing: ${this.restartHelperPath}`);
     });
+    await this.restartScope();
+  }
+
+  private async restartScope(): Promise<"user" | "system" | "process"> {
+    const ok = async (file: string, args: string[]) => {
+      try { await execFileAsync(file, args, { timeout: 5000 }); return true; } catch { return false; }
+    };
+    if (await ok("systemctl", ["--user", "cat", this.serviceName])) {
+      if (await ok("systemctl", ["is-active", "--quiet", this.serviceName]) || await ok("systemctl", ["is-enabled", "--quiet", this.serviceName])) {
+        throw new Error("System and user services overlap. Bot configuration was not changed. Run remoteagent service migrate after work finishes.");
+      }
+      // Exercise the same manager/job path without restarting anything.
+      if (!await ok("systemd-run", ["--user", "--wait", "--collect", "/usr/bin/true"])) {
+        throw new Error("User service manager cannot schedule a restart. Bot configuration was not changed. Check systemctl --user status remoteagent.");
+      }
+      return "user";
+    }
+    if (await ok("systemctl", ["cat", this.serviceName])) {
+      if (!await ok("sudo", ["-n", "-l", "systemd-run", "--unit", "remoteagent-bot-op-check", "--collect", "--service-type=exec", this.restartHelperPath, this.serviceName, this.dataDir, "system", process.execPath])) {
+        throw new Error("System service restart permission is missing. Bot configuration was not changed. Run remoteagent service migrate after work finishes to use a user service without sudo.");
+      }
+      return "system";
+    }
+    return "process";
   }
 
   private async launchRestartJob(): Promise<void> {
     const unitName = `remoteagent-bot-op-${Date.now()}`;
-    try {
-      const { stderr } = await execFileAsync("sudo", [
-        "-n",
-        "systemd-run",
-        "--unit",
-        unitName,
-        "--collect",
-        "--service-type=exec",
-        this.restartHelperPath,
-        this.serviceName,
-        this.dataDir,
-      ]);
-
-      const output = stderr?.trim();
-      if (output) {
-        console.error("bot restart helper stderr:", output);
-      }
+    const scope = await this.restartScope();
+    if (scope === "user") {
+      await execFileAsync("systemd-run", ["--user", "--unit", unitName, "--collect", "--service-type=exec", this.restartHelperPath, this.serviceName, this.dataDir, "user", process.execPath]);
       return;
-    } catch (error) {
-      if (!this.shouldFallbackToUserRestart(error)) {
-        throw error;
+    }
+    if (scope === "system") {
+      try {
+        const { stderr } = await execFileAsync("sudo", [
+          "-n",
+          "systemd-run",
+          "--unit",
+          unitName,
+          "--collect",
+          "--service-type=exec",
+          this.restartHelperPath,
+          this.serviceName,
+          this.dataDir,
+          "system",
+          process.execPath,
+        ]);
+
+        const output = stderr?.trim();
+        if (output) {
+          console.error("bot restart helper stderr:", output);
+        }
+        return;
+      } catch {
+        throw new Error("System service restart request failed; bot configuration will be restored. Migrate with remoteagent service migrate.");
       }
     }
 
-    const child = spawn(this.restartHelperPath, [this.serviceName, this.dataDir], {
+    const child = spawn(this.restartHelperPath, [this.serviceName, this.dataDir, "process", process.execPath], {
       detached: true,
       stdio: "ignore",
     });
     child.unref();
-  }
-
-  private shouldFallbackToUserRestart(error: unknown): boolean {
-    const message = error instanceof Error ? error.message : String(error);
-    return /sudo: a password is required/i.test(message)
-      || /command not found/i.test(message)
-      || /systemd-run/i.test(message);
   }
 
   private isDeadBotError(reason: string): boolean {

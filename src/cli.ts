@@ -3,6 +3,8 @@ import { randomBytes } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import {
   fetchTelegramBotIdentity,
   registerTelegramBot,
@@ -25,6 +27,34 @@ async function main(): Promise<void> {
 
   const dataDir = path.resolve(takeOption(args, "--data-dir") || process.env.DATA_DIR?.trim() || path.join(os.homedir(), ".remoteagent"));
   const [group, action] = args;
+  if (group === "delegate") {
+    const { LocalDelegate } = await import("./services/local-delegate.js");
+    const delegate = new LocalDelegate(dataDir);
+    const target = args[2];
+    if (args.length !== 3 || !target || !["run", "status", "result", "cancel"].includes(action ?? "")) {
+      throw new Error("Usage: remoteagent delegate run <request.json> | status|result|cancel <job-id>");
+    }
+    if (action === "run") {
+      const stat = await fs.stat(target);
+      if (stat.size > 65536) throw new Error("Request exceeds 64 KiB");
+      const request = JSON.parse(await fs.readFile(target, "utf8"));
+      const result = await delegate.run(request, id => console.log(JSON.stringify({ id, status: "running" })));
+      console.log(JSON.stringify(result));
+      if (result.status !== "returned") process.exitCode = 1;
+    } else if (action === "cancel") console.log(JSON.stringify({ id: target, status: await delegate.cancel(target) }));
+    else {
+      const job = await delegate.status(target);
+      if (action === "status") delete job.output;
+      console.log(JSON.stringify(job));
+    }
+    return;
+  }
+  if (group === "service" && ["install", "migrate"].includes(action ?? "") && args.length === 2) {
+    execFileSync(process.execPath, [fileURLToPath(new URL("../scripts/user-service.mjs", import.meta.url)), action!], {
+      stdio: "inherit", env: { ...process.env, DATA_DIR: dataDir },
+    });
+    return;
+  }
   if (group === "bot" && action === "add") {
     await addBot(dataDir, args.slice(2));
     return;
@@ -244,6 +274,10 @@ function printHelp(): void {
 Usage:
   remoteagent                         Start the foreground runtime
   remoteagent bot add [token] [--owner <telegram-user-id>]
+  remoteagent service install
+  remoteagent delegate run <request.json>
+  remoteagent delegate status|result|cancel <job-id>
+  remoteagent service migrate
   remoteagent bot add --token-file <file> --owner <telegram-user-id>
   remoteagent bot remove <username|id>
   remoteagent secret export [file] [--passphrase-file <file>]

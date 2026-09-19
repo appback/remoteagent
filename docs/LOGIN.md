@@ -18,8 +18,15 @@ Direct commands:
 GitHub uses `gh auth login --hostname github.com --git-protocol https --web`.
 Codex uses `codex login --device-auth`.
 Claude uses `claude auth login`.
-Install the selected CLI on the server first. For providers, use
-`/install codex` or `/install claude`; GitHub requires the GitHub CLI (`gh`).
+When a selected CLI is missing, choose **설치 후 로그인**. The owner-only button
+installs the tool, verifies `--version`, and continues authentication. Codex
+and Claude reuse their configured installation hooks. GitHub CLI is downloaded
+from the official release with SHA256 verification into `~/.local/bin` on
+Linux/macOS (x64/arm64). Windows GitHub CLI installation remains manual:
+`winget install --id GitHub.cli`.
+Permission errors are reported separately from missing tools. Installation
+failure stops the flow before login. Repeated installation clicks are deduplicated
+across bots in the same process. Existing installations are verified and reused.
 
 An authenticated account gets a "Log in again" button. A new flow reports
 URLs and one-time device codes emitted by the CLI, then checks authentication

@@ -1,0 +1,11 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { BotManagementService } from '../dist/services/bot-management-service.js';
+const [dir, reason] = process.argv.slice(2);
+const pendingPath = path.join(dir, 'pending-bot-operation.json');
+const pending = JSON.parse(await fs.readFile(pendingPath, 'utf8'));
+await fs.copyFile(pending.backupEnvPath, path.join(dir, '.env'));
+pending.status = 'rolled_back';
+pending.reason = reason;
+await fs.writeFile(pendingPath, JSON.stringify(pending), { mode: 0o600 });
+await new BotManagementService(dir, 'remoteagent', '').reportPendingOperationResult();

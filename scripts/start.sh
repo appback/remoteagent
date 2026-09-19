@@ -24,6 +24,16 @@ ENV_FILE="$DATA_DIR/.env"
 
 mkdir -p "$DATA_DIR" "$(dirname "$LOG_FILE")"
 
+if systemctl --user cat remoteagent >/dev/null 2>&1; then
+  if systemctl is-active --quiet remoteagent || systemctl is-enabled --quiet remoteagent; then
+    echo "System service still active/enabled. Run remoteagent service migrate first." >&2
+    exit 1
+  fi
+  systemctl --user start remoteagent
+  systemctl --user is-active remoteagent
+  exit 0
+fi
+
 if command -v systemctl >/dev/null 2>&1 && systemctl cat remoteagent >/dev/null 2>&1; then
   if sudo -n true >/dev/null 2>&1; then
     sudo systemctl start remoteagent

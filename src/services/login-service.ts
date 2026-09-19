@@ -3,6 +3,7 @@ import os from "node:os";
 import { buildProviderEnv } from "../adapters/runtime-env.js";
 
 export type LoginTarget = "github" | "codex" | "claude";
+export class MissingLoginToolError extends Error {}
 type Notice = (text: string) => Promise<void>;
 const commands = {
   github: { bin: "gh", status: ["auth", "status", "--hostname", "github.com"], login: ["auth", "login", "--hostname", "github.com", "--git-protocol", "https", "--web"] },
@@ -27,6 +28,26 @@ export class LoginService {
     private readonly lifetimeMs = 15 * 60_000,
     private readonly binaries: Partial<Record<LoginTarget, string>> = {},
   ) {}
+
+  async isInstalled(target: LoginTarget): Promise<boolean> {
+    return new Promise((resolve, reject) => {
+      const child = spawn(this.binaries[target] ?? commands[target].bin, ["--version"], { cwd: os.homedir(), env: buildProviderEnv({}) });
+      const timer = setTimeout(() => child.kill("SIGKILL"), 10_000);
+      child.stdout.resume();
+      child.stderr.resume();
+      child.stdin.end();
+      child.on("error", (error: NodeJS.ErrnoException) => {
+        clearTimeout(timer);
+        if (error.code === "ENOENT") resolve(false);
+        else reject(new Error(`${commands[target].bin}: ${error.code}. Check execution permissions.`));
+      });
+      child.on("close", code => {
+        clearTimeout(timer);
+        if (code === 0) resolve(true);
+        else reject(new Error(`${commands[target].bin} --version failed (exit=${code}).`));
+      });
+    });
+  }
 
   private unavailable(target: LoginTarget): string {
     const guidance = target === "github" ? "Install GitHub CLI (gh) on this server."
@@ -57,6 +78,7 @@ export class LoginService {
     if (active.has(target)) return { alreadyLoggedIn: false, text: `${target} login is already in progress on this machine.` };
     active.add(target);
     try {
+      if (!await this.isInstalled(target)) throw new MissingLoginToolError(`${commands[target].bin} is not installed on this server.`);
       if (!force && await this.status(target)) {
         active.delete(target);
         return { alreadyLoggedIn: true, text: `${target} is already authenticated for OS account ${os.userInfo().username}.` };

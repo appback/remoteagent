@@ -6,13 +6,15 @@ import path from "node:path";
 import process from "node:process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import { Bot, GrammyError, HttpError } from "grammy";
 import type { Context } from "grammy";
 import { config } from "./config.js";
 import { BridgeService } from "./services/bridge-service.js";
 import { BotManagementService } from "./services/bot-management-service.js";
 import { ProviderSetupService } from "./services/provider-setup-service.js";
-import { LoginService, type LoginTarget } from "./services/login-service.js";
+import { LoginService, MissingLoginToolError, type LoginTarget } from "./services/login-service.js";
+import { buildProviderEnv } from "./adapters/runtime-env.js";
 import { RemoteShellService } from "./services/remote-shell-service.js";
 import { AgentMemoryService } from "./services/agent-memory-service.js";
 import { WorkspaceCleanupService } from "./services/workspace-cleanup-service.js";
@@ -23,6 +25,7 @@ import type { ChatSession, CodexSandboxMode, Provider, ProviderResponse } from "
 import type { UserFromGetMe } from "grammy/types";
 
 const execFileAsync = promisify(execFile);
+const loginInstallations = new Set<LoginTarget>();
 
 const HELP_TEXT = [
   "Commands:",
@@ -134,6 +137,7 @@ type QueuedWorkLoopEntry = {
 
 type InlineAction =
   | { kind: "login.start"; target: LoginTarget; force?: boolean }
+  | { kind: "login.install"; target: LoginTarget }
   | { kind: "session.switch"; selector: string }
   | { kind: "session.list"; showAll: boolean }
   | { kind: "model.set"; model: string }
@@ -1258,10 +1262,51 @@ ${bridge.formatStatus(mapping)}`);
   const startLogin = async (ctx: Context, target: LoginTarget, force = false) => {
     await ensureOwnerControlAccess(ctx);
     if (!ctx.chat) throw new Error("Telegram chat context is missing.");
-    const result = await loginService.start(target, force, async text => { await reply(ctx, text); });
+    if (loginInstallations.has(target)) {
+      await reply(ctx, `${target} installation is already in progress on this server.`);
+      return;
+    }
+    let result;
+    try {
+      result = await loginService.start(target, force, async text => { await reply(ctx, text); });
+    } catch (error) {
+      if (!(error instanceof MissingLoginToolError)) throw error;
+      await reply(ctx, error.message, keyboardOptions([[
+        actionButton(ctx, "설치 후 로그인", { kind: "login.install", target }),
+      ]]));
+      return;
+    }
     await reply(ctx, result.text, result.alreadyLoggedIn ? keyboardOptions([[
       actionButton(ctx, "Log in again", { kind: "login.start", target, force: true }),
     ]]) : undefined);
+  };
+
+  const installAndLogin = async (ctx: Context, target: LoginTarget) => {
+    await ensureOwnerControlAccess(ctx);
+    if (loginInstallations.has(target)) {
+      await reply(ctx, `${target} installation is already in progress on this server.`);
+      return;
+    }
+    loginInstallations.add(target);
+    try {
+      if (!await loginService.isInstalled(target)) {
+        await reply(ctx, `Installing ${target} on this server. Login will start after verification.`);
+        if (target === "github") {
+          try {
+            await execFileAsync(process.execPath, [fileURLToPath(new URL("../scripts/install-github.mjs", import.meta.url))], {
+              cwd: os.homedir(), env: buildProviderEnv({}), timeout: 300_000,
+            });
+          } catch {
+            throw new Error("GitHub CLI installation failed. Check network, disk space and OS compatibility. Login was not started.");
+          }
+        } else {
+          await setupService.install(target);
+        }
+        if (!await loginService.isInstalled(target)) throw new Error(`${target} installation finished but the CLI is still missing. Login was not started.`);
+        await reply(ctx, `${target} installation and execution verification completed.`);
+      }
+    } finally { loginInstallations.delete(target); }
+    await startLogin(ctx, target);
   };
 
   bot.command("login", async (ctx) => {
@@ -1381,6 +1426,10 @@ ${bridge.formatStatus(mapping)}`);
     });
 
     try {
+      if (action.kind === "login.install") {
+        await installAndLogin(ctx, action.target);
+        return;
+      }
       if (action.kind === "login.start") {
         await startLogin(ctx, action.target, action.force);
         return;

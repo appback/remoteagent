@@ -18,6 +18,7 @@ const waitFor = async predicate => {
 try {
   await fs.writeFile(bin, `#!${process.execPath}
 const fs = require('node:fs');
+if (process.argv.includes('--version')) { console.log('fake 1.0'); process.exit(0); }
 if (process.argv.includes('status')) {
   console.log(JSON.stringify({loggedIn:fs.existsSync(${JSON.stringify(state)})}));
   process.exit(fs.existsSync(${JSON.stringify(state)}) ? 0 : 1);
@@ -43,7 +44,10 @@ setTimeout(() => {fs.writeFileSync(${JSON.stringify(state)}, 'ok'); process.exit
   notices.length = 0;
   await new LoginService(100, binaries).start('claude', false, notify);
   await waitFor(() => notices.some(text => text.includes('expired')));
-  await assert.rejects(new LoginService(100, { codex: path.join(dir, 'missing') }).start('codex', false, notify), /could not start/);
+  await assert.rejects(new LoginService(100, { codex: path.join(dir, 'missing') }).start('codex', false, notify), /not installed/);
+  await fs.chmod(bin, 0o600);
+  await assert.rejects(service.isInstalled('github'), /EACCES/);
+  await fs.chmod(bin, 0o700);
   assert.equal(loginHints('secret token only'), undefined);
   assert.match(loginHints('https://auth.openai.com/codex/device\nABCD-EFGHI'), /ABCD-EFGHI/);
   console.log('PASS login: URL/code, status, cross-bot lock, reauthentication, completion, expiry, missing CLI, output filtering');

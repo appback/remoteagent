@@ -402,6 +402,14 @@ again** button. See [Login guide](docs/LOGIN.md) for prerequisites and expiry.
 
 ## Architecture and operations
 
+Opt-in local model delegation pilot and evaluation plan:
+[Local delegation](docs/LOCAL_DELEGATION_PLAN.md). The current pilot is read-only;
+coding-agent delegation and measured token savings are not yet validated.
+
+Linux service installation and migration: [User service operations](docs/USER_SERVICE.md).
+New user installations use `systemctl --user`; existing system services are
+migrated explicitly with `remoteagent service migrate` after active work ends.
+
 High-level architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 Mini App plan: [docs/MINI_APP.md](docs/MINI_APP.md)

@@ -67,6 +67,11 @@ await fs.chmod(path.join(binDir, "curl"), 0o755);
 
 process.env.PATH = `${binDir}:${process.env.PATH ?? ""}`;
 process.env.DATA_DIR = dataDir;
+const loginBinary = path.join(binDir, 'login-codex');
+const loginTemplate = path.join(tmp, 'login-template');
+await fs.writeFile(loginTemplate, `#!/bin/sh\nif [ "$1" = "--version" ]; then echo fake; exit 0; fi\nif [ "$2" = "status" ]; then exit 1; fi\necho 'https://example.com/device'\necho 'ABCD-EFGHI'\nsleep 1\nexit 1\n`, { mode: 0o700 });
+process.env.CODEX_BIN = loginBinary;
+process.env.CODEX_INSTALL_COMMAND = `cp '${loginTemplate}' '${loginBinary}'`;
 process.env.DEFAULT_WORKSPACE = workspace;
 process.env.WORKSPACE_ROOT = workspaceRoot;
 process.env.TELEGRAM_BOT_TOKEN = "000000:test-token";
@@ -534,6 +539,13 @@ for (const label of ["GitHub", "Codex", "Claude"]) {
     throw new Error(`Missing login button: ${label}`);
   }
 }
+await click(findInlineButton(loginMenu, "Codex").callback_data);
+const missingLogin = await waitForTelegramCall(call => call.text.includes("is not installed on this server"));
+const installLoginButton = findInlineButton(missingLogin, "설치 후 로그인");
+if (!installLoginButton) throw new Error('Missing install-and-login button');
+await click(installLoginButton.callback_data);
+await waitForTelegramCall(call => call.text.includes('installation and execution verification completed'));
+await waitForTelegramCall(call => call.text.includes('https://example.com/device'));
 
 await send("/new");
 await send("/list");

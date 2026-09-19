@@ -72,9 +72,15 @@ for ATTEMPT in {1..12}; do
   sleep 5
 done
 remoteagent-install
-sudo -n systemctl restart remoteagent
-sleep 5
-systemctl is-active remoteagent
+if systemctl --user cat remoteagent >/dev/null 2>&1; then
+  systemctl --user restart remoteagent
+  sleep 5
+  systemctl --user is-active remoteagent
+else
+  sudo -n systemctl restart remoteagent
+  sleep 5
+  systemctl is-active remoteagent
+fi
 node -p 'require("/home/au2223/.nvm/versions/node/v22.22.0/lib/node_modules/appback-remoteagent/package.json").version'
 journalctl -u remoteagent --since '1 minute ago' --no-pager | tail -80
 REMOTE
@@ -168,7 +174,11 @@ for ATTEMPT in {1..12}; do
   sleep 5
 done
 remoteagent-install
-if systemctl cat remoteagent >/dev/null 2>&1; then
+if systemctl --user cat remoteagent >/dev/null 2>&1; then
+  systemctl --user restart remoteagent
+  sleep 7
+  systemctl --user is-active remoteagent
+elif systemctl cat remoteagent >/dev/null 2>&1; then
   HELPER="$HOME/.nvm/versions/node/v22.23.2/lib/node_modules/appback-remoteagent/dist/secret-helper.js"
   SUDO_PASSWORD="$(node "$HELPER" get SUDO_APPBACK_33_40)"
   printf '%s\n' "$SUDO_PASSWORD" | sudo -S -p '' systemctl restart remoteagent
