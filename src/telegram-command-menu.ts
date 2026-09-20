@@ -25,7 +25,7 @@ export const TELEGRAM_COMMAND_MENU = [
   { command: "cleanup", description: "Clean current session workspace" },
   { command: "bots", description: "List configured Telegram bots" },
   { command: "bot", description: "Manage Telegram bots" },
-  { command: "install", description: "Install or update Codex or Claude" },
+  { command: "install", description: "Update RemoteAgent or install/update Codex or Claude" },
   { command: "login", description: "Choose GitHub, Codex or Claude login" },
   { command: "reset", description: "Clear this chat binding" },
   { command: "help", description: "Show command help" },

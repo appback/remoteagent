@@ -15,6 +15,7 @@ import { BotManagementService } from "./services/bot-management-service.js";
 import { ProviderSetupService } from "./services/provider-setup-service.js";
 import { LoginService, MissingLoginToolError, type LoginTarget } from "./services/login-service.js";
 import { buildProviderEnv } from "./adapters/runtime-env.js";
+import { requestSelfUpdate } from "./services/self-update-service.js";
 import { RemoteShellService } from "./services/remote-shell-service.js";
 import { AgentMemoryService } from "./services/agent-memory-service.js";
 import { WorkspaceCleanupService } from "./services/workspace-cleanup-service.js";
@@ -57,10 +58,11 @@ const HELP_TEXT = [
   "/bot doctor",
   "/bot remove <username|id>",
   "/bot reload",
-  "/install codex|claude",
+  "/install remoteagent|codex|claude",
   "/login - choose GitHub, Codex or Claude",
   "/reset",
   "/! <command>",
+  '/! ip addr | grep "inet"',
   "/!cmd <command>",
   "/!bash <command>",
 ].join("\n");
@@ -500,6 +502,11 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
         title: "title" in ctx.chat && typeof ctx.chat.title === "string" ? ctx.chat.title : undefined,
         lastSeenAt: new Date().toISOString(),
       });
+    }
+    const command = /^\/([a-z]+)(?:@\w+)?(?:\s|$)/i.exec(text)?.[1]?.toLowerCase();
+    if (fsSync.existsSync(path.join(config.dataDir, "self-update.json")) && !["help", "status", "stop"].includes(command ?? "")) {
+      await reply(ctx, "RemoteAgent self-update is pending. This request was not started. Please resend it after the update result is reported.");
+      return;
     }
     await next();
   });
@@ -1244,8 +1251,13 @@ ${bridge.formatStatus(mapping)}`);
     const { args } = parseCommand(ctx.message?.text, 1);
     const provider = args[0]?.toLowerCase();
 
+    if (provider === "remoteagent") {
+      await reply(ctx, await requestSelfUpdate(config.dataDir, token, ctx.chat.id));
+      return;
+    }
+
     if (!provider || !["codex", "claude"].includes(provider)) {
-      await reply(ctx, "Usage: `/install codex` or `/install claude`", { parse_mode: "Markdown" });
+      await reply(ctx, "Usage: /install remoteagent, /install codex, /install claude");
       return;
     }
 
@@ -1641,7 +1653,7 @@ ${bridge.formatStatus(mapping)}`);
     if (isRemoteShellMessage(text)) {
       const shellRequest = parseRemoteShellRequest(text);
       if (!shellRequest) {
-        await reply(ctx, "Usage: `/! <command>`, `/!cmd <command>`, or `/!bash <command>`", {
+        await reply(ctx, 'Usage: `/! <command>`, `/!cmd <command>`, or `/!bash <command>`\nExample: `/! ip addr | grep "inet"`', {
           parse_mode: "Markdown",
         });
         return;

@@ -289,7 +289,7 @@ async function getTelegramUpdates(token: string, offset: number | undefined, tim
     "--data-urlencode",
     "limit=100",
     "--data-urlencode",
-    'allowed_updates=["message"]',
+    'allowed_updates=["message","edited_message","channel_post","callback_query"]',
   ];
   if (offset !== undefined) {
     args.push("--data-urlencode", `offset=${offset}`);

@@ -1,5 +1,24 @@
 # User Service Operations
 
+## Telegram Self-Update
+
+Send `/install remoteagent` to check npm latest and update an idle user-service
+installation. A separate user-systemd worker stages both current/new npm packages,
+stops the runtime, installs the new package, starts it, and checks service health.
+Failure after stopping triggers reinstall of the staged previous version.
+Configuration and sessions are retained; no OS restart or automatic migration is
+performed. Requires a global npm installation writable by the service account.
+
+Existing work causes refusal. While an update is pending, new requests are
+explicitly rejected (not silently queued); `/help`, `/status`, `/stop` remain
+available until the short runtime restart. Resend other requests after completion.
+Duplicate update requests are locked by `~/.remoteagent/self-update.json`.
+After an interrupted worker, inspect `journalctl --user -u 'remoteagent-update-*'`
+before clearing that pending file. Results are also stored in
+`~/.remoteagent/self-update-result.json` if Telegram delivery fails.
+
+Shell example: `/! ip addr | grep "inet"`.
+
 ## Server 110 Deployment
 
 ```sh

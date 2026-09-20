@@ -496,6 +496,8 @@ async function getUpdatesViaCurl(token: string, offset: number): Promise<{
   const url = new URL(`https://api.telegram.org/bot${token}/getUpdates`);
   url.searchParams.set("timeout", String(TELEGRAM_GET_UPDATES_HTTP_TIMEOUT_SECONDS));
   url.searchParams.set("limit", "50");
+  // Telegram retains this filter across clients, including CLI owner registration.
+  url.searchParams.set("allowed_updates", JSON.stringify(["message", "edited_message", "channel_post", "callback_query"]));
   if (offset > 0) {
     url.searchParams.set("offset", String(offset));
   }

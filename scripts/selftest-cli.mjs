@@ -81,6 +81,8 @@ fi
   const ownerCurlArgs = await fs.readFile(curlArgsPath, "utf8");
   assert.match(ownerCurlArgs, /^-4$/m);
   assert.match(ownerCurlArgs, /^offset=42$/m);
+  const allowedUpdates = JSON.parse(ownerCurlArgs.split("\n").find((arg) => arg.startsWith("allowed_updates="))?.slice("allowed_updates=".length) ?? "null");
+  assert.ok(allowedUpdates.includes("callback_query"), "Owner registration must not disable runtime buttons");
   process.env.PATH = originalPath;
 
   await fs.mkdir(sourceDataDir, { recursive: true });
