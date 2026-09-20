@@ -1,5 +1,17 @@
 # User Service Operations
 
+## Server 110 Deployment
+
+```sh
+npm run release:deploy -- 0.23.8 110
+```
+
+Target: `appback@192.168.33.110`, Node `v22.23.2`. This target checks
+active jobs and Codex processes, backs up configuration/state, installs the exact
+npm version, enables linger, and migrates an existing system service. Later runs
+restart the user service. Noninteractive sudo is required for initial migration
+and linger configuration. `all` retains its existing 30/40/26 scope.
+
 RemoteAgent runs as the same OS account that owns Codex, credentials, secrets,
 and projects. New non-root Linux installations register and enable
 `~/.config/systemd/user/remoteagent.service` when a user service manager is

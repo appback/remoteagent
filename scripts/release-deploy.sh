@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: npm run release:deploy -- <version> <30|40|26|50|all>" >&2
+  echo "Usage: npm run release:deploy -- <version> <30|40|26|50|110|all>" >&2
   echo "Example: npm run release:deploy -- 0.15.5 all" >&2
 }
 
@@ -20,7 +20,7 @@ if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 
 case "$TARGET" in
-  30|40|26|50|all)
+  30|40|26|50|110|all)
     ;;
   *)
     usage
@@ -202,6 +202,46 @@ fi
 REMOTE
 }
 
+deploy_110() {
+  ssh appback@192.168.33.110 "VERSION=$VERSION bash -s" <<'REMOTE'
+set -euo pipefail
+cd "$HOME"
+export PATH="$HOME/.nvm/versions/node/v22.23.2/bin:$HOME/.local/bin:$PATH"
+systemctl --user show-environment >/dev/null
+sudo -n true
+node --input-type=module - <<'NODE'
+import fs from 'node:fs';
+const state = JSON.parse(fs.readFileSync(`${process.env.HOME}/.remoteagent/bot-polling-state.json`, 'utf8'));
+if (Object.values(state.bots || {}).some(bot => bot.runningSessionIds?.length)) throw new Error('Active provider work; deployment aborted.');
+NODE
+if pgrep -u "$(id -u)" -x codex >/dev/null; then
+  echo "Codex process exists; inspect before deploying." >&2
+  exit 2
+fi
+BACKUP="$HOME/.remoteagent/backups/deploy-$VERSION-$(date +%Y%m%dT%H%M%S)"
+mkdir -p -m 700 "$BACKUP"
+cp -p "$HOME/.remoteagent/.env" "$HOME/.remoteagent/state.json" "$BACKUP/"
+npm install -g "appback-remoteagent@$VERSION" --prefer-online
+remoteagent-install
+sudo -n loginctl enable-linger "$(id -un)"
+if systemctl is-active --quiet remoteagent || systemctl is-enabled --quiet remoteagent; then
+  remoteagent service migrate
+else
+  systemctl --user restart remoteagent
+fi
+sleep 5
+systemctl --user is-active remoteagent
+if systemctl is-active --quiet remoteagent || systemctl is-enabled --quiet remoteagent; then
+  echo "Unexpected system service remains active or enabled" >&2
+  exit 1
+fi
+test "$(node -p 'require(process.env.HOME + "/.nvm/versions/node/v22.23.2/lib/node_modules/appback-remoteagent/package.json").version')" = "$VERSION"
+npm list -g appback-remoteagent --depth=0
+loginctl show-user "$(id -un)" -p Linger
+tail -n 12 "$HOME/.remoteagent/logs/agent.log"
+REMOTE
+}
+
 deploy_50() {
   ssh root@192.168.33.50 "runuser -u daone -- env VERSION=$VERSION PATH=/home/daone/.nvm/versions/node/v22.23.2/bin:/usr/local/bin:/usr/bin:/bin bash -s" <<'REMOTE'
 set -euo pipefail
@@ -239,6 +279,9 @@ case "$TARGET" in
     ;;
   50)
     deploy_50
+    ;;
+  110)
+    deploy_110
     ;;
   all)
     deploy_30
