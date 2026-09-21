@@ -69,9 +69,11 @@ process.env.PATH = `${binDir}:${process.env.PATH ?? ""}`;
 process.env.DATA_DIR = dataDir;
 const loginBinary = path.join(binDir, 'login-codex');
 const loginTemplate = path.join(tmp, 'login-template');
+const installCountPath = path.join(tmp, 'install-count');
 await fs.writeFile(loginTemplate, `#!/bin/sh\nif [ "$1" = "--version" ]; then echo fake; exit 0; fi\nif [ "$2" = "status" ]; then exit 1; fi\necho 'https://example.com/device'\necho 'ABCD-EFGHI'\nsleep 1\nexit 1\n`, { mode: 0o700 });
 process.env.CODEX_BIN = loginBinary;
-process.env.CODEX_INSTALL_COMMAND = `cp '${loginTemplate}' '${loginBinary}'`;
+process.env.CODEX_INSTALL_COMMAND = `printf 'install\\n' >> '${installCountPath}'; sleep 0.2; cp '${loginTemplate}' '${loginBinary}'`;
+process.env.CLAUDE_INSTALL_COMMAND = "printf 'mock-claude-install'";
 process.env.DEFAULT_WORKSPACE = workspace;
 process.env.WORKSPACE_ROOT = workspaceRoot;
 process.env.TELEGRAM_BOT_TOKEN = "000000:test-token";
@@ -341,6 +343,22 @@ async function waitForTelegramCall(predicate, timeoutMs = 3000) {
 }
 
 await send("/start codex");
+const version = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8')).version;
+const beforeVersion = providerCalls.length;
+await send('/v');
+await send('/version');
+const versionCalls = (await readTelegramCalls()).filter(call => call.text.startsWith(`RemoteAgent ${version}\n`));
+if (versionCalls.length !== 2 || providerCalls.length !== beforeVersion) throw new Error('Version aliases must reply locally with the running package version');
+await fs.writeFile(path.join(dataDir, 'self-update.json'), '{}');
+try {
+  await send('/v@remoteagent_test_bot');
+  const pendingVersionCalls = (await readTelegramCalls()).filter(call => call.text.startsWith(`RemoteAgent ${version}\n`));
+  if (pendingVersionCalls.length !== 3) throw new Error('Version must remain available during pending updates');
+} finally { await fs.rm(path.join(dataDir, 'self-update.json')); }
+const { TELEGRAM_COMMAND_MENU } = await import(path.join(root, 'dist', 'telegram-command-menu.js'));
+for (const command of ['v', 'version', 'install']) {
+  if (!TELEGRAM_COMMAND_MENU.some(item => item.command === command)) throw new Error(`Missing command menu entry: ${command}`);
+}
 await send("/option retry 6");
 await send("/option timeout 600");
 await send("/option intent 4");
@@ -621,6 +639,44 @@ if (!timeoutButton?.callback_data) {
 }
 await click(timeoutButton.callback_data);
 await waitForTelegramCall((call) => call.text.includes("Current provider execution timeout: 600s"));
+
+await send('/install');
+const installMenu = await waitForTelegramCall(call => call.text.includes('Choose what to install or update'));
+for (const label of ['RemoteAgent', 'Codex', 'Claude']) {
+  if (!findInlineButton(installMenu, label)?.callback_data) throw new Error(`Missing install selection: ${label}`);
+}
+const readInstallCount = async () => (await fs.readFile(installCountPath, 'utf8').catch(() => '')).split('\n').filter(Boolean).length;
+const countBeforeRejected = await readInstallCount();
+const deniedUpdate = update('/install codex');
+deniedUpdate.message.from.id = 222;
+await injectedBot.handleUpdates([deniedUpdate]);
+await waitForTelegramCall(call => call.text.includes('available only to the configured bot owner'));
+const wrongUserClick = callbackUpdate(findInlineButton(installMenu, 'Codex').callback_data);
+wrongUserClick.callback_query.from.id = 222;
+await injectedBot.handleUpdates([wrongUserClick]);
+const wrongChatClick = callbackUpdate(findInlineButton(installMenu, 'Codex').callback_data);
+wrongChatClick.callback_query.message.chat.id = 444;
+await injectedBot.handleUpdates([wrongChatClick]);
+await click('remoteagent:action:00000000000000000000');
+if (await readInstallCount() !== countBeforeRejected) throw new Error('Rejected installation executed a command');
+await click(findInlineButton(installMenu, 'Codex').callback_data);
+await waitForTelegramCall(call => call.text.includes('codex update finished.'));
+await click(findInlineButton(installMenu, 'Claude').callback_data);
+await waitForTelegramCall(call => call.text.includes('mock-claude-install'));
+// Exercise the RemoteAgent callback without touching a real service manager.
+await fs.writeFile(path.join(binDir, 'systemctl'), '#!/bin/sh\nexit 1\n', {mode: 0o700});
+await click(findInlineButton(installMenu, 'RemoteAgent').callback_data);
+await waitForTelegramCall(call => call.text.includes('Self-update requires an active user service'));
+await send('/install codex');
+await waitForTelegramCall(call => call.text.includes('codex update finished.'));
+const beforeConcurrent = await readInstallCount();
+const firstInstall = click(findInlineButton(installMenu, 'Codex').callback_data);
+const installDeadline = Date.now() + 3000;
+while (await readInstallCount() === beforeConcurrent && Date.now() < installDeadline) await new Promise(resolve => setTimeout(resolve, 10));
+await click(findInlineButton(installMenu, 'Codex').callback_data);
+await firstInstall;
+await waitForTelegramCall(call => call.text.includes('codex installation is already in progress'));
+if (await readInstallCount() !== beforeConcurrent + 1) throw new Error('Concurrent installation was not deduplicated');
 
 await send("/sandbox");
 const sandboxListCall = await waitForTelegramCall((call) => call.text.startsWith("Codex sandbox"));

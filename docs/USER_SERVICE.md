@@ -2,6 +2,12 @@
 
 ## Telegram Self-Update
 
+Send `/version` (shortcut `/v`) to see the currently running RemoteAgent version.
+Send `/install` to choose RemoteAgent, Codex or Claude with buttons. Direct
+commands such as `/install remoteagent` and `/install codex` remain supported.
+The menu itself starts no installation; selecting a button runs the same
+owner-authorized operation as the corresponding direct command.
+
 Send `/install remoteagent` to check npm latest and update an idle user-service
 installation. A separate user-systemd worker stages both current/new npm packages,
 stops the runtime, installs the new package, starts it, and checks service health.

@@ -27,6 +27,7 @@ import type { ChatSession, CodexSandboxMode, Provider, ProviderResponse } from "
 import type { UserFromGetMe } from "grammy/types";
 
 const execFileAsync = promisify(execFile);
+const runtimeVersion = String(JSON.parse(fsSync.readFileSync(new URL("../package.json", import.meta.url), "utf8")).version);
 const loginInstallations = new Set<LoginTarget>();
 const jev = new JevService(config.dataDir);
 const JEV_LOGIN_HELP = "Jev uses OpenRouter. Create an API key at https://openrouter.ai/settings/keys and send /login <API_KEY> in this private chat. A small paid validation request is made before storing OPENROUTER_API_KEY in the server Secret Store. No extra installation is needed. Activation is separate: /option jev off|observe|on. Only text is supported; supplied text is sent to OpenRouter/TypeSafe.";
@@ -35,6 +36,7 @@ const HELP_TEXT = [
   "Commands:",
   "/start [codex|claude]",
   "/help",
+  "/version (alias: /v)",
   "/list [-a]",
   "/new",
   "/switch <session>",
@@ -61,7 +63,7 @@ const HELP_TEXT = [
   "/bot doctor",
   "/bot remove <username|id>",
   "/bot reload",
-  "/install remoteagent|codex|claude|jev",
+  "/install - choose RemoteAgent, Codex or Claude",
   "/login <API_KEY> - connect Jev through OpenRouter",
   "/option jev off|observe|on",
   "/login - choose GitHub, Codex or Claude",
@@ -96,6 +98,8 @@ const REPORT_PROTOCOL_PROMPT = [
 const RECOGNIZED_COMMANDS = new Set([
   "start",
   "help",
+  "version",
+  "v",
   "list",
   "new",
   "switch",
@@ -143,6 +147,7 @@ type QueuedWorkLoopEntry = {
 };
 
 type InlineAction =
+  | { kind: "install.run"; target: "remoteagent" | "codex" | "claude" }
   | { kind: "jev.login" }
   | { kind: "jev.option" }
   | { kind: "login.start"; target: LoginTarget; force?: boolean }
@@ -511,7 +516,7 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
       });
     }
     const command = /^\/([a-z]+)(?:@\w+)?(?:\s|$)/i.exec(text)?.[1]?.toLowerCase();
-    if (fsSync.existsSync(path.join(config.dataDir, "self-update.json")) && !["help", "status", "stop"].includes(command ?? "")) {
+    if (fsSync.existsSync(path.join(config.dataDir, "self-update.json")) && !["help", "status", "stop", "v", "version"].includes(command ?? "")) {
       await reply(ctx, "RemoteAgent self-update is pending. This request was not started. Please resend it after the update result is reported.");
       return;
     }
@@ -545,6 +550,10 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
     await reply(ctx, `Started a fresh ${provider} session.
 
 ${bridge.formatStatus(mapping)}`);
+  });
+
+  bot.command(["version", "v"], async (ctx) => {
+    await reply(ctx, `RemoteAgent ${runtimeVersion}\nRunning version on this server.`);
   });
 
   bot.command("help", async (ctx) => {
@@ -1259,13 +1268,38 @@ ${bridge.formatStatus(mapping)}`);
     await reply(ctx, result.message);
   });
 
+  const runInstall = async (ctx: Context, provider: "remoteagent" | "codex" | "claude") => {
+    await ensureOwnerControlAccess(ctx);
+    if (!ctx.chat) throw new Error("Telegram chat context is missing.");
+    if (provider === "remoteagent") {
+      await reply(ctx, await requestSelfUpdate(config.dataDir, token, ctx.chat.id));
+      return;
+    }
+
+    if (loginInstallations.has(provider)) {
+      await reply(ctx, `${provider} installation is already in progress on this server.`);
+      return;
+    }
+    loginInstallations.add(provider);
+    try {
+      await runWithPendingAnimation(token, ctx.chat.id, async () => {
+        const result = await setupService.install(provider);
+        if (result.after) await bridge.rememberDefaultStartMode(provider);
+        return { chunks: flattenChunks([result.output], 3900) };
+      });
+    } finally { loginInstallations.delete(provider); }
+  };
+
   bot.command("install", async (ctx) => {
     await ensureOwnerControlAccess(ctx);
     const { args } = parseCommand(ctx.message?.text, 1);
     const provider = args[0]?.toLowerCase();
-
-    if (provider === "remoteagent") {
-      await reply(ctx, await requestSelfUpdate(config.dataDir, token, ctx.chat.id));
+    if (!provider) {
+      await reply(ctx, "Choose what to install or update on this server:", keyboardOptions([
+        [actionButton(ctx, "RemoteAgent", { kind: "install.run", target: "remoteagent" })],
+        [actionButton(ctx, "Codex", { kind: "install.run", target: "codex" })],
+        [actionButton(ctx, "Claude", { kind: "install.run", target: "claude" })],
+      ]));
       return;
     }
 
@@ -1274,18 +1308,12 @@ ${bridge.formatStatus(mapping)}`);
       return;
     }
 
-    if (!provider || !["codex", "claude"].includes(provider)) {
+    if (provider !== "remoteagent" && provider !== "codex" && provider !== "claude") {
       await reply(ctx, "Usage: /install remoteagent, /install codex, /install claude, /install jev");
       return;
     }
 
-    await runWithPendingAnimation(token, ctx.chat.id, async () => {
-      const result = await setupService.install(provider as Provider);
-      if (result.after) {
-        await bridge.rememberDefaultStartMode(provider as Provider);
-      }
-      return { chunks: flattenChunks([result.output], 3900) };
-    });
+    await runInstall(ctx, provider);
   });
 
   const loginService = new LoginService(15 * 60_000, { codex: config.codexBin, claude: config.claudeBin });
@@ -1474,6 +1502,10 @@ ${bridge.formatStatus(mapping)}`);
     });
 
     try {
+      if (action.kind === "install.run") {
+        await runInstall(ctx, action.target);
+        return;
+      }
       if (action.kind === "jev.login" || action.kind === "jev.option") {
         await ensureOwnerControlAccess(ctx);
         await reply(ctx, action.kind === "jev.login" ? JEV_LOGIN_HELP : `Jev: ${jev.status().mode}; key configured: ${jev.status().configured}.\n/option jev off|observe|on\nobserve: judgments only. on: classify untagged replies. Optional text-only external API; errors preserve legacy behavior.`);
