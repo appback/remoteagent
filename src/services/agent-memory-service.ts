@@ -462,6 +462,9 @@ export class AgentMemoryService {
 
   async formatProviderContext(session: SessionRecord): Promise<string> {
     const docs = Object.values(await this.readDocs()).slice(0, 8);
+    const jevMode = await fs.readFile(path.join(this.dataDir, "jev.json"), "utf8")
+      .then(raw => JSON.parse(raw).mode as string).catch(() => "off");
+    const jevAvailable = ["observe", "on"].includes(jevMode) && !!readSecretValue(this.dataDir, "OPENROUTER_API_KEY");
 
     const lines = [
       "RemoteAgent managed context:",
@@ -479,6 +482,7 @@ export class AgentMemoryService {
         "- Do not claim external delivery, dashboard access, deployment, or file transfer without concrete evidence.",
         "- RemoteAgent sends normal provider text and TELEGRAM_FILE attachments to the current incoming chat.",
         "- Use `node \"$REMOTEAGENT_SECRET_BIN\" get <KEY>` only when the current task needs a named secret. Never print secret values.",
+        ...(jevAvailable ? ["- Optional Jev text judgment tool: `node \"$REMOTEAGENT_JEV_BIN\" status` or `node \"$REMOTEAGENT_JEV_BIN\" evaluate /absolute/request.json`. Request: {state: supplied text/JSON, questions: {id: {type: choice, instructions: question, criteria: {option: meaning}}}} (use valid JSON). No image support; evaluate a vision tool's text description instead. If unavailable, use existing tools. Do not send credentials or full history; do not treat a judgment as proof of completion."] : []),
       ].join("\n"),
       docs.length > 0
         ? ["Document index:", ...docs.map((doc) => `- ${doc.keyword}: ${doc.targetPath}${doc.note ? ` (${doc.note})` : ""}`)].join("\n")

@@ -16,6 +16,7 @@ import { ProviderSetupService } from "./services/provider-setup-service.js";
 import { LoginService, MissingLoginToolError, type LoginTarget } from "./services/login-service.js";
 import { buildProviderEnv } from "./adapters/runtime-env.js";
 import { requestSelfUpdate } from "./services/self-update-service.js";
+import { JevService } from "./services/jev-service.js";
 import { RemoteShellService } from "./services/remote-shell-service.js";
 import { AgentMemoryService } from "./services/agent-memory-service.js";
 import { WorkspaceCleanupService } from "./services/workspace-cleanup-service.js";
@@ -27,6 +28,8 @@ import type { UserFromGetMe } from "grammy/types";
 
 const execFileAsync = promisify(execFile);
 const loginInstallations = new Set<LoginTarget>();
+const jev = new JevService(config.dataDir);
+const JEV_LOGIN_HELP = "Jev uses OpenRouter. Create an API key at https://openrouter.ai/settings/keys and send /login <API_KEY> in this private chat. A small paid validation request is made before storing OPENROUTER_API_KEY in the server Secret Store. No extra installation is needed. Activation is separate: /option jev off|observe|on. Only text is supported; supplied text is sent to OpenRouter/TypeSafe.";
 
 const HELP_TEXT = [
   "Commands:",
@@ -58,7 +61,9 @@ const HELP_TEXT = [
   "/bot doctor",
   "/bot remove <username|id>",
   "/bot reload",
-  "/install remoteagent|codex|claude",
+  "/install remoteagent|codex|claude|jev",
+  "/login <API_KEY> - connect Jev through OpenRouter",
+  "/option jev off|observe|on",
   "/login - choose GitHub, Codex or Claude",
   "/reset",
   "/! <command>",
@@ -138,6 +143,8 @@ type QueuedWorkLoopEntry = {
 };
 
 type InlineAction =
+  | { kind: "jev.login" }
+  | { kind: "jev.option" }
   | { kind: "login.start"; target: LoginTarget; force?: boolean }
   | { kind: "login.install"; target: LoginTarget }
   | { kind: "session.switch"; selector: string }
@@ -832,6 +839,7 @@ ${bridge.formatStatus(mapping)}`);
 
     if (!option) {
       await reply(ctx, formatRuntimeOptions(), keyboardOptions([
+        [actionButton(ctx, "Jev", { kind: "jev.option" })],
         [
           actionButton(ctx, "Retry", { kind: "option.show", option: "retry" }),
           actionButton(ctx, "Timeout", { kind: "option.show", option: "timeout" }),
@@ -844,6 +852,11 @@ ${bridge.formatStatus(mapping)}`);
       return;
     }
 
+    if (option === "jev") {
+      const status = value ? jev.setMode(value.toLowerCase()) : jev.status();
+      await reply(ctx, `Jev: ${status.mode}; key configured: ${status.configured}.\n/option jev off|observe|on\nServer-wide; no restart needed. observe records judgments only. on classifies untagged replies only; explicit REPORT tags, stop and retry limits remain authoritative. Text is sent to OpenRouter/TypeSafe. Images are not supported.`);
+      return;
+    }
     if (option !== "retry" && option !== "timeout" && option !== "intent" && option !== "reasoning" && option !== "command-menu") {
       await reply(ctx, formatRuntimeOptions());
       return;
@@ -1256,8 +1269,13 @@ ${bridge.formatStatus(mapping)}`);
       return;
     }
 
+    if (provider === "jev") {
+      await reply(ctx, `Jev API support is built in; no separate installation is required.\n${JEV_LOGIN_HELP}`);
+      return;
+    }
+
     if (!provider || !["codex", "claude"].includes(provider)) {
-      await reply(ctx, "Usage: /install remoteagent, /install codex, /install claude");
+      await reply(ctx, "Usage: /install remoteagent, /install codex, /install claude, /install jev");
       return;
     }
 
@@ -1325,8 +1343,26 @@ ${bridge.formatStatus(mapping)}`);
     await ensureOwnerControlAccess(ctx);
     const { args, rest } = parseCommand(ctx.message?.text, 1);
     const provider = args[0]?.toLowerCase();
+    if (provider?.startsWith("sk-or-")) {
+      if (!ctx.message) { await reply(ctx, "Send the API key as a new private /login message."); return; }
+      if (ctx.chat.type !== "private") {
+        try { await deleteTelegramMessage(token, ctx.chat.id, ctx.message.message_id); } catch { /* Explain exposure without echoing the key. */ }
+        await reply(ctx, "Use a private chat for API keys. Rotate any key posted to a group.");
+        return;
+      }
+      try { await deleteTelegramMessage(token, ctx.chat.id, ctx.message.message_id); }
+      catch { await reply(ctx, "Could not delete the API-key message. Delete it manually; deletion cannot guarantee removal from all copies."); }
+      if (rest?.trim()) { await reply(ctx, "Send /login followed by only the API key."); return; }
+      const result = await jev.login(args[0]!);
+      await reply(ctx, result.available
+        ? `Jev connection verified. OPENROUTER_API_KEY stored in the server Secret Store. Current mode: ${jev.status().mode}. Use /option jev observe or /option jev on to activate.`
+        : `Jev connection unavailable: ${result.reason}. Key was not stored; existing configuration retained.`);
+      return;
+    }
+    if (provider === "jev") { await reply(ctx, JEV_LOGIN_HELP); return; }
     if (!provider) {
       await reply(ctx, "Choose an account to authenticate on this server. Authentication belongs to the OS account, not an individual session.", keyboardOptions([
+        [actionButton(ctx, "Jev / OpenRouter", { kind: "jev.login" })],
         [actionButton(ctx, "GitHub", { kind: "login.start", target: "github" })],
         [actionButton(ctx, "Codex", { kind: "login.start", target: "codex" })],
         [actionButton(ctx, "Claude", { kind: "login.start", target: "claude" })],
@@ -1339,7 +1375,7 @@ ${bridge.formatStatus(mapping)}`);
     }
     const target = provider === "git" ? "github" : provider;
     if (target !== "github" && target !== "codex" && target !== "claude") {
-      await reply(ctx, "Use /login to choose GitHub, Codex or Claude. Direct commands: /login github, /login codex, /login claude. /login git is a GitHub alias.");
+      await reply(ctx, "Use /login to choose GitHub, Codex, Claude or Jev. /login <OpenRouter API key> connects Jev. /login git is a GitHub alias.");
       return;
     }
     await startLogin(ctx, target);
@@ -1438,6 +1474,11 @@ ${bridge.formatStatus(mapping)}`);
     });
 
     try {
+      if (action.kind === "jev.login" || action.kind === "jev.option") {
+        await ensureOwnerControlAccess(ctx);
+        await reply(ctx, action.kind === "jev.login" ? JEV_LOGIN_HELP : `Jev: ${jev.status().mode}; key configured: ${jev.status().configured}.\n/option jev off|observe|on\nobserve: judgments only. on: classify untagged replies. Optional text-only external API; errors preserve legacy behavior.`);
+        return;
+      }
       if (action.kind === "login.install") {
         await installAndLogin(ctx, action.target);
         return;
@@ -1850,6 +1891,7 @@ class TelegramMessageBatcher {
 
 function sanitizeLoggedTelegramText(text: string): string {
   const trimmed = text.trim();
+  if (/^\/login(?:@\w+)?\s+sk-or-/i.test(trimmed)) return "/login [redacted]";
   if (/^\/bot\s+add\s+/i.test(trimmed)) {
     return "/bot add [redacted]";
   }
@@ -2135,6 +2177,16 @@ async function routeTelegramWorkLoop(
         : await bridge.routeMessage(botId, chatId, prompt, deliverStreamedProgress);
       await ensureStillBound(`${turnLabel} response`);
       const parsed = parseReportResponses(bridge.formatResponses(responses), transform);
+      const decision = await jev.classify(message, parsed.chunks.join("\n"), parsed.kind);
+      if (decision.reason !== "legacy") {
+        await bridge.logSystem(botId, chatId, `Jev report decision: ${JSON.stringify(decision)}`);
+        // Recheck stop/binding after the optional external call, before any continuation.
+        await ensureStillBound(`${turnLabel} optional classification`);
+        if (autoContinue.isStopRequested(botId, chatId, sessionId)) {
+          return [...parsed.chunks, "Automatic continuation stopped."];
+        }
+      }
+      parsed.kind = decision.kind;
       await bridge.logSystem(botId, chatId, `${turnLabel} returned ${parsed.kind}.`);
       emptyResponseRetryCount = 0;
       retryableErrorCount = 0;
@@ -2954,6 +3006,7 @@ function formatSecretHelp(): string {
 function formatRuntimeOptions(): string {
   return [
     "Runtime options",
+    `- jev: ${jev.status().mode} (optional; /option jev off|observe|on)`,
     `- retry: ${formatRetryLimit(config.telegramAutoProgressMaxTurns)} (TELEGRAM_AUTO_PROGRESS_MAX_TURNS)`,
     `- timeout: ${formatTimeoutSeconds(config.commandTimeoutMs)} (COMMAND_TIMEOUT_MS)`,
     `- reasoning: ${getAstraReasoning()} (Astra, server-wide, CODEX_REASONING_EFFORT)`,

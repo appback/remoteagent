@@ -27,6 +27,11 @@ async function main(): Promise<void> {
 
   const dataDir = path.resolve(takeOption(args, "--data-dir") || process.env.DATA_DIR?.trim() || path.join(os.homedir(), ".remoteagent"));
   const [group, action] = args;
+  if (group === "jev") {
+    const { runJevCommand } = await import("./jev-helper.js");
+    await runJevCommand(args.slice(1), dataDir);
+    return;
+  }
   if (group === "delegate") {
     const { LocalDelegate } = await import("./services/local-delegate.js");
     const delegate = new LocalDelegate(dataDir);
@@ -275,6 +280,8 @@ Usage:
   remoteagent                         Start the foreground runtime
   remoteagent bot add [token] [--owner <telegram-user-id>]
   remoteagent service install
+  remoteagent jev status
+  remoteagent jev evaluate <request.json>
   remoteagent delegate run <request.json>
   remoteagent delegate status|result|cancel <job-id>
   remoteagent service migrate

@@ -83,6 +83,14 @@ process.env.TELEGRAM_RETRYABLE_ERROR_RETRIES = "0";
 process.env.LOCAL_UI_ENABLED = "false";
 process.env.TELEGRAM_SELFTEST_RATE_LIMIT_FILE = rateLimitOnce;
 
+let jevApiCalls = 0;
+globalThis.fetch = async (url, init) => {
+  if (String(url) !== 'https://openrouter.ai/api/alpha/decisions') throw new Error('Unexpected network request');
+  jevApiCalls++;
+  const body = JSON.parse(init.body);
+  return new Response(JSON.stringify({ model: 'typesafe/mock', answers: Object.fromEntries(Object.entries(body.questions).map(([id, q]) => [id, q.type === 'noul' ? { type: 'noul', noul: 1 } : { type: 'choice', choice: 'progress', confidence: 1, probabilities: {progress: 1, result: 0, blocked: 0, unknown: 0} }])) }));
+};
+
 const [
   { createBot },
   { BridgeService },
@@ -534,11 +542,32 @@ if (calls.some((call) => /미완료 TODO|\/task|새 작업으로 접수/.test(ca
 
 await send("/login");
 const loginMenu = await waitForTelegramCall(call => call.text.includes("Choose an account to authenticate"));
-for (const label of ["GitHub", "Codex", "Claude"]) {
+for (const label of ["GitHub", "Codex", "Claude", "Jev / OpenRouter"]) {
   if (!findInlineButton(loginMenu, label)?.callback_data?.startsWith("remoteagent:action:")) {
     throw new Error(`Missing login button: ${label}`);
   }
 }
+await click(findInlineButton(loginMenu, 'Jev / OpenRouter').callback_data);
+await waitForTelegramCall(call => call.text.includes('openrouter.ai/settings/keys'));
+const syntheticKey = 'sk-or-v1-synthetic-telegram-test';
+const capturedLogs = [];
+const originalLog = console.log;
+console.log = (...args) => { capturedLogs.push(args.join(' ')); originalLog(...args); };
+try { await send(`/login@remoteagent_test_bot ${syntheticKey}`); }
+finally { console.log = originalLog; }
+await waitForTelegramCall(call => call.text.includes('Jev connection verified'));
+if (jevApiCalls !== 1) throw new Error('Expected one Jev validation request');
+if (capturedLogs.join('\n').includes(syntheticKey)) throw new Error('Jev key leaked to logs');
+if (JSON.stringify(providerCalls).includes(syntheticKey)) throw new Error('Jev key reached the provider');
+const afterLoginCalls = await readTelegramCalls();
+if (afterLoginCalls.some(call => call.text.includes(syntheticKey))) throw new Error('Jev key leaked to replies');
+if (!afterLoginCalls.some(call => call.method === 'deleteMessage')) throw new Error('API key message was not deleted');
+await send('/install jev');
+await waitForTelegramCall(call => call.text.includes('Jev API support is built in'));
+await send('/option jev observe');
+await waitForTelegramCall(call => call.text.startsWith('Jev: observe'));
+await send('/option jev off');
+await waitForTelegramCall(call => call.text.startsWith('Jev: off'));
 await click(findInlineButton(loginMenu, "Codex").callback_data);
 const missingLogin = await waitForTelegramCall(call => call.text.includes("is not installed on this server"));
 const installLoginButton = findInlineButton(missingLogin, "설치 후 로그인");
@@ -756,6 +785,22 @@ const untaggedCalls = (await fs.readFile(telegramCalls, "utf8"))
 if (untaggedIntentCalls !== 1 || !untaggedCalls.some(call => call.text.includes("계속 진행해서 확인하겠습니다."))) {
   throw new Error("Untagged response was not delivered in one execution");
 }
+
+await send('/option retry 2');
+await send('/option jev observe');
+untaggedIntentCalls = 0;
+await send('/batch start');
+await send('Jev observation fixture');
+await send('/batch send');
+if (untaggedIntentCalls !== 1) throw new Error('Observe mode changed continuation');
+await send('/option jev on');
+untaggedIntentCalls = 0;
+await send('/batch start');
+await send('Jev continuation fixture');
+await send('/batch send');
+if (untaggedIntentCalls !== 2) throw new Error('Enabled Jev did not continue the untagged progress response');
+await send('/option jev off');
+untaggedIntentCalls = 1;
 
 providerMode = "missing-evidence";
 await send("/batch start");

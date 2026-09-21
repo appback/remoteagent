@@ -1,6 +1,6 @@
 # Server Account Login
 
-Send `/login` in Telegram and select GitHub, Codex, or Claude.
+Send `/login` in Telegram and select GitHub, Codex, Claude, or Jev / OpenRouter.
 `/help` lists this entry once. Telegram's slash-command menu offers `/login`;
 provider names are chosen with buttons, not subcommand autocomplete.
 The login applies to the RemoteAgent OS account on that server. Existing
@@ -13,7 +13,14 @@ Direct commands:
 /login git
 /login codex
 /login claude
+/login jev
+/login <OPENROUTER_API_KEY>
 ```
+
+Jev is API-key authentication, not a CLI/browser device login. In an owner-only
+private chat, `/login <OPENROUTER_API_KEY>` validates the `sk-or-v1-` key with one
+small paid call and stores it in the server Secret Store. Mode remains unchanged;
+default is off. See [Jev setup and optional modes](JEV.md).
 
 GitHub uses `gh auth login --hostname github.com --git-protocol https --web`.
 Codex uses `codex login --device-auth`.

@@ -121,7 +121,9 @@ Current command surface implemented in `src/bot.ts`:
 | `/bot doctor` | Checks configured Telegram bots and removes bots that Telegram reports as permanently dead |
 | `/bot remove <username\|id>` | Removes a configured Telegram bot, restarts the runtime, and confirms the result after restart |
 | `/bot reload` | Restarts the runtime and confirms the result after restart |
-| `/install remoteagent\|codex\|claude` | Updates RemoteAgent through npm, or installs/updates a provider; owner only |
+| `/install remoteagent\|codex\|claude\|jev` | Updates RemoteAgent/providers, or guides built-in Jev setup; owner only |
+| `/login <API_KEY>` | Validates an OpenRouter key for optional Jev and stores it in the server Secret Store; private owner chat only |
+| `/option jev off\|observe\|on` | Optional Jev report classification; default off, no restart; see [Jev guide](docs/JEV.md) |
 | `/login` | Owner-only GitHub / Codex / Claude selection buttons; returns authentication URL and any device code, then reports completion |
 | `/login github\|codex\|claude` | Starts the selected login directly; `git` is an alias for `github` |
 | `/reset` | Clears the current chat binding |
