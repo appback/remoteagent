@@ -17,6 +17,7 @@ import { LoginService, MissingLoginToolError, type LoginTarget } from "./service
 import { buildProviderEnv } from "./adapters/runtime-env.js";
 import { requestSelfUpdate } from "./services/self-update-service.js";
 import { JevService } from "./services/jev-service.js";
+import { JevReviewGuard, JEV_REPORT_GUIDE, reviewRetryPrompt } from "./services/jev-review.js";
 import { RemoteShellService } from "./services/remote-shell-service.js";
 import { AgentMemoryService } from "./services/agent-memory-service.js";
 import { WorkspaceCleanupService } from "./services/workspace-cleanup-service.js";
@@ -66,6 +67,7 @@ const HELP_TEXT = [
   "/install - choose RemoteAgent, Codex or Claude",
   "/login <API_KEY> - connect Jev through OpenRouter",
   "/option jev off|observe|on",
+  "/option jev threshold <0.7> | /option jev retries <2>",
   "/login - choose GitHub, Codex or Claude",
   "/reset",
   "/! <command>",
@@ -842,7 +844,7 @@ ${bridge.formatStatus(mapping)}`);
     await ensureOwnerControlAccess(ctx);
     const botId = getBotId();
     const chatId = String(ctx.chat.id);
-    const { args } = parseCommand(ctx.message?.text, 2);
+    const { args, rest } = parseCommand(ctx.message?.text, 3);
     const option = args[0]?.toLowerCase();
     const value = args[1];
 
@@ -862,8 +864,12 @@ ${bridge.formatStatus(mapping)}`);
     }
 
     if (option === "jev") {
-      const status = value ? jev.setMode(value.toLowerCase()) : jev.status();
-      await reply(ctx, `Jev: ${status.mode}; key configured: ${status.configured}.\n/option jev off|observe|on\nServer-wide; no restart needed. observe records judgments only. on classifies untagged replies only; explicit REPORT tags, stop and retry limits remain authoritative. Text is sent to OpenRouter/TypeSafe. Images are not supported.`);
+      if (rest?.trim() || (args[2] && !["threshold", "retries"].includes(value ?? ""))) {
+        await reply(ctx, "/option jev off|observe|on | /option jev threshold 0.7 | /option jev retries 2"); return;
+      }
+      const status = value && ["threshold", "retries"].includes(value)
+        ? jev.setOption(value, args[2] ?? "") : value ? jev.setMode(value.toLowerCase()) : jev.status();
+      await reply(ctx, `Jev: ${status.mode}; key configured: ${status.configured}; threshold: ${status.threshold}; retries: ${status.maxRetries}.\n/option jev off|observe|on\n/option jev threshold 0.7\n/option jev retries 2\nServer-wide; no restart. Noul evaluates all returned reports. observe logs only. on requests correction, continues progress, or returns results. Stop, user approval and retry limits remain authoritative. Text is sent to OpenRouter/TypeSafe; images unsupported.`);
       return;
     }
     if (option !== "retry" && option !== "timeout" && option !== "intent" && option !== "reasoning" && option !== "command-menu") {
@@ -1508,7 +1514,7 @@ ${bridge.formatStatus(mapping)}`);
       }
       if (action.kind === "jev.login" || action.kind === "jev.option") {
         await ensureOwnerControlAccess(ctx);
-        await reply(ctx, action.kind === "jev.login" ? JEV_LOGIN_HELP : `Jev: ${jev.status().mode}; key configured: ${jev.status().configured}.\n/option jev off|observe|on\nobserve: judgments only. on: classify untagged replies. Optional text-only external API; errors preserve legacy behavior.`);
+        await reply(ctx, action.kind === "jev.login" ? JEV_LOGIN_HELP : `Jev: ${jev.status().mode}; threshold: ${jev.status().threshold}; retries: ${jev.status().maxRetries}; key configured: ${jev.status().configured}.\n/option jev off|observe|on\n/option jev threshold 0.7\n/option jev retries 2\nNoul reviews all returned reports. Errors preserve legacy behavior.`);
         return;
       }
       if (action.kind === "login.install") {
@@ -2135,6 +2141,12 @@ async function routeTelegramWorkLoop(
     throw error;
   }
   let prompt = appendManagedContext(appendReportProtocol(message), managedContext);
+  const reviewGuard = new JevReviewGuard();
+  const withReviewGuide = (text: string) => {
+    const status = jev.status();
+    return status.mode !== "off" && status.configured ? `${text}\n\n${JEV_REPORT_GUIDE}` : text;
+  };
+  prompt = withReviewGuide(prompt);
   const maxTurns = options.maxTurns ?? config.telegramAutoProgressMaxTurns;
   const emptyResponseRetries = config.telegramEmptyResponseRetries;
   const retryableErrorRetries = config.telegramRetryableErrorRetries;
@@ -2189,7 +2201,9 @@ async function routeTelegramWorkLoop(
       const limitMessage = `Automatic continue limit (${maxTurns}) reached before a final result.`;
       await bridge.logSystem(botId, chatId, limitMessage);
       autoContinue.clear(botId, chatId, sessionId);
-      return [limitMessage];
+      return [reviewGuard.previous
+        ? `${limitMessage}\nJev 재확인 대기 중 전체 실행 한도에 도달했습니다. 미해결 항목: ${reviewGuard.previous.issues.join(", ")}. 완료로 처리하지 않았습니다.`
+        : limitMessage];
     }
 
     if (autoContinue.isStopRequested(botId, chatId, sessionId)) {
@@ -2209,16 +2223,33 @@ async function routeTelegramWorkLoop(
         : await bridge.routeMessage(botId, chatId, prompt, deliverStreamedProgress);
       await ensureStillBound(`${turnLabel} response`);
       const parsed = parseReportResponses(bridge.formatResponses(responses), transform);
-      const decision = await jev.classify(message, parsed.chunks.join("\n"), parsed.kind);
-      if (decision.reason !== "legacy") {
+      const report = parsed.chunks.join("\n");
+      const decision = await jev.review(message, report, reviewGuard.previous,
+        { invocationReturned: true, providers: responses.map(r => ({ provider: r.provider, model: r.model })) });
+      if (decision.available || decision.reason !== "disabled") {
         await bridge.logSystem(botId, chatId, `Jev report decision: ${JSON.stringify(decision)}`);
         // Recheck stop/binding after the optional external call, before any continuation.
-        await ensureStillBound(`${turnLabel} optional classification`);
+        await ensureStillBound(`${turnLabel} optional review`);
         if (autoContinue.isStopRequested(botId, chatId, sessionId)) {
           return [...parsed.chunks, "Automatic continuation stopped."];
         }
       }
-      parsed.kind = decision.kind;
+      if (decision.available && decision.mode === "on") {
+        // An explicit request for user intervention is never turned into automatic work.
+        const next = parsed.kind === "blocked" ? "blocked"
+          : reviewGuard.next(decision, report, decision.threshold, decision.maxRetries);
+        if (next === "retry" || next === "retry_limit" || next === "no_improvement") {
+          const reason = next === "retry" ? "재확인 요청" : next === "no_improvement" ? "지적 사항 개선 없음으로 자동 재평가 중단" : "재평가 횟수 한도로 중단";
+          const notice = `Jev: ${reason} (${reviewGuard.attempts}/${decision.maxRetries}).\n미해결 항목: ${decision.issues.join(", ")}\nNoul: ${JSON.stringify(decision.scores)}\n완료로 처리하지 않았습니다.`;
+          if (currentSession) await memoryService.recordProgress(currentSession.session, notice);
+          if (next !== "retry") return [...parsed.chunks, notice];
+          await helpers.reportProgress([...parsed.chunks, notice]);
+          if (autoContinue.isStopRequested(botId, chatId, sessionId)) return ["Automatic continuation stopped."];
+          prompt = appendManagedContext(appendReportProtocol(reviewRetryPrompt(message, reviewGuard.previous!)), managedContext);
+          continue;
+        }
+        parsed.kind = next;
+      } else reviewGuard.resetComparison();
       await bridge.logSystem(botId, chatId, `${turnLabel} returned ${parsed.kind}.`);
       emptyResponseRetryCount = 0;
       retryableErrorCount = 0;
@@ -2240,7 +2271,7 @@ async function routeTelegramWorkLoop(
           autoContinue.clear(botId, chatId, sessionId);
           return [stopMessage];
         }
-        prompt = appendManagedContext(REPORT_CONTINUE_PROMPT, managedContext);
+        prompt = withReviewGuide(appendManagedContext(REPORT_CONTINUE_PROMPT, managedContext));
         continue;
       }
 
@@ -2283,7 +2314,9 @@ async function routeTelegramWorkLoop(
         const retryMessage = `${turnLabel} returned an empty response; retrying automatic continuation (${emptyResponseRetryCount}/${emptyResponseRetries}).`;
         console.warn(`[telegram-route] bot=${botId} chat=${chatId} ${retryMessage}`);
         await bridge.logSystem(botId, chatId, retryMessage);
-        prompt = appendManagedContext(REPORT_CONTINUE_PROMPT, managedContext);
+        prompt = reviewGuard.previous
+          ? appendManagedContext(appendReportProtocol(reviewRetryPrompt(message, reviewGuard.previous)), managedContext)
+          : withReviewGuide(appendManagedContext(REPORT_CONTINUE_PROMPT, managedContext));
         continue;
       }
 
@@ -2300,7 +2333,9 @@ async function routeTelegramWorkLoop(
           return [stopMessage];
         }
         await sleep(retryable.retryAfterMs);
-        prompt = appendManagedContext(REPORT_CONTINUE_PROMPT, managedContext);
+        prompt = reviewGuard.previous
+          ? appendManagedContext(appendReportProtocol(reviewRetryPrompt(message, reviewGuard.previous)), managedContext)
+          : withReviewGuide(appendManagedContext(REPORT_CONTINUE_PROMPT, managedContext));
         continue;
       }
 

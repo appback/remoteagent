@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { JevService } from '../dist/services/jev-service.js';
+import { assessReview, JevReviewGuard, reviewRetryPrompt } from '../dist/services/jev-review.js';
 import { readSecretValue, AgentMemoryService } from '../dist/services/agent-memory-service.js';
 
 const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'remoteagent-jev-'));
@@ -13,6 +14,8 @@ let scenario = 'success';
 let choice = 'progress';
 let confidence = 0.99;
 let lastBody;
+const good = { aligned: 0.95, supported: 0.9, clear: 0.9, complete: 0.9, continuable: 0.1, needs_user: 0.1, improved: 0.9 };
+let scores = { ...good };
 const fetcher = async (url, init) => {
   calls++;
   assert.equal(url, 'https://openrouter.ai/api/alpha/decisions');
@@ -26,7 +29,7 @@ const fetcher = async (url, init) => {
   if (scenario === 'large') return new Response('x'.repeat(131073));
   if (scenario === 'echo') return new Response(JSON.stringify({ model: key, answers: {} }));
   const answers = Object.fromEntries(Object.entries(lastBody.questions).map(([id, q]) => [id,
-    q.type === 'noul' ? { type: q.type, noul: 1 } : q.type === 'score'
+    q.type === 'noul' ? { type: q.type, noul: scores[id] ?? 1 } : q.type === 'score'
       ? { type: q.type, score: 1, confidence: 1, probabilities: {0: 0, 1: 1} }
       : { type: q.type, choice, confidence, probabilities: Object.fromEntries(Object.keys(q.criteria).map(k => [k, k === choice ? 1 : 0])) }
   ]));
@@ -52,20 +55,48 @@ try {
   assert.ok(!(await memory.formatProviderContext(session)).includes('REMOTEAGENT_JEV_BIN'));
   service.setMode('observe');
   assert.ok((await memory.formatProviderContext(session)).includes('REMOTEAGENT_JEV_BIN'));
-  let r = await service.classify('Finish the task', 'More tests remain', 'unknown');
-  assert.equal(r.kind, 'unknown'); assert.equal(r.suggested, 'progress');
+  let r = await service.review('Finish the task', 'Report');
+  assert.equal(r.mode, 'observe'); assert.equal(r.action, 'result');
+  assert.equal(Object.keys(lastBody.questions).length, 7);
+  assert.ok(Object.values(lastBody.questions).every(q => q.type === 'noul'));
   service.setMode('on');
-  for (const label of ['progress', 'result', 'blocked', 'unknown']) {
-    choice = label;
-    r = await service.classify('Task', 'Report', 'unknown');
-    assert.equal(r.kind, label);
-  }
-  const before = calls;
-  assert.equal((await service.classify('Task', 'Report', 'result')).kind, 'result');
-  assert.equal(calls, before, 'Explicit tags remain authoritative');
-  choice = 'progress'; confidence = 0.5;
-  assert.equal((await service.classify('Task', 'Report', 'unknown')).kind, 'unknown');
-  confidence = 0.99;
+  assert.equal(service.status().threshold, 0.7);
+  assert.equal(service.status().maxRetries, 2);
+  service.setOption('threshold', '0.8');
+  service.setOption('retries', '3');
+  service.setMode('observe'); service.setMode('on');
+  assert.equal(new JevService(dir).status().threshold, 0.8);
+  assert.equal(service.status().maxRetries, 3);
+  for (const value of ['', 'NaN', '0.5', '1.1']) assert.throws(() => service.setOption('threshold', value));
+  for (const value of ['', '-1', '2.5', '6']) assert.throws(() => service.setOption('retries', value));
+  service.setOption('threshold', '0.7'); service.setOption('retries', '2');
+  scores = { ...good, complete: 0.1, continuable: 0.9 };
+  assert.equal((await service.review('Task', 'REPORT:result\nStill working')).action, 'progress');
+  scores = { ...good, supported: 0.6 };
+  r = await service.review('Task', 'REPORT:result\nDone');
+  assert.equal(r.action, 'retry'); assert.deepEqual(r.issues, ['supported']);
+  scores = { ...good, supported: 0.7 };
+  assert.equal((await service.review('Task', 'Report')).action, 'result', 'Threshold is inclusive');
+  scores = { ...good, needs_user: 0.9 };
+  assert.equal((await service.review('Task', 'Report')).action, 'blocked');
+  scores = { ...good, complete: 0.9, continuable: 0.9 };
+  assert.equal((await service.review('Task', 'Report')).action, 'retry');
+  const guard = new JevReviewGuard();
+  const bad = assessReview({ ...good, supported: 0.1 }, 0.7);
+  assert.equal(guard.next(bad, 'First', 0.7, 2), 'retry');
+  assert.equal(guard.next({ ...bad, scores: { ...bad.scores, improved: 0.1 } }, 'Reworded', 0.7, 2), 'no_improvement');
+  assert.equal(guard.attempts, 1);
+  assert.equal(guard.next(bad, 'New evidence, still incomplete', 0.7, 2), 'retry');
+  assert.equal(guard.next(bad, 'Third', 0.7, 2), 'retry_limit');
+  assert.equal(guard.next(assessReview(good, 0.7), 'Fixed', 0.7, 2), 'result');
+  assert.equal(guard.previous, undefined);
+  assert.equal(guard.attempts, 2, 'Budget spans the entire instruction');
+  assert.equal(new JevReviewGuard().next(bad, 'Fail', 0.7, 0), 'retry_limit');
+  const previous = { report: 'Previous report', issues: ['supported'] };
+  await service.review('Current request', 'New report', previous);
+  assert.deepEqual(lastBody.state.previousReview, previous);
+  assert.ok(lastBody.state.evidenceSource.includes('agent-declared'));
+  assert.ok(reviewRetryPrompt('Task', previous).includes('Do not undo or repeat completed work'));
   assert.equal((await service.evaluate({ ...request, inputType: 'image' })).reason, 'image_unsupported');
   assert.equal((await service.evaluate({ ...request, state: 'x'.repeat(33000) })).reason, 'invalid_or_oversized_request');
   assert.equal((await service.evaluate({ ...request, state: key })).available, false);
@@ -75,8 +106,8 @@ try {
   for (const failure of ['401', '429', 'invalid', 'large', 'echo', 'timeout']) {
     scenario = failure;
     const failing = new JevService(dir, fetcher, 10);
-    r = await failing.classify('Task', 'Report', 'unknown');
-    assert.equal(r.kind, 'unknown');
+    r = await failing.review('Task', 'Report');
+    assert.equal(r.available, false);
     const after = calls;
     assert.equal((await failing.evaluate(request)).reason, 'busy_or_cooldown');
     assert.equal(calls, after);
@@ -92,16 +123,16 @@ try {
     await new Promise(resolve => { release = resolve; });
     return fetcher(...args);
   });
-  const inFlight = gated.classify('Task', 'Report', 'unknown');
+  const inFlight = gated.review('Task', 'Report');
   await new Promise(resolve => setTimeout(resolve, 0));
   assert.equal((await gated.evaluate(request)).reason, 'busy_or_cooldown');
   gated.setMode('off');
   release();
-  assert.equal((await inFlight).kind, 'unknown', 'Disabling during a request must prevent applying its decision');
+  assert.equal((await inFlight).mode, 'off', 'Disabling during a request must prevent applying its decision');
   service.setMode('off');
   const file = path.join(dir, 'request.json');
   await fs.writeFile(file, JSON.stringify(request));
   const output = execFileSync(process.execPath, ['bin/remoteagent.js', 'jev', 'evaluate', file, '--data-dir', dir], { encoding: 'utf8' });
   assert.equal(JSON.parse(output).reason, 'disabled');
-  console.log('PASS Jev: optional modes, auth, storage, classification, explicit tags, low confidence, image refusal, schema/size guards, timeout, cooldown, redaction and CLI fallback');
+  console.log('PASS Jev: Noul review, thresholds, retries, no-improvement, auth, modes, bounded API, redaction and CLI fallback');
 } finally { await fs.rm(dir, { recursive: true, force: true }); }

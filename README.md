@@ -125,7 +125,9 @@ Current command surface implemented in `src/bot.ts`:
 | `/login <API_KEY>` | Validates an OpenRouter key for optional Jev and stores it in the server Secret Store; private owner chat only |
 | `/version` or `/v` | Shows the RemoteAgent version running on the receiving server without invoking an agent |
 | `/install` | Owner-only RemoteAgent / Codex / Claude installation and update selection buttons |
-| `/option jev off\|observe\|on` | Optional Jev report classification; default off, no restart; see [Jev guide](docs/JEV.md) |
+| `/option jev off\|observe\|on` | Optional Noul report review; default off, no restart; see [Jev guide](docs/JEV.md) |
+| `/option jev threshold 0.7` | Inclusive Noul acceptance threshold; greater than 0.5 through 1 |
+| `/option jev retries 2` | Correction budget per instruction, 0-5; stop earlier when issues do not improve |
 | `/login` | Owner-only GitHub / Codex / Claude selection buttons; returns authentication URL and any device code, then reports completion |
 | `/login github\|codex\|claude` | Starts the selected login directly; `git` is an alias for `github` |
 | `/reset` | Clears the current chat binding |

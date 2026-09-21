@@ -86,11 +86,20 @@ process.env.LOCAL_UI_ENABLED = "false";
 process.env.TELEGRAM_SELFTEST_RATE_LIMIT_FILE = rateLimitOnce;
 
 let jevApiCalls = 0;
+const goodReview = { aligned: 0.95, supported: 0.95, clear: 0.95, complete: 0.95, continuable: 0.05, needs_user: 0.05, improved: 0.95 };
+let reviewFixtures = [];
+let reviewHook;
+let reviewFailure = false;
 globalThis.fetch = async (url, init) => {
   if (String(url) !== 'https://openrouter.ai/api/alpha/decisions') throw new Error('Unexpected network request');
   jevApiCalls++;
   const body = JSON.parse(init.body);
-  return new Response(JSON.stringify({ model: 'typesafe/mock', answers: Object.fromEntries(Object.entries(body.questions).map(([id, q]) => [id, q.type === 'noul' ? { type: 'noul', noul: 1 } : { type: 'choice', choice: 'progress', confidence: 1, probabilities: {progress: 1, result: 0, blocked: 0, unknown: 0} }])) }));
+  if (body.questions.aligned) {
+    if (reviewHook) await reviewHook();
+    if (reviewFailure) return new Response('synthetic unavailable', { status: 503 });
+  }
+  const scores = body.questions.aligned ? (reviewFixtures.shift() ?? goodReview) : {};
+  return new Response(JSON.stringify({ model: 'typesafe/mock', answers: Object.fromEntries(Object.entries(body.questions).map(([id]) => [id, { type: 'noul', noul: scores[id] ?? 1 }])) }));
 };
 
 const [
@@ -851,10 +860,51 @@ await send('/batch send');
 if (untaggedIntentCalls !== 1) throw new Error('Observe mode changed continuation');
 await send('/option jev on');
 untaggedIntentCalls = 0;
+reviewFixtures = [{ ...goodReview, complete: 0.05, continuable: 0.95 }, goodReview];
 await send('/batch start');
 await send('Jev continuation fixture');
 await send('/batch send');
 if (untaggedIntentCalls !== 2) throw new Error('Enabled Jev did not continue the untagged progress response');
+await send('/option retry 6');
+await send('/option jev threshold 0.75');
+await waitForTelegramCall(call => call.text.includes('threshold: 0.75'));
+await send('/option jev retries 2');
+providerMode = 'explicit-status';
+const badReview = { ...goodReview, supported: 0.1 };
+async function reviewCase(outputs, evaluations, expectedCalls) {
+  explicitResponses = [...outputs]; reviewFixtures = [...evaluations];
+  const before = providerCalls.length;
+  await send('/batch start');
+  await send('Synthetic report review request');
+  await send('/batch send');
+  if (providerCalls.length !== before + expectedCalls) throw new Error(`Unexpected review invocation count: ${providerCalls.length - before}`);
+  return providerCalls.slice(before);
+}
+const corrected = await reviewCase(['REPORT:result\nUnsupported completion', 'REPORT:result\nCorrected final with evidence'], [badReview, goodReview], 2);
+if (!corrected[1].message?.includes('Review issues: supported') && !JSON.stringify(corrected[1]).includes('Review issues: supported')) throw new Error('Review correction did not reach provider');
+await waitForTelegramCall(call => call.text.includes('Corrected final with evidence'));
+await reviewCase(['REPORT:result\nFirst unsupported claim', 'REPORT:result\nSame unsupported claim'], [badReview, { ...badReview, improved: 0.1 }], 2);
+await waitForTelegramCall(call => call.text.includes('지적 사항 개선 없음'));
+await reviewCase(['REPORT:result\nInitial', 'REPORT:result\nPartial correction', 'REPORT:result\nStill insufficient'], [badReview, badReview, badReview], 3);
+await waitForTelegramCall(call => call.text.includes('재평가 횟수 한도'));
+await reviewCase(['REPORT:blocked\nApproval required'], [goodReview], 1);
+await reviewCase(['REPORT:result\nAwaiting user input'], [{ ...goodReview, needs_user: 0.95 }], 1);
+let reviewStarted, releaseReview;
+const startedReview = new Promise(resolve => { reviewStarted = resolve; });
+const heldReview = new Promise(resolve => { releaseReview = resolve; });
+reviewHook = async () => { reviewStarted(); await heldReview; };
+const stoppedReview = reviewCase(['REPORT:result\nStop while reviewing'], [badReview], 1);
+await startedReview;
+await send('/stop');
+releaseReview();
+await stoppedReview;
+reviewHook = undefined;
+reviewFailure = true;
+await reviewCase(['REPORT:result\nLegacy fallback on unavailable Jev'], [], 1);
+await waitForTelegramCall(call => call.text.includes('Legacy fallback on unavailable Jev'));
+reviewFailure = false;
+await send('/option jev threshold 0.7');
+await send('/option retry 2');
 await send('/option jev off');
 untaggedIntentCalls = 1;
 
