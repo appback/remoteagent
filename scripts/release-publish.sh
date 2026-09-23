@@ -48,6 +48,7 @@ cd "$STAGING_DIR"
 npm ci --ignore-scripts
 npm run check
 npm run build
+npm run selftest:provider-install
 
 TARBALL="$(npm pack --silent)"
 

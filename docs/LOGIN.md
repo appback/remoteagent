@@ -52,9 +52,24 @@ Local regression tests:
 
 ```sh
 npm run build
+npm run selftest:provider-install
 node scripts/selftest-login.mjs
 npm run selftest:telegram
 ```
+
+## macOS Installation Hooks
+
+Provider hooks work without `~/.profile` (the usual zsh setup) and retain an
+existing profile when present. `~/.local/bin` is added to PATH before installation.
+Codex's npm-installed executable is reused directly when npm's bin directory is
+already `~/.local/bin`; a link is created only for a different physical directory.
+This also keeps repeated installs from replacing the executable with a self-link.
+
+Run `npm run selftest:provider-install` on Linux and macOS to verify both npm
+prefix layouts, missing/existing profiles and repeated installation using mock
+executables. It neither calls real providers nor installs npm packages. The npm
+publish script runs this test against its clean release snapshot. On macOS it
+uses `/bin/bash` to cover the system Bash 3.2 behavior.
 
 CLI references: https://cli.github.com/manual/gh_auth_login and
 https://code.claude.com/docs/en/cli-reference.

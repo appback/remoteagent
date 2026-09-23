@@ -74,6 +74,7 @@ The publish script performs:
 - `npm run build`
 - `npm pack`
 - guarded `npm publish`
+- provider installation regression tests in the clean staging snapshot before publishing
 - exact published version and `latest` dist-tag verification with bounded propagation retries
 
 The package publish entrypoint is `npm run release:publish`.
