@@ -118,6 +118,7 @@ Current command surface implemented in `src/bot.ts`:
 | `/bots` | Lists the currently configured Telegram bots |
 | `/macro [alias\|number]` | Lists stored macros or runs one against the current session |
 | `/bot add <token>` | Adds a conversation bot, restarts the runtime, and confirms the result after restart |
+| `/peer` | Invite/register peer bots, open BotFather guidance and verify Telegram roundtrips; [setup guide](docs/PEERS.md). Task forwarding is not yet implemented. |
 | `/bot doctor` | Checks configured Telegram bots and removes bots that Telegram reports as permanently dead |
 | `/bot remove <username\|id>` | Removes a configured Telegram bot, restarts the runtime, and confirms the result after restart |
 | `/bot reload` | Restarts the runtime and confirms the result after restart |

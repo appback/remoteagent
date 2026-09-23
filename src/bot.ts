@@ -17,6 +17,7 @@ import { LoginService, MissingLoginToolError, type LoginTarget } from "./service
 import { buildProviderEnv } from "./adapters/runtime-env.js";
 import { requestSelfUpdate } from "./services/self-update-service.js";
 import { JevService } from "./services/jev-service.js";
+import { PeerService, PEER_PREFIX } from "./services/peer-service.js";
 import { JevReviewGuard, JEV_REPORT_GUIDE, reviewRetryPrompt } from "./services/jev-review.js";
 import { RemoteShellService } from "./services/remote-shell-service.js";
 import { AgentMemoryService } from "./services/agent-memory-service.js";
@@ -60,6 +61,7 @@ const HELP_TEXT = [
   "/매크로 set|list|remove|<alias|number>",
   "/보강 <count>",
   "/bots",
+  "/peer [invite|add <alias> <invite>|check <alias>|remove <alias-or-invite-id>]",
   "/bot add <token>",
   "/bot doctor",
   "/bot remove <username|id>",
@@ -149,6 +151,7 @@ type QueuedWorkLoopEntry = {
 };
 
 type InlineAction =
+  | { kind: "peer.check"; alias: string }
   | { kind: "install.run"; target: "remoteagent" | "codex" | "claude" }
   | { kind: "jev.login" }
   | { kind: "jev.option" }
@@ -312,6 +315,7 @@ class AutoContinueController {
 export function createBot(token: string, bridge: BridgeService, botManagement: BotManagementService, botInfo: UserFromGetMe): Bot {
   const bot = new Bot(token, { botInfo });
   const inlineActions = new InlineActionRegistry();
+  const peers = new PeerService(config.dataDir, String(botInfo.id));
   const autoContinue = new AutoContinueController(path.join(config.dataDir, "stop-gates.json"));
   const shellService = new RemoteShellService(config.commandTimeoutMs);
   const memoryService = new AgentMemoryService(config.dataDir);
@@ -487,7 +491,32 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
     });
   };
 
+  const checkPeer = async (ctx: Context, alias: string) => {
+    await ensureOwnerControlAccess(ctx);
+    const probe = peers.probe(alias);
+    try {
+      await callTelegramApi(token, "sendMessage", { chat_id: probe.target, text: probe.text });
+    } catch {
+      await reply(ctx, "Peer 전송 실패. 양쪽 BotFather의 Bot-to-Bot 모드와 네트워크를 확인하세요. 연결 완료로 처리하지 않았습니다. /peer에서 60초 후 다시 확인할 수 있습니다.");
+      return;
+    }
+    await reply(ctx, "검증 요청 전송 완료. 상대 RemoteAgent의 확인 응답을 기다립니다. 아직 연결 완료가 아닙니다. 응답 대기는 10분이며 /peer에서 상태를 확인하세요.");
+  };
+
   bot.use(async (ctx, next) => {
+    // Bot protocol messages never enter command, logging, memory or provider paths.
+    if (ctx.from?.is_bot) {
+      if (ctx.message?.text && ctx.chat?.type === "private" && ctx.chat.id === ctx.from.id) {
+        try {
+          const result = await peers.receive(String(ctx.from.id), ctx.message.text,
+            (sessionId, chatId) => bridge.isChatBoundToSession(getBotId(), chatId, sessionId));
+          if (result && "text" in result) await callTelegramApi(token, "sendMessage", { chat_id: result.target, text: result.text });
+          if (result?.notice) await sendTelegramMessage(token, Number(result.ownerChat), result.notice);
+        } catch { console.warn("Peer protocol handling failed; no task was executed."); }
+      }
+      return;
+    }
+    if (ctx.message?.text?.startsWith(PEER_PREFIX)) return;
     const updateKind = Object.keys(ctx.update).join(",");
     const text = ctx.message?.text ?? ctx.editedMessage?.text ?? ctx.channelPost?.text ?? "";
     const safeText = sanitizeLoggedTelegramText(text);
@@ -523,6 +552,39 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
       return;
     }
     await next();
+  });
+
+  bot.command("peer", async (ctx) => {
+    await ensureOwnerControlAccess(ctx);
+    const { args, rest } = parseCommand(ctx.message?.text, 3);
+    if (rest?.trim()) { await reply(ctx, "Usage: /peer invite | /peer add <alias> <invite> | /peer check <alias> | /peer remove <alias-or-invite-id>"); return; }
+    const [action, alias, invitation] = args;
+    if (action === "invite" && !alias) {
+      const current = await bridge.status(getBotId(), String(ctx.chat.id));
+      if (!current) { await reply(ctx, "먼저 요청받을 세션을 /start 또는 /switch로 선택하세요."); return; }
+      const encoded = peers.invite(botInfo.username, current.session.sessionId, String(ctx.chat.id));
+      await reply(ctx, `수신 대상: ${current.session.publicId}\nA 봇에서 /peer add <별칭> <아래 초대 정보>\n초대는 30분간 유효하며 한 발신 봇에만 연결됩니다. 소유자 외에는 공유하지 마세요. 양쪽 BotFather에서 Bot-to-Bot Communication Mode를 활성화해야 합니다.\n\n${encoded}`, keyboardOptions([[{ text: "BotFather 설정", url: "https://t.me/BotFather" }]]));
+      return;
+    }
+    if (action === "add" && alias && invitation) {
+      peers.add(alias, invitation, String(ctx.chat.id));
+      await callTelegramApi(token, "deleteMessage", { chat_id: String(ctx.chat.id), message_id: String(ctx.message!.message_id) }).catch(() => undefined);
+      await reply(ctx, `${alias}: 대상 저장 완료, 연결 미검증. 양쪽 봇 소유자가 BotFather에서 Bot-to-Bot Communication Mode를 활성화한 후 연결 검증을 누르세요. 이 명령은 Telegram 설정 자체를 변경하지 않습니다.`, keyboardOptions([
+        [{ text: "BotFather 설정", url: "https://t.me/BotFather" }],
+        [actionButton(ctx, "연결 검증", { kind: "peer.check", alias })],
+      ]));
+      return;
+    }
+    if (action === "check" && alias && !invitation) { await checkPeer(ctx, alias); return; }
+    if (action === "remove" && alias && !invitation) { peers.remove(alias); await reply(ctx, "로컬 Peer 연결/초대 제거 완료. 상대 측 기록은 상대 소유자가 제거해야 합니다."); return; }
+    if (action) { await reply(ctx, "Usage: /peer invite | /peer add <alias> <invite> | /peer check <alias> | /peer remove <alias-or-invite-id>"); return; }
+    const state = peers.list();
+    const lines = state.links.map(l => `${l.alias} → @${l.username} (${l.remote}): ${l.verifiedAt ? `최종 왕복 확인 ${new Date(l.verifiedAt).toISOString()}` : l.sentAt && Date.now() - l.sentAt < 600_000 ? "확인 응답 대기" : "미검증/응답 없음"}`);
+    lines.push(...state.incoming.map(g => `수신 ${g.id}: ${g.sender ?? "초대 미사용"} → ${g.sessionId}`));
+    await reply(ctx, `Peer 연결 설정\n${lines.join("\n") || "등록된 대상 없음"}\n\n/peer invite\n/peer add <별칭> <초대>\n/peer check <별칭>\n/peer remove <별칭 또는 초대 ID>\n작업 전달은 아직 제공하지 않습니다.`, keyboardOptions([
+      [{ text: "BotFather 설정", url: "https://t.me/BotFather" }],
+      ...state.links.slice(0, 10).map(l => [actionButton(ctx, `${l.alias} 연결 검증`, { kind: "peer.check" as const, alias: l.alias })]),
+    ]));
   });
 
   bot.command("start", async (ctx) => {
@@ -1508,6 +1570,7 @@ ${bridge.formatStatus(mapping)}`);
     });
 
     try {
+      if (action.kind === "peer.check") { await checkPeer(ctx, action.alias); return; }
       if (action.kind === "install.run") {
         await runInstall(ctx, action.target);
         return;
@@ -1929,6 +1992,7 @@ class TelegramMessageBatcher {
 
 function sanitizeLoggedTelegramText(text: string): string {
   const trimmed = text.trim();
+  if (/^\/peer(?:@\w+)?\s+add\b/i.test(trimmed)) return "/peer add [redacted]";
   if (/^\/login(?:@\w+)?\s+sk-or-/i.test(trimmed)) return "/login [redacted]";
   if (/^\/bot\s+add\s+/i.test(trimmed)) {
     return "/bot add [redacted]";

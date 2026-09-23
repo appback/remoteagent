@@ -388,14 +388,15 @@ async function pollTelegramBot(
 }
 
 function hasMessagePayload(update: TelegramUpdate): boolean {
-  return Boolean(update.message || update.edited_message || update.channel_post);
+  const message = update.message || update.edited_message || update.channel_post;
+  return Boolean(message && !message.from?.is_bot);
 }
 
 type TelegramUpdate = {
   update_id: number;
-  message?: { text?: string };
-  edited_message?: { text?: string };
-  channel_post?: { text?: string };
+  message?: { text?: string; from?: { is_bot?: boolean } };
+  edited_message?: { text?: string; from?: { is_bot?: boolean } };
+  channel_post?: { text?: string; from?: { is_bot?: boolean } };
 };
 
 function orderUpdatesForDispatch(updates: TelegramUpdate[]): TelegramUpdate[] {
@@ -407,6 +408,7 @@ function orderUpdatesForDispatch(updates: TelegramUpdate[]): TelegramUpdate[] {
 }
 
 function isStopCommandUpdate(update: TelegramUpdate): boolean {
+  if ((update.message || update.edited_message || update.channel_post)?.from?.is_bot) return false;
   const text = update.message?.text ?? update.edited_message?.text ?? update.channel_post?.text ?? "";
   return /^\/stop(?:@\w+)?(?:\s|$)/i.test(text.trim());
 }

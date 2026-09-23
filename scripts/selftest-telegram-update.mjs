@@ -1065,6 +1065,34 @@ queueHoldReleaseResolve();
 await stoppedRun;
 if (providerCalls.length !== stopBefore + 1) throw new Error("Stop allowed automatic continuation");
 
+const { PeerService, PEER_PREFIX } = await import('../dist/services/peer-service.js');
+const peerBefore = providerCalls.length;
+const testPeer = new PeerService(dataDir, '999002');
+const invite = testPeer.invite('peer_test_bot', 'remote-session', '111');
+await send(`/peer add remote ${invite}`);
+const peerMenu = await waitForTelegramCall(call => call.text.includes('remote: 대상 저장 완료'));
+if (!findInlineButton(peerMenu, 'BotFather 설정')?.url) throw new Error('Missing BotFather guide');
+await click(findInlineButton(peerMenu, '연결 검증').callback_data);
+const request = await waitForTelegramCall(call => call.text.startsWith(PEER_PREFIX));
+const ack = await testPeer.receive('999001', request.text, async () => true);
+if (!ack?.text) throw new Error('Mock peer failed to respond');
+const botMessage = update(ack.text);
+botMessage.message.from = { id: 999002, is_bot: true, first_name: 'Peer' };
+botMessage.message.chat = { id: 999002, type: 'private', first_name: 'Peer' };
+await injectedBot.handleUpdates([botMessage]);
+await waitForTelegramCall(call => call.text.includes('remote: Telegram 왕복 연결 검증 완료'));
+await injectedBot.handleUpdates([{ ...botMessage, update_id: updateId++ }]);
+const unknownBot = update('/start');
+unknownBot.message.from = { id: 999003, is_bot: true, first_name: 'Unknown' };
+unknownBot.message.chat = { id: 999003, type: 'private', first_name: 'Unknown' };
+await injectedBot.handleUpdates([unknownBot]);
+if (await bridge.status('remoteagent_test_bot', '999003')) throw new Error('Bot message created a session');
+if (providerCalls.length !== peerBefore) throw new Error('Peer setup invoked a provider');
+if (capturedLogs.join('\n').includes(invite) || capturedLogs.join('\n').includes(request.text)) throw new Error('Peer invitation/protocol leaked to logs');
+await send('/peer');
+await waitForTelegramCall(call => call.text.includes('최종 왕복 확인'));
+await send('/peer remove remote');
+
 console.log(JSON.stringify({
   ok: true,
   dataDir,
