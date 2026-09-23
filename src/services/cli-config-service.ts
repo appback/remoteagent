@@ -25,6 +25,7 @@ type TelegramGetUpdatesResponse = {
   result?: Array<{
     update_id?: number;
     message?: {
+      date?: number;
       text?: string;
       chat?: { id?: number; type?: string };
       from?: {
@@ -230,16 +231,12 @@ export async function fetchTelegramBotIdentity(token: string): Promise<TelegramB
 
 export async function waitForTelegramOwner(
   token: string,
-  startPayload: string,
-  timeoutMs = 180_000,
+  timeoutMs = Number.POSITIVE_INFINITY,
 ): Promise<TelegramOwnerIdentity> {
   assertBotToken(token);
-  if (!/^[A-Za-z0-9_-]{1,64}$/.test(startPayload)) {
-    throw new Error("Telegram start payload must use 1-64 URL-safe characters.");
-  }
 
   const startedAt = Date.now();
-  let offset = await nextTelegramUpdateOffset(token);
+  let offset = 0;
   while (Date.now() - startedAt < timeoutMs) {
     const remainingMs = timeoutMs - (Date.now() - startedAt);
     const pollSeconds = Math.max(1, Math.min(15, Math.floor(remainingMs / 1000)));
@@ -254,7 +251,10 @@ export async function waitForTelegramOwner(
         message?.chat?.type !== "private"
         || sender?.is_bot
         || typeof sender?.id !== "number"
-        || message.text?.trim() !== `/start ${startPayload}`
+        || message.chat.id !== sender.id
+        || typeof message.date !== "number"
+        || message.date < Math.floor(startedAt / 1000)
+        || message.text?.trim() !== "/start"
       ) {
         continue;
       }
@@ -266,13 +266,7 @@ export async function waitForTelegramOwner(
     }
   }
 
-  throw new Error("Timed out waiting for the Telegram owner confirmation. Run the command again and use the new /start link.");
-}
-
-async function nextTelegramUpdateOffset(token: string): Promise<number> {
-  const updates = await getTelegramUpdates(token, undefined, 0);
-  return updates.reduce((next, update) =>
-    typeof update.update_id === "number" ? Math.max(next, update.update_id + 1) : next, 0);
+  throw new Error("Timed out waiting for a new private /start message.");
 }
 
 async function getTelegramUpdates(token: string, offset: number | undefined, timeoutSeconds: number) {

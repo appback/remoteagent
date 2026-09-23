@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import { randomBytes } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -101,19 +100,17 @@ async function addBot(dataDir: string, args: string[]): Promise<void> {
   const configuredOwner = await readConfiguredOwnerId(dataDir);
   let ownerId = ownerOption || configuredOwner;
   if (!ownerId) {
-    const startPayload = `ra_${randomBytes(8).toString("hex")}`;
     console.log([
       `Validated @${identity.username} (${identity.id}).`,
       "",
-      "Open this Telegram link within 3 minutes to confirm the owner:",
-      `  https://t.me/${identity.username}?start=${startPayload}`,
+      "Open this bot and send /start from your own Telegram account:",
+      `  https://t.me/${identity.username}`,
       "",
-      "Or send this exact command to the bot:",
-      `  /start ${startPayload}`,
+      "The first new private /start registers that account as the owner.",
       "",
-      "Waiting for owner confirmation...",
+      "Waiting for /start. No confirmation code or expiry. Ctrl+C cancels.",
     ].join("\n"));
-    const owner = await waitForTelegramOwner(token, startPayload);
+    const owner = await waitForTelegramOwner(token);
     ownerId = owner.id;
     console.log(`Detected Telegram owner: ${owner.displayName}${owner.username ? ` (@${owner.username})` : ""} (${owner.id})`);
   }

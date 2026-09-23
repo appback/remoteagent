@@ -335,7 +335,7 @@ remoteagent bot add
 remoteagent-start
 ```
 
-The command validates the BotFather token and shows a one-time Telegram `/start` link. Open that link from the account that will own the installation; RemoteAgent detects the sender's numeric user ID and stores it as the owner automatically. The token is entered through a hidden prompt, and the owner ID does not need to be looked up or typed manually.
+The command validates the token and reuses a configured owner (or `--owner`) without extra confirmation. On first setup, open the displayed bot link and send ordinary `/start`: its first new private sender becomes the owner. No code or expiry is required; Ctrl+C cancels. Old messages are ignored. The token is entered through a hidden prompt. Owner registration does not create a coding session; start the runtime before creating one with `/start codex`.
 
 Remove a configured bot by username or numeric Bot ID, then restart the runtime:
 

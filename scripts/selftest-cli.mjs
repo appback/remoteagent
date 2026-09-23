@@ -8,6 +8,7 @@ import {
   fetchTelegramBotIdentity,
   registerTelegramBot,
   removeTelegramBot,
+  readConfiguredOwnerId,
   waitForTelegramOwner,
 } from "../dist/services/cli-config-service.js";
 import { buildProviderEnv, buildRuntimePath } from "../dist/adapters/runtime-env.js";
@@ -53,9 +54,9 @@ if printf '%s\\n' "$@" | grep -q '/getUpdates'; then
   count=$((count + 1))
   printf '%s' "$count" > ${JSON.stringify(curlUpdateCallsPath)}
   if [ "$count" -eq 1 ]; then
-    printf '{"ok":true,"result":[{"update_id":41,"message":{"text":"/start stale_payload","chat":{"id":777,"type":"private"},"from":{"id":777,"is_bot":false,"username":"stale"}}}]}'
+    printf '{"ok":true,"result":[{"update_id":41,"message":{"date":1,"text":"/start","chat":{"id":777,"type":"private"},"from":{"id":777,"is_bot":false,"username":"stale"}}}]}'
   else
-    printf '{"ok":true,"result":[{"update_id":42,"message":{"text":"/start ra_selftest","chat":{"id":8202993989,"type":"private"},"from":{"id":8202993989,"is_bot":false,"username":"roy","first_name":"Roy"}}}]}'
+    printf '{"ok":true,"result":[{"update_id":42,"message":{"date":%s,"text":"/start","chat":{"id":8202993989,"type":"private"},"from":{"id":8202993989,"is_bot":false,"username":"roy","first_name":"Roy"}}}]}' "$(date +%s)"
   fi
 else
   printf '{"ok":true,"result":{"id":100000,"username":"bootstrap_test_bot"}}'
@@ -70,7 +71,6 @@ fi
   assert.match(curlArgs, /\/getMe$/m);
   const detectedOwner = await waitForTelegramOwner(
     "100000:abcdefghijklmnopqrstuvwxyz_123456",
-    "ra_selftest",
     2_000,
   );
   assert.deepEqual(detectedOwner, {
@@ -102,6 +102,7 @@ fi
   });
   assert.equal(first.added, true);
   assert.equal(first.botCount, 1);
+  assert.equal(await readConfiguredOwnerId(sourceDataDir), '8202993989', 'Reuse the installation owner for subsequent bot registrations');
 
   const second = await registerTelegramBot({
     dataDir: sourceDataDir,
