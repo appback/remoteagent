@@ -643,7 +643,7 @@ export class FileStore {
 
   private normalizeSettings(settings: BridgeState["settings"] | undefined): BridgeState["settings"] {
     const normalized = settings ? { ...settings } : {};
-    if (normalized.defaultStartMode !== "codex" && normalized.defaultStartMode !== "claude") {
+    if (normalized.defaultStartMode !== "codex" && normalized.defaultStartMode !== "claude" && normalized.defaultStartMode !== "gemini") {
       delete normalized.defaultStartMode;
     }
     return normalized;
@@ -656,11 +656,11 @@ export class FileStore {
     session.createdAt = session.createdAt || session.updatedAt || new Date().toISOString();
     session.updatedAt = session.updatedAt || session.createdAt;
 
-    if (session.mode !== "codex" && session.mode !== "claude") {
+    if (session.mode !== "codex" && session.mode !== "claude" && session.mode !== "gemini") {
       session.mode = session.codex ? "codex" : session.claude ? "claude" : this.defaultMode;
     }
 
-    for (const provider of ["codex", "claude"] as Provider[]) {
+    for (const provider of ["codex", "claude", "gemini"] as Provider[]) {
       const binding = session[provider];
       if (binding && !binding.cwd) {
         binding.cwd = session.workspace;

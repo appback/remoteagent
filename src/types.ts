@@ -1,4 +1,4 @@
-export type Provider = "codex" | "claude";
+export type Provider = "codex" | "claude" | "gemini";
 export type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 
 export type BridgeMode = Provider;
@@ -35,6 +35,7 @@ export type SessionRecord = {
   workspaceUid?: string;
   codex?: ProviderSession;
   claude?: ProviderSession;
+  gemini?: ProviderSession;
   createdAt: string;
   updatedAt: string;
 };

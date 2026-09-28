@@ -1,3 +1,4 @@
+import {GeminiAdapter} from "./adapters/gemini-adapter.js";
 import {WebatonApiService} from "./services/webaton-api-service.js";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
@@ -47,7 +48,9 @@ async function main(): Promise<void> {
   const store = new FileStore(config.dataDir, config.defaultMode);
   await store.init();
 
+  const gemini=new GeminiAdapter(config.dataDir);
   const adapters: Partial<Record<Provider, ProviderAdapter>> = {
+    gemini,
     codex: config.commands.codex
       ? new ShellAdapter("codex", config.commands.codex, () => config.commandTimeoutMs)
       : new CodexAdapter(
@@ -65,6 +68,7 @@ async function main(): Promise<void> {
   };
 
   const isProviderInstalled = (provider: Provider): boolean => {
+    if(provider==="gemini")return gemini.configured();
     if (config.commands[provider]) {
       return true;
     }
@@ -73,7 +77,7 @@ async function main(): Promise<void> {
       : commandExists(config.claudeBin);
   };
 
-  const availableProviders = (["codex", "claude"] as const).filter((provider) => isProviderInstalled(provider));
+  const availableProviders = (["codex", "claude", "gemini"] as const).filter((provider) => isProviderInstalled(provider));
   console.log(`Available providers: ${availableProviders.length > 0 ? availableProviders.join(", ") : "none"}`);
   const bridge = new BridgeService(
     store,
@@ -92,8 +96,9 @@ async function main(): Promise<void> {
   );
   startArtifactCleanupSchedule(new AgentMemoryService(config.dataDir));
   startWorkspaceCleanupSchedule(new WorkspaceCleanupService(config.dataDir, config.workspaceRoot));
-  if (process.env.WEBATON_BRIDGE_TOKEN) {
-    await new WebatonApiService(bridge, process.env.WEBATON_BRIDGE_TOKEN, Number(process.env.WEBATON_BRIDGE_PORT ?? 3795)).start();
+  const webatonToken=process.env.WEBATON_BRIDGE_TOKEN_FILE ? fs.readFileSync(process.env.WEBATON_BRIDGE_TOKEN_FILE,"utf8").trim() : process.env.WEBATON_BRIDGE_TOKEN;
+  if (webatonToken) {
+    await new WebatonApiService(bridge, webatonToken, Number(process.env.WEBATON_BRIDGE_PORT ?? 3795),config.dataDir).start();
   }
   if (config.localUiEnabled) {
     const localUi = new LocalUiService(bridge, config.localUiHost, config.localUiPort);
