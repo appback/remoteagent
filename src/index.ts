@@ -1,3 +1,4 @@
+import {WebatonApiService} from "./services/webaton-api-service.js";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -91,6 +92,9 @@ async function main(): Promise<void> {
   );
   startArtifactCleanupSchedule(new AgentMemoryService(config.dataDir));
   startWorkspaceCleanupSchedule(new WorkspaceCleanupService(config.dataDir, config.workspaceRoot));
+  if (process.env.WEBATON_BRIDGE_TOKEN) {
+    await new WebatonApiService(bridge, process.env.WEBATON_BRIDGE_TOKEN, Number(process.env.WEBATON_BRIDGE_PORT ?? 3795)).start();
+  }
   if (config.localUiEnabled) {
     const localUi = new LocalUiService(bridge, config.localUiHost, config.localUiPort);
     await localUi.start()
