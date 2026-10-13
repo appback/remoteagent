@@ -257,6 +257,8 @@ import fs from 'node:fs';
 import {execFileSync} from 'node:child_process';
 const d=process.env.DATA_DIR;
 const pid=Number(fs.readFileSync(d+'/remoteagent.pid','utf8').trim());
+const command=execFileSync('/bin/ps',['-p',String(pid),'-o','args='],{encoding:'utf8'});
+if(!command.includes(process.env.ROOT+'/dist/index.js'))throw Error('Runtime PID does not match the expected npm installation');
 const rows=execFileSync('/bin/ps',['-axo','pid,ppid,comm'],{encoding:'utf8'}).trim().split('\n').slice(1).map(l=>{const m=l.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);return m&&{pid:+m[1],ppid:+m[2],comm:m[3]};}).filter(Boolean);
 if(!rows.some(r=>r.pid===pid))throw Error('Runtime PID is not live; inspect service before deployment');
 const ids=new Set([pid]);for(let i=0;i<rows.length;i++)for(const r of rows)if(ids.has(r.ppid))ids.add(r.pid);
@@ -272,7 +274,20 @@ cp -p "$DATA_DIR/run-launchagent.sh" "$BACKUP/runner.sh"
 cp -p "$DATA_DIR/state.json" "$DATA_DIR/.env" "$BACKUP/"
 if [[ -f "$DATA_DIR/jev.json" ]]; then cp -p "$DATA_DIR/jev.json" "$BACKUP/"; fi
 # Unload only RemoteAgent. Other application services and browser runtimes stay up.
+RUNTIME_PID="$(cat "$DATA_DIR/remoteagent.pid")"
 launchctl bootout "$LABEL"
+# Older installations may have started the npm runtime outside launchd.
+if kill -0 "$RUNTIME_PID" 2>/dev/null; then
+  kill -TERM "$RUNTIME_PID"
+  for ATTEMPT in {1..30}; do
+    if ! kill -0 "$RUNTIME_PID" 2>/dev/null; then break; fi
+    sleep 1
+  done
+  if kill -0 "$RUNTIME_PID" 2>/dev/null; then
+    echo "Old runtime did not exit; do not start a duplicate." >&2
+    exit 1
+  fi
+fi
 rollback() {
   trap - ERR
   launchctl bootout "$LABEL" 2>/dev/null || true
