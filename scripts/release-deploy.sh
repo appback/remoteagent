@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: npm run release:deploy -- <version> <30|40|26|50|110|all>" >&2
+  echo "Usage: npm run release:deploy -- <version> <30|40|26|50|60|110|all>" >&2
   echo "Example: npm run release:deploy -- 0.15.5 all" >&2
 }
 
@@ -20,7 +20,7 @@ if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 
 case "$TARGET" in
-  30|40|26|50|110|all)
+  30|40|26|50|60|110|all)
     ;;
   *)
     usage
@@ -242,6 +242,77 @@ tail -n 12 "$HOME/.remoteagent/logs/agent.log"
 REMOTE
 }
 
+deploy_60() {
+  ssh appback@192.168.33.60 "VERSION=$VERSION ALLOW_STALE_RUNNING=${ALLOW_STALE_RUNNING:-0} ACTIVATE_JEV=${ACTIVATE_JEV:-0} bash -s" <<'REMOTE'
+set -euo pipefail
+export PATH="$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export DATA_DIR="$HOME/.remoteagent"
+PLIST="$HOME/Library/LaunchAgents/app.remoteagent.runtime.plist"
+LABEL="gui/$(id -u)/app.remoteagent.runtime"
+ROOT="$(npm root -g)/appback-remoteagent"
+export ROOT
+OLD_VERSION="$(node -p 'require(process.env.ROOT + "/package.json").version')"
+node --input-type=module <<'NODE'
+import fs from 'node:fs';
+import {execFileSync} from 'node:child_process';
+const d=process.env.DATA_DIR;
+const pid=Number(fs.readFileSync(d+'/remoteagent.pid','utf8').trim());
+const rows=execFileSync('/bin/ps',['-axo','pid,ppid,comm'],{encoding:'utf8'}).trim().split('\n').slice(1).map(l=>{const m=l.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);return m&&{pid:+m[1],ppid:+m[2],comm:m[3]};}).filter(Boolean);
+if(!rows.some(r=>r.pid===pid))throw Error('Runtime PID is not live; inspect service before deployment');
+const ids=new Set([pid]);for(let i=0;i<rows.length;i++)for(const r of rows)if(ids.has(r.ppid))ids.add(r.pid);
+const work=rows.filter(r=>r.pid!==pid&&ids.has(r.pid)&&!/(^|\/)curl$/.test(r.comm));
+if(work.length)throw Error('Runtime has non-transport children; finish work before deployment');
+const polling=JSON.parse(fs.readFileSync(d+'/bot-polling-state.json','utf8'));
+if(Object.values(polling.bots||{}).some(b=>b.runningSessionIds?.length)&&process.env.ALLOW_STALE_RUNNING!=='1')throw Error('Running state present. Inspect first; override only confirmed stale metadata with ALLOW_STALE_RUNNING=1');
+NODE
+BACKUP="$DATA_DIR/backups/npm-$VERSION-$(date +%Y%m%dT%H%M%S)"
+mkdir -p -m 700 "$BACKUP"
+cp -p "$PLIST" "$BACKUP/service.plist"
+cp -p "$DATA_DIR/run-launchagent.sh" "$BACKUP/runner.sh"
+cp -p "$DATA_DIR/state.json" "$DATA_DIR/.env" "$BACKUP/"
+if [[ -f "$DATA_DIR/jev.json" ]]; then cp -p "$DATA_DIR/jev.json" "$BACKUP/"; fi
+# Unload only RemoteAgent. Other application services and browser runtimes stay up.
+launchctl bootout "$LABEL"
+rollback() {
+  trap - ERR
+  launchctl bootout "$LABEL" 2>/dev/null || true
+  npm install -g "appback-remoteagent@$OLD_VERSION" --prefer-online || true
+  cp -p "$BACKUP/service.plist" "$PLIST"
+  cp -p "$BACKUP/runner.sh" "$DATA_DIR/run-launchagent.sh"
+  if [[ -f "$BACKUP/jev.json" ]]; then cp -p "$BACKUP/jev.json" "$DATA_DIR/jev.json"; else rm -f "$DATA_DIR/jev.json"; fi
+  launchctl bootstrap "gui/$(id -u)" "$PLIST" || true
+  echo "Deployment failed; attempted rollback. Backup: $BACKUP" >&2
+}
+trap rollback ERR
+npm install -g "appback-remoteagent@$VERSION" --prefer-online
+test "$(node -p 'require(process.env.ROOT + "/package.json").version')" = "$VERSION"
+node --input-type=module <<'NODE'
+import fs from 'node:fs';
+import {execFileSync} from 'node:child_process';
+const home=process.env.HOME,d=process.env.DATA_DIR,root=process.env.ROOT;
+const file=home+'/Library/LaunchAgents/app.remoteagent.runtime.plist';
+const config=JSON.parse(execFileSync('/usr/bin/plutil',['-convert','json','-o','-',file],{encoding:'utf8'}));
+const runner=d+'/run-launchagent.sh';
+fs.writeFileSync(runner,'#!/bin/bash\nset -euo pipefail\nexport PATH="$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"\ncd "$HOME"\nset -a\nsource "$HOME/.remoteagent/.env"\nset +a\nexport DATA_DIR="$HOME/.remoteagent"\necho $$ > "$DATA_DIR/remoteagent.pid"\nexec '+JSON.stringify(process.execPath)+' '+JSON.stringify(root+'/dist/index.js')+'\n',{mode:0o700});
+config.ProgramArguments=['/bin/bash',runner];config.WorkingDirectory=home;config.RunAtLoad=true;
+fs.writeFileSync(file,JSON.stringify(config));execFileSync('/usr/bin/plutil',['-convert','xml1',file]);
+if(process.env.ACTIVATE_JEV==='1'){
+ const {JevService}=await import(root+'/dist/services/jev-service.js');const service=new JevService(d);
+ if(!service.status().configured)throw Error('Jev key missing; cannot activate review');
+ console.log('Jev',JSON.stringify(service.setMode('on')));
+}
+NODE
+launchctl bootstrap "gui/$(id -u)" "$PLIST"
+sleep 5
+launchctl print "$LABEL" | grep -E 'state =|pid =|last exit code'
+PID="$(cat "$DATA_DIR/remoteagent.pid")"
+kill -0 "$PID"
+ps -p "$PID" -o args= | grep -F "$ROOT/dist/index.js"
+trap - ERR
+echo "Deployed npm $VERSION; backup: $BACKUP"
+REMOTE
+}
+
 deploy_50() {
   ssh root@192.168.33.50 "runuser -u daone -- env VERSION=$VERSION PATH=/home/daone/.nvm/versions/node/v22.23.2/bin:/usr/local/bin:/usr/bin:/bin bash -s" <<'REMOTE'
 set -euo pipefail
@@ -279,6 +350,9 @@ case "$TARGET" in
     ;;
   50)
     deploy_50
+    ;;
+  60)
+    deploy_60
     ;;
   110)
     deploy_110

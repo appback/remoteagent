@@ -92,6 +92,15 @@ try {
   assert.equal(guard.previous, undefined);
   assert.equal(guard.attempts, 2, 'Budget spans the entire instruction');
   assert.equal(new JevReviewGuard().next(bad, 'Fail', 0.7, 0), 'retry_limit');
+  const progress = assessReview({ ...good, complete: 0.1, continuable: 0.9 }, 0.7);
+  const progressGuard = new JevReviewGuard();
+  assert.equal(progressGuard.next(progress, 'Promise', 0.7, 2), 'progress');
+  assert.equal(progressGuard.previous.report, 'Promise');
+  assert.equal(progressGuard.next({ ...progress, scores: { ...progress.scores, improved: 0.1 } }, 'Another promise', 0.7, 2), 'no_improvement');
+  assert.equal(assessReview({ ...good, needs_user: 0.9, clear: 0.1 }, 0.7).action, 'retry');
+  const blockedGuard = new JevReviewGuard();
+  assert.equal(blockedGuard.next(progress, 'Cannot proceed', 0.7, 2, true), 'retry');
+  assert.ok(reviewRetryPrompt('Task', blockedGuard.previous).includes('Clarification only'));
   const previous = { report: 'Previous report', issues: ['supported'] };
   await service.review('Current request', 'New report', previous);
   assert.deepEqual(lastBody.state.previousReview, previous);

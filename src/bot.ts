@@ -18,7 +18,7 @@ import { buildProviderEnv } from "./adapters/runtime-env.js";
 import { requestSelfUpdate } from "./services/self-update-service.js";
 import { JevService } from "./services/jev-service.js";
 import { PeerService, PEER_PREFIX } from "./services/peer-service.js";
-import { JevReviewGuard, JEV_REPORT_GUIDE, reviewRetryPrompt } from "./services/jev-review.js";
+import { JevReviewGuard, JEV_REPORT_GUIDE, reviewRetryPrompt, reviewContinuePrompt, reviewUnavailableNotice } from "./services/jev-review.js";
 import { RemoteShellService } from "./services/remote-shell-service.js";
 import { AgentMemoryService } from "./services/agent-memory-service.js";
 import { WorkspaceCleanupService } from "./services/workspace-cleanup-service.js";
@@ -1577,7 +1577,7 @@ ${bridge.formatStatus(mapping)}`);
       }
       if (action.kind === "jev.login" || action.kind === "jev.option") {
         await ensureOwnerControlAccess(ctx);
-        await reply(ctx, action.kind === "jev.login" ? JEV_LOGIN_HELP : `Jev: ${jev.status().mode}; threshold: ${jev.status().threshold}; retries: ${jev.status().maxRetries}; key configured: ${jev.status().configured}.\n/option jev off|observe|on\n/option jev threshold 0.7\n/option jev retries 2\nNoul reviews all returned reports. Errors preserve legacy behavior.`);
+        await reply(ctx, action.kind === "jev.login" ? JEV_LOGIN_HELP : `Jev: ${jev.status().mode}; threshold: ${jev.status().threshold}; retries: ${jev.status().maxRetries}; key configured: ${jev.status().configured}.\n/option jev off|observe|on\n/option jev threshold 0.7\n/option jev retries 2\nNoul reviews all returned reports. In on mode, review errors stop with an unverified result; observe/off preserve legacy routing.`);
         return;
       }
       if (action.kind === "login.install") {
@@ -2298,13 +2298,17 @@ async function routeTelegramWorkLoop(
           return [...parsed.chunks, "Automatic continuation stopped."];
         }
       }
+      if (!decision.available && jev.status().mode === "on") {
+        const notice = reviewUnavailableNotice(decision.reason);
+        if (currentSession) await memoryService.recordProgress(currentSession.session, notice);
+        autoContinue.clear(botId, chatId, sessionId);
+        return [notice, ...parsed.chunks.map(chunk => `미검증 에이전트 응답:\n${chunk}`)];
+      }
       if (decision.available && decision.mode === "on") {
-        // An explicit request for user intervention is never turned into automatic work.
-        const next = parsed.kind === "blocked" ? "blocked"
-          : reviewGuard.next(decision, report, decision.threshold, decision.maxRetries);
+        const next = reviewGuard.next(decision, report, decision.threshold, decision.maxRetries, parsed.kind === "blocked");
         if (next === "retry" || next === "retry_limit" || next === "no_improvement") {
           const reason = next === "retry" ? "재확인 요청" : next === "no_improvement" ? "지적 사항 개선 없음으로 자동 재평가 중단" : "재평가 횟수 한도로 중단";
-          const notice = `Jev: ${reason} (${reviewGuard.attempts}/${decision.maxRetries}).\n미해결 항목: ${decision.issues.join(", ")}\nNoul: ${JSON.stringify(decision.scores)}\n완료로 처리하지 않았습니다.`;
+          const notice = `Jev: ${reason} (${reviewGuard.attempts}/${decision.maxRetries}).\n미해결 항목: ${(reviewGuard.previous?.issues ?? decision.issues).join(", ")}\nNoul: ${JSON.stringify(decision.scores)}\n완료로 처리하지 않았습니다.`;
           if (currentSession) await memoryService.recordProgress(currentSession.session, notice);
           if (next !== "retry") return [...parsed.chunks, notice];
           await helpers.reportProgress([...parsed.chunks, notice]);
@@ -2335,7 +2339,9 @@ async function routeTelegramWorkLoop(
           autoContinue.clear(botId, chatId, sessionId);
           return [stopMessage];
         }
-        prompt = withReviewGuide(appendManagedContext(REPORT_CONTINUE_PROMPT, managedContext));
+        prompt = decision.available && decision.mode === "on"
+          ? appendManagedContext(reviewContinuePrompt(message, report), managedContext)
+          : withReviewGuide(appendManagedContext(REPORT_CONTINUE_PROMPT, managedContext));
         continue;
       }
 

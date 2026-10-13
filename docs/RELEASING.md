@@ -123,6 +123,27 @@ The deploy script performs:
 
 ## 6. Verify
 
+### macOS server 60
+
+```bash
+npm run release:deploy -- 0.26.1 60
+```
+
+The script refuses active non-transport child processes or running-session metadata,
+backs up the runtime configuration, installs the exact npm version and switches the
+existing RemoteAgent LaunchAgent to the npm entrypoint. It preserves session data
+and other services, verifies the live process path and attempts rollback on error.
+After independently confirming stale running metadata and no live provider work:
+
+```bash
+ALLOW_STALE_RUNNING=1 ACTIVATE_JEV=1 npm run release:deploy -- 0.26.1 60
+```
+
+ACTIVATE_JEV requires an existing server-side key and enables review routing; no key
+value is printed or copied. Without it, the current Jev mode is preserved. The stale
+override does not skip the live process check. Inspect returned reports and Jev
+decision logs after deployment; a healthy process alone does not prove review quality.
+
 Registry:
 
 ```bash

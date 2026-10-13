@@ -43,8 +43,11 @@ Each Noul value is the probability of a yes/true answer to its question.
 The default threshold is **0.7**, inclusive; configurable range is greater than
 0.5 through 1. The runtime combines the answers as follows:
 
-1. `needs_user` passes: return the report and wait. An explicit `REPORT:blocked`
-   also remains blocked regardless of the assessment.
+1. A needs-user report must pass aligned/supported/clear before waiting. Otherwise
+   request a concrete obstacle, observed error or explicitly unknown cause, remaining
+   scope and the exact user action required. A provider's blocked tag cannot be
+   converted directly into permission to execute; conflicting evaluations request
+   clarification only, within the same correction budget.
 2. Any of aligned/supported/clear fails, or complete/continuable both pass or both
    fail: request verification and a corrected report.
 3. Quality passes and complete passes: deliver the final result.
@@ -52,19 +55,24 @@ The default threshold is **0.7**, inclusive; configurable range is greater than
 
 On mode evaluates tagged and untagged reports. `REPORT:result` alone no longer
 bypasses review. The agent is asked for concise work/answer, evidence/reasoning,
-remaining work and uncertainty. Simple questions need no artificial commit logs.
+remaining work and uncertainty. A promise to work is not work completion. When work
+is feasible, the next turn must perform an unfinished authorized action instead of
+merely rewriting the report. Simple questions need no artificial commit logs.
 Corrections retain the current instruction and previous unresolved review, and
 explicitly avoid undoing or repeating completed changes merely to pass a review.
 
 The correction budget defaults to **2** additional responses per user work loop,
 configurable from 0 to 5. After a correction, another failing review with
 `improved < threshold` stops immediately. Otherwise failures stop at the retry
-budget. The user receives the last report plus scores, unresolved items and stop
+budget. Consecutive progress reports also retain the previous report for the
+`improved` evaluation; no substantive progress stops continuation, even when the
+model keeps declaring progress. No Korean/English phrase list or keyword classifier
+is used to infer intent, completion or failure. The user receives the last report plus scores, unresolved items and stop
 reason; the work is not recorded as completed. A fresh instruction starts a new
 budget. Progress does not replenish it. Existing overall `/option retry` limits
 can stop the loop earlier. `/stop`, session binding and approval remain authoritative.
 
-Only the current request, returned report and most recent failed review are sent,
+Only the current request, returned report and most recent correction/progress report are sent,
 not accumulated history or repository files. Report evidence is explicitly marked
 as agent-declared; transport metadata confirms a returned invocation, not a test or
 deployment. The evaluator has no repository or execution tools. Its score is an
@@ -72,8 +80,12 @@ assessment of supplied material, not an independent execution audit.
 
 - Observe mode logs scores and the suggested action without changing routing.
 - Off mode makes no review call and adds no report guide.
-- Unavailable, malformed, oversized and timed-out decisions retain legacy routing
-  and output. Low Noul scores are valid review results, not API failures.
+- In **on** mode unavailable, malformed, oversized, busy/cooldown and timed-out
+  evaluations stop with an explicit review-unavailable reason. The provider report
+  is labelled unverified; it is not accepted as completed and the provider is not
+  automatically rerun (it may already have changed external state). Check `/option jev`
+  and the reported evaluation error before asking to inspect existing work again.
+  Observe/off retain legacy routing. Low Noul scores are decisions, not API errors.
 - The runtime permits one Jev request at a time, with a 3-second request timeout,
   no automatic HTTP retry and a 60-second cooldown after network/API failures.
   Agent CLI processes have their own bounded call; they do not share a daemon.
@@ -133,6 +145,11 @@ logging, menu buttons, Noul routing, inclusive threshold, correction budget,
 no-improvement stop, tagged results, approval, observe mode, legacy behavior, API
 failures, bounded calls and image refusal. Live review accuracy requires
 separate evaluation; Korean examples passing a small sample are not a guarantee.
+
+2026-10-13: regression cases include a result-tagged promise routed to actual
+continuation, repeated progress without improvement, vague blocked clarification,
+stop during review and unavailable review without completion. Fixtures control Jev
+scores and verify routing; they do not establish live evaluator accuracy.
 
 Release using the existing [npm release procedure](RELEASING.md):
 `npm run release:version -- patch`, commit and
