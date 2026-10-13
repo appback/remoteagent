@@ -185,6 +185,24 @@ tail -80 ~/.remoteagent/logs/agent.log
 '"'"''
 ```
 
+## Release 0.26.2 (2026-10-13)
+
+- Source: main 36680d6 (Jev changes d607a88 plus macOS runtime ownership guard).
+- Published through release:publish. npm initially accepted the upload but returned
+  404 during processing, exceeding the script's propagation window. Subsequent exact
+  version and latest checks both returned 0.26.2; no source deployment was substituted.
+- Target: 192.168.33.60 only. Inspected stale running metadata from October 10 and
+  confirmed no provider child process before using the explicit stale-state override.
+- Applied: ALLOW_STALE_RUNNING=1 ACTIVATE_JEV=1 npm run release:deploy -- 0.26.2 60.
+- Replaced independently launched old runtime with the existing user LaunchAgent,
+  pointing at /Users/appback/.local/lib/node_modules/appback-remoteagent/dist/index.js.
+- Verified one runtime (PID 72597), package 0.26.2, seven session records preserved.
+- Jev: on, threshold 0.7, correction retries 2. Real review API returned available=true,
+  action=retry for an unperformed-work promise. This confirms connectivity and that
+  sample's decision, not general classification accuracy or a Telegram end-to-end test.
+- Backup: /Users/appback/.remoteagent/backups/npm-0.26.2-20261013T145910.
+- No other server or application service was restarted.
+
 ## Release 0.15.5
 
 Date: 2026-07-08
