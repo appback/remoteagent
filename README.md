@@ -8,6 +8,13 @@ It is built for one owner running their own agents on their own machine, then co
 
 RemoteAgent is not a hosted SaaS and not a Telegram-only app.
 
+Agents can send authorized tasks to another session on the same server through
+`node "$REMOTEAGENT_SESSION_BIN" send S007 /absolute/task.txt`. The command waits
+for the receiver report so the sender can continue or issue a specific follow-up.
+The receiver also reports to its bound Telegram chat when available, using the
+normal queue, stop and Jev loop. See [session dispatch](docs/SESSION_DISPATCH.md)
+for request replay IDs, receipt status and the local owner trust boundary.
+
 It has three layers:
 
 1. **Runtime server** - the installed machine that actually runs Codex, Claude Code, shell commands, and file operations.

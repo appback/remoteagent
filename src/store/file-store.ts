@@ -84,6 +84,11 @@ export class FileStore {
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 
+  async sessionBindings(sessionId: string) {
+    const state = await this.readState();
+    return Object.values(state.chats).filter(binding => binding.sessionId === sessionId);
+  }
+
   getDataDir(): string {
     return this.dataDir;
   }

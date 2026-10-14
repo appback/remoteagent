@@ -49,6 +49,7 @@ npm ci --ignore-scripts
 npm run check
 npm run build
 npm run selftest:provider-install
+node scripts/selftest-session-dispatch.mjs
 
 TARBALL="$(npm pack --silent)"
 

@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import {SessionDispatchService} from "./session-dispatch-service.js";
 import { randomBytes } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
@@ -39,6 +40,8 @@ export type ModelSelection = {
 };
 
 export class BridgeService {
+  readonly dispatch: SessionDispatchService;
+  async sessionSnapshot(sessionId: string) { return this.store.getSession(sessionId); }
   private readonly sessionLocks = new Map<string, Promise<void>>();
   private readonly codexUsageFallback: CodexUsageFallbackService;
 
@@ -52,6 +55,7 @@ export class BridgeService {
     private readonly defaultCodexSandboxMode?: CodexSandboxMode,
   ) {
     this.codexUsageFallback = new CodexUsageFallbackService(store.getDataDir());
+    this.dispatch = new SessionDispatchService(store);
   }
 
   async createSession(botId: string, chatId: string, cwd?: string): Promise<ChatSession> {
@@ -407,7 +411,7 @@ export class BridgeService {
       this.routeSession(chatSession.session, message, "telegram", botId, chatId, onProgress));
   }
 
-  async routeSessionMessage(sessionId: string, message: string): Promise<ProviderResponse[]> {
+  async routeSessionMessage(sessionId: string, message: string, onProgress?: ProviderProgressHandler): Promise<ProviderResponse[]> {
     const session = await this.store.getSession(sessionId);
     if (!session) {
       throw new Error(`Session was not found: ${sessionId}`);
@@ -421,7 +425,7 @@ export class BridgeService {
       text: message,
     });
 
-    return this.withSessionLock(session.sessionId, () => this.routeSession(session, message, "pc-ui"));
+    return this.withSessionLock(session.sessionId, () => this.routeSession(session, message, "pc-ui",undefined,undefined,onProgress));
   }
 
   async routeSessionMessageForChat(

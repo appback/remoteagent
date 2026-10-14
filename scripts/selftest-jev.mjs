@@ -55,6 +55,8 @@ try {
   assert.ok(!(await memory.formatProviderContext(session)).includes('REMOTEAGENT_JEV_BIN'));
   service.setMode('observe');
   assert.ok((await memory.formatProviderContext(session)).includes('REMOTEAGENT_JEV_BIN'));
+  assert.ok((await memory.formatProviderContext(session)).includes('REMOTEAGENT_SESSION_BIN'));
+  assert.ok((await memory.formatProviderContext(session)).includes('REMOTEAGENT_SECRET_BIN'));
   let r = await service.review('Finish the task', 'Report');
   assert.equal(r.mode, 'observe'); assert.equal(r.action, 'result');
   assert.equal(Object.keys(lastBody.questions).length, 7);

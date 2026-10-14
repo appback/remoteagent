@@ -373,6 +373,24 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
     },
   );
   const getBotId = (): string => bot.botInfo?.username ?? String(bot.botInfo?.id ?? token);
+  bridge.dispatch.register(getBotId(), async request => {
+    const botId=getBotId(),chatId=request.chatId;
+    if(!await bridge.isChatBoundToSession(botId,chatId,request.sessionId))throw Error("TARGET_BINDING_CHANGED");
+    await sendTelegramMessage(token,Number(chatId),`세션 요청 ${request.id}\n${request.source} → ${request.target}\n요청을 접수했습니다. 진행·결과는 이 채팅으로 보고합니다.\n\n${request.message.slice(0,1500)}${request.message.length>1500?"\n(전체 내용은 실행 세션에 전달됩니다.)":""}`);
+    let report:string[]=[];
+    await runWithPendingAnimation(token,Number(chatId),async helpers=>({chunks:report=await routeTelegramWorkLoop(
+      bridge,botId,chatId,
+      `Request from session ${request.source}, dispatch ${request.id}. Treat the following as the delegated user task within your own scope. Report your progress and final result to your current Telegram chat through RemoteAgent. Do not claim task completion merely because this request was delivered.\n\n${request.message}`,
+      "Session dispatch",botManagement,helpers,autoContinue,memoryService,undefined,{expectedSessionId:request.sessionId},
+    )}),true);
+    return report;
+  });
+  bridge.dispatch.registerUnbound(async request=>routeTelegramWorkLoop(
+    bridge,"session-dispatch",request.sessionId,
+    `Delegated request from ${request.source}, dispatch ${request.id}. Return the actual result to the requesting agent.\n\n${request.message}`,
+    "Session dispatch",botManagement,{reportProgress:async()=>{}},autoContinue,memoryService,undefined,
+    {unboundSessionId:request.sessionId},
+  ));
   const stopPreviousSessionForRebind = async (botId: string, chatId: string, reason: string): Promise<void> => {
     const previous = await bridge.status(botId, chatId).catch(() => undefined);
     if (!previous) {
@@ -2011,6 +2029,7 @@ async function runWithPendingAnimation(
   botToken: string,
   chatId: number,
   task: (helpers: PendingAnimationHelpers) => Promise<{ chunks: string[]; parseMode?: "HTML" | "MarkdownV2" }>,
+  propagateFailure = false,
 ): Promise<void> {
   let typingStopped = false;
   let typingTimer: ReturnType<typeof setTimeout> | undefined;
@@ -2097,11 +2116,13 @@ async function runWithPendingAnimation(
     }
   } catch (error) {
     if (error instanceof SilentTelegramAbort) {
+      if(propagateFailure)throw error;
       return;
     }
     const message = error instanceof Error ? error.message : "An unexpected error occurred.";
     console.error(`[telegram-pending] chat=${chatId} failed: ${message}`, error);
     await sendTelegramMessage(botToken, chatId, message).catch(() => undefined);
+    if(propagateFailure)throw error;
   } finally {
     typingStopped = true;
     if (typingTimer) {
@@ -2121,10 +2142,13 @@ async function routeTelegramWorkLoop(
   autoContinue: AutoContinueController,
   memoryService: AgentMemoryService,
   transform: (blocks: string[]) => string[] = (blocks) => blocks,
-  options: { maxTurns?: number } = {},
+  options: { maxTurns?: number; expectedSessionId?: string; unboundSessionId?: string } = {},
 ): Promise<string[]> {
-  const currentSession = await bridge.status(botId, chatId);
+  const unbound=options.unboundSessionId?await bridge.sessionSnapshot(options.unboundSessionId):undefined;
+  if(options.unboundSessionId&&!unbound)throw Error("SESSION_NOT_FOUND");
+  const currentSession = unbound?{session:unbound}:await bridge.status(botId, chatId);
   const sessionId = currentSession?.session.sessionId;
+  if(options.expectedSessionId&&sessionId!==options.expectedSessionId)throw new SilentTelegramAbort("Dispatch target binding changed.");
   const activeKey = workLoopKey(botId, chatId, sessionId);
   const previousTail = workLoopTails.get(activeKey);
   const generation = workLoopGenerations.get(activeKey) ?? 0;
@@ -2221,6 +2245,7 @@ async function routeTelegramWorkLoop(
   let providerCompleted = false;
   const streamedProgressKeys = new Set<string>();
   const ensureStillBound = async (phase: string): Promise<void> => {
+    if(options.unboundSessionId)return;
     if (!sessionId) {
       return;
     }
@@ -2255,7 +2280,7 @@ async function routeTelegramWorkLoop(
     await helpers.reportProgress(parsed.chunks);
   };
 
-  if (currentSession) {
+  if (currentSession&&!options.unboundSessionId) {
     await botManagement.markProviderRunning(botId, sessionId);
   }
 
@@ -2282,7 +2307,9 @@ async function routeTelegramWorkLoop(
     await bridge.logSystem(botId, chatId, `${turnLabel} started.`);
 
     try {
-      const responses = sessionId
+      const responses = options.unboundSessionId
+        ? await bridge.routeSessionMessage(options.unboundSessionId,prompt,deliverStreamedProgress)
+        : sessionId
         ? await bridge.routeSessionMessageForChat(sessionId, botId, chatId, prompt, deliverStreamedProgress)
         : await bridge.routeMessage(botId, chatId, prompt, deliverStreamedProgress);
       await ensureStillBound(`${turnLabel} response`);
@@ -2432,7 +2459,7 @@ async function routeTelegramWorkLoop(
     if (workLoopTails.get(activeKey) === currentTail) {
       workLoopTails.delete(activeKey);
     }
-    if (currentSession) {
+    if (currentSession&&!options.unboundSessionId) {
       if (providerCompleted) {
         await botManagement.markProviderCompleted(botId, sessionId);
       } else {

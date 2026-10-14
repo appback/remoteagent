@@ -21,6 +21,7 @@ export function buildProviderEnv(extraEnv?: NodeJS.ProcessEnv): NodeJS.ProcessEn
   env.REMOTEAGENT_DATA_DIR = dataDir;
   env.REMOTEAGENT_SECRET_BIN = resolveSecretHelperPath();
   env.REMOTEAGENT_JEV_BIN = fileURLToPath(new URL("../jev-helper.js", import.meta.url));
+  env.REMOTEAGENT_SESSION_BIN = fileURLToPath(new URL("../session-helper.js", import.meta.url));
   env.PATH = buildRuntimePath(env.PATH);
 
   if (extraEnv) {

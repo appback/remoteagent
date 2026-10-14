@@ -37,10 +37,32 @@ export class LocalUiService {
     });
   }
 
+  address(){return this.server?.address();}
+  async close(){await new Promise<void>((resolve,reject)=>this.server?this.server.close(error=>error?reject(error):resolve()):resolve());}
+
   private async handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const method = request.method ?? "GET";
     const url = new URL(request.url ?? "/", `http://${this.host}:${this.port}`);
     const pathname = url.pathname;
+
+    if(pathname.startsWith("/api/dispatch")){
+      if(request.headers.origin||!this.bridge.dispatch.authorize(request.headers.authorization)){
+        this.sendJson(response,401,{error:"UNAUTHORIZED"});return;
+      }
+      const source=typeof request.headers["x-source-session"]==="string"?request.headers["x-source-session"]:"";
+      if(method==="GET"&&pathname==="/api/dispatch-targets"){
+        this.sendJson(response,200,{targets:await this.bridge.dispatch.targets()});return;
+      }
+      if(method==="POST"&&pathname==="/api/dispatches"){
+        const body=await this.readJsonBody(request);
+        try{const receipt=await this.bridge.dispatch.submit(source,String(body.target??""),String(body.message??""),String(body.requestId??""));this.sendJson(response,202,{receipt});}
+        catch(error){this.sendJson(response,409,{error:error instanceof Error?error.message:"DISPATCH_FAILED"});}return;
+      }
+      if(method==="GET"&&/^\/api\/dispatches\/[a-f0-9-]+$/.test(pathname)){
+        const receipt=this.bridge.dispatch.get(pathname.split("/").at(-1)!,source);this.sendJson(response,receipt?200:404,receipt?{receipt}:{error:"NOT_FOUND"});return;
+      }
+      this.sendJson(response,404,{error:"Not found"});return;
+    }
 
     if (method === "GET" && pathname === "/") {
       this.sendHtml(response, INDEX_HTML);
@@ -93,6 +115,7 @@ export class LocalUiService {
 
     await new Promise<void>((resolve, reject) => {
       request.on("data", (chunk: Buffer) => {
+        if(chunks.reduce((size,b)=>size+b.length,0)+chunk.length>65536){reject(new Error("Request too large"));request.destroy();return;}
         chunks.push(chunk);
       });
       request.on("end", resolve);
