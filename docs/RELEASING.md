@@ -185,6 +185,25 @@ tail -80 ~/.remoteagent/logs/agent.log
 '"'"''
 ```
 
+## Release 0.26.3 (2026-10-14)
+
+- Source f6a47c0; session dispatch implementation ef6f97f.
+- Published through release:publish. npm processing exceeded the initial propagation
+  window; later exact version and latest checks both returned 0.26.3.
+- Deployed with npm run release:deploy -- 0.26.3 60 after verifying no active provider
+  children or running-session metadata. Installed npm path and one LaunchAgent runtime
+  verified (PID 93437). Existing seven sessions preserved.
+- Backup: /Users/appback/.remoteagent/backups/npm-0.26.3-20261014T230321.
+- Live checks: unauthenticated dispatch API 401; missing target SESSION_NOT_FOUND;
+  installed helper lists S003/S007. Actual helper invocation with source S003 sent a
+  read-only textual deployment probe to S007 and received its final report.
+- Receipt ffd7c33d-b484-46fd-8152-5df426219362: reported, receiver output
+  "RemoteAgent 세션 전달 검증 완료." Final receiver Telegram send returned successfully.
+  This checks the receiver/report-return path, not a subsequent S003 model decision.
+- Jev mode was off at pre/post deployment configuration inspection and was preserved.
+  Jev-on continuation and correction are covered by the mock regression suite.
+- No other server was updated; the probe did not request repository or application changes.
+
 ## Release 0.26.2 (2026-10-13)
 
 - Source: main 36680d6 (Jev changes d607a88 plus macOS runtime ownership guard).
