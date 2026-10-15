@@ -17,6 +17,7 @@ import { LoginService, MissingLoginToolError, type LoginTarget } from "./service
 import { buildProviderEnv } from "./adapters/runtime-env.js";
 import { requestSelfUpdate } from "./services/self-update-service.js";
 import { JevService } from "./services/jev-service.js";
+import {runTelegramUpload,TelegramUploadError,redactTelegramSecrets} from "./services/telegram-upload.js";
 import { PeerService, PEER_PREFIX } from "./services/peer-service.js";
 import { JevReviewGuard, JEV_REPORT_GUIDE, reviewRetryPrompt, reviewContinuePrompt, reviewUnavailableNotice } from "./services/jev-review.js";
 import { RemoteShellService } from "./services/remote-shell-service.js";
@@ -1163,10 +1164,10 @@ ${bridge.formatStatus(mapping)}`);
           includeKeys: selectedKeys,
           excludeKeys: [key],
         });
-        await sendTelegramDocument(token, ctx.chat.id, {
+        await sendTelegramDocuments(token, ctx.chat.id, [{
           path: result.outputPath,
           caption: `Encrypted RemoteAgent Secret bundle (${result.count} key(s)). Secret values are not shown.`,
-        });
+        }]);
       } finally {
         await fs.rm(exportDir, { recursive: true, force: true }).catch(() => undefined);
       }
@@ -2119,8 +2120,8 @@ async function runWithPendingAnimation(
       if(propagateFailure)throw error;
       return;
     }
-    const message = error instanceof Error ? error.message : "An unexpected error occurred.";
-    console.error(`[telegram-pending] chat=${chatId} failed: ${message}`, error);
+    const message = redactTelegramSecrets(error instanceof Error ? error.message : "An unexpected error occurred.");
+    console.error(`[telegram-pending] chat=${chatId} failed: ${message}`);
     await sendTelegramMessage(botToken, chatId, message).catch(() => undefined);
     if(propagateFailure)throw error;
   } finally {
@@ -3882,10 +3883,6 @@ async function sendTelegramDocuments(
     return;
   }
   for (const document of documents) {
-    if (deliveryClass === "progress") {
-      await sendTelegramDocument(botToken, chatId, document);
-      continue;
-    }
     await serializeTelegramMessage(botToken, async () => {
       for (let attempt = 1; attempt <= 3; attempt += 1) {
         await waitForTelegramRateLimit(botToken);
@@ -3893,7 +3890,16 @@ async function sendTelegramDocuments(
           await sendTelegramDocument(botToken, chatId, document);
           return;
         } catch (error) {
-          if (!isTelegramRateLimitError(error) || attempt >= 3) {
+          if(attempt>=3){
+            if(error instanceof TelegramUploadError&&error.retryAllowed)throw new Error(`파일 전송이 3회 연결 시도 후 실패했습니다. ${error.message}`);
+            throw error;
+          }
+          if(error instanceof TelegramUploadError&&error.retryAllowed){
+            console.warn(`[telegram-sendDocument-retry] chat=${chatId} attempt=${attempt}/3 ${error.message}`);
+            await sleep(attempt*1500);
+            continue;
+          }
+          if (!isTelegramRateLimitError(error)||deliveryClass==="progress") {
             throw error;
           }
         }
@@ -3912,25 +3918,7 @@ async function sendTelegramDocument(
     throw new Error(`Telegram document is missing or unreadable: ${resolvedPath}`);
   }
 
-  const args = [
-    "-sS",
-    "--max-time",
-    "120",
-    "-F",
-    `chat_id=${chatId}`,
-    "-F",
-    `document=@${resolvedPath}`,
-    `https://api.telegram.org/bot${botToken}/sendDocument`,
-  ];
-
-  if (document.caption?.trim()) {
-    args.splice(args.length - 1, 0, "-F", `caption=${document.caption.trim()}`);
-  }
-
-  const { stdout, stderr } = await execFileAsync("curl", args);
-  if (stderr?.trim()) {
-    console.error(`curl stderr for sendDocument: ${stderr.trim()}`);
-  }
+  const stdout = await runTelegramUpload(botToken,chatId,resolvedPath,document.caption);
 
   const payload = JSON.parse(stdout) as {
     ok?: boolean;
@@ -4217,12 +4205,12 @@ function summarizeCurlTelegramError(error: unknown, method: string): string {
   const code = typeof error === "object" && error !== null && "code" in error
     ? String((error as { code?: unknown }).code ?? "")
     : "";
-  const message = stderr || error.message;
+  const message = redactTelegramSecrets(stderr || error.message);
   return [`Telegram API ${method} curl failed`, code ? `code=${code}` : undefined, message].filter(Boolean).join(": ");
 }
 
 function formatTelegramDeliveryError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return redactTelegramSecrets(error instanceof Error ? error.message : String(error));
 }
 
 function isRetryableTelegramDeliveryError(error: unknown): boolean {

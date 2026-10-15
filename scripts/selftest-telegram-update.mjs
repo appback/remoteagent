@@ -13,6 +13,8 @@ const binDir = path.join(tmp, "bin");
 const telegramCalls = path.join(tmp, "telegram-calls.jsonl");
 const capturedDocument = path.join(tmp, "captured-document.ra-secrets");
 const rateLimitOnce = path.join(tmp, "telegram-rate-limit-once");
+const documentResetOnce = path.join(tmp, "document-reset-once");
+await fs.writeFile(documentResetOnce,'reset');
 
 await fs.mkdir(workspace, { recursive: true });
 await fs.mkdir(workspaceRoot, { recursive: true });
@@ -55,6 +57,12 @@ case "$method" in
     printf '{"ok":true,"result":true}'
     ;;
   sendDocument)
+    if [[ -f ${JSON.stringify(documentResetOnce)} ]]; then
+      rm -f ${JSON.stringify(documentResetOnce)}
+      printf '\\nREMOTEAGENT_UPLOAD:0\\n'
+      printf 'curl: (35) Connection reset by peer\\n' >&2
+      exit 35
+    fi
     cp "$document_path" ${JSON.stringify(capturedDocument)}
     printf '{"ok":true,"result":{"message_id":1002,"document":{"file_id":"fake"}}}'
     ;;
@@ -436,6 +444,8 @@ if (secretTelegramCalls.filter((call) => call.method === "deleteMessage").length
 if (!secretTelegramCalls.some((call) => call.method === "sendDocument")) {
   throw new Error("Encrypted Secret bundle was not sent as a Telegram document");
 }
+if(secretTelegramCalls.filter(call=>call.method==='sendDocument').length!==2)throw Error('TLS upload failure was not retried exactly once');
+if(secretTelegramCalls.some(call=>call.text?.includes('Command failed: curl')||call.text?.includes('000000:test-token')))throw Error('Upload error leaked a curl command/token');
 
 const sessionWorkspace = session.workspace;
 await fs.mkdir(path.join(sessionWorkspace, "node_modules", "left-pad"), { recursive: true });

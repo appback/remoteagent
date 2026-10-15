@@ -50,6 +50,7 @@ npm run check
 npm run build
 npm run selftest:provider-install
 node scripts/selftest-session-dispatch.mjs
+node scripts/selftest-telegram-upload.mjs
 
 TARBALL="$(npm pack --silent)"
 
