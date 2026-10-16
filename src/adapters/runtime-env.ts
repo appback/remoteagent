@@ -3,7 +3,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-const CHILD_ENV_BLOCKED_PREFIXES = ["TELEGRAM_"];
+const CHILD_ENV_BLOCKED_PREFIXES = ["TELEGRAM_", "WEBATON_BRIDGE_TOKEN", "GEMINI_API_KEY"];
 
 export function buildProviderEnv(extraEnv?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };

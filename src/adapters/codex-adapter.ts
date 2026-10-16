@@ -133,6 +133,10 @@ export class CodexAdapter implements ProviderAdapter {
   }
 
   private appendPromptStdinArg(args: string[]): void {
+    if(process.env.WEBATON_MCP_PATH){
+      args.push("-c", 'approval_policy="on-request"', "-c", 'approvals_reviewer="auto_review"');
+      args.push("-c", "mcp_servers.webaton.command="+JSON.stringify(process.execPath), "-c", "mcp_servers.webaton.args="+JSON.stringify([process.env.WEBATON_MCP_PATH]));
+    }
     args.push("--", "-");
   }
 

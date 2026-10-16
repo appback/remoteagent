@@ -25,6 +25,7 @@ import {
 } from "./codex-usage-fallback-service.js";
 
 const MODEL_PRESETS: Record<Provider, string[]> = {
+  gemini: [],
   codex: ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark", "gpt-5.2", "gpt-5.1-codex-max"],
   claude: ["sonnet", "opus", "haiku"],
 };
@@ -162,7 +163,7 @@ export class BridgeService {
   async resolveStartProvider(requested?: string): Promise<Provider> {
     const normalized = requested?.trim().toLowerCase();
     if (normalized) {
-      if (normalized !== "codex" && normalized !== "claude") {
+      if (normalized !== "codex" && normalized !== "claude" && normalized !== "gemini") {
         throw new Error("Provider must be codex or claude.");
       }
 
@@ -186,7 +187,7 @@ export class BridgeService {
   }
 
   listAvailableProviders(): Provider[] {
-    return (["codex", "claude"] as const).filter((provider) => this.isProviderAvailable(provider));
+    return (["codex", "claude", "gemini"] as const).filter((provider) => this.isProviderAvailable(provider));
   }
 
   async rememberDefaultStartMode(provider: Provider): Promise<void> {
@@ -373,7 +374,8 @@ export class BridgeService {
       return { stopped: false };
     }
 
-    const stopped = stopSpawnedExecution(session.sessionId);
+    const cancelled=this.adapters[session.mode]?.cancel?.(session.sessionId)??false;
+    const stopped = stopSpawnedExecution(session.sessionId)||cancelled;
     if (stopped) {
       await this.log({
         timestamp: new Date().toISOString(),
@@ -973,7 +975,7 @@ export class BridgeService {
   }
 
   private defaultModelFor(provider: Provider): string {
-    return provider === "codex" ? DEFAULT_CODEX_MODEL : "sonnet";
+    return provider === "codex" ? DEFAULT_CODEX_MODEL : provider==="gemini" ? (process.env.GEMINI_MODEL ?? "gemini-2.5-flash") : "sonnet";
   }
 
   private describeEffectiveAccess(session: SessionRecord): string[] {

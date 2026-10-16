@@ -619,7 +619,7 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
       return;
     }
 
-    if (first && !(["codex", "claude"] as const).includes(first.toLowerCase() as Provider)) {
+    if (first && !(["codex", "claude", "gemini"] as const).includes(first.toLowerCase() as Provider)) {
       await reply(ctx, "Usage: `/start` or `/start codex` or `/start claude`", {
         parse_mode: "Markdown",
       });

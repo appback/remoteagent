@@ -51,6 +51,7 @@ export class ClaudeAdapter implements ProviderAdapter {
       this.permissionMode,
     ];
 
+    if(process.env.WEBATON_MCP_PATH)args.push("--mcp-config",JSON.stringify({mcpServers:{webaton:{command:process.execPath,args:[process.env.WEBATON_MCP_PATH]}}}));
     if (request.model) {
       args.push("--model", request.model);
     }
