@@ -197,8 +197,26 @@ tail -80 ~/.remoteagent/logs/agent.log
 '"'"''
 ```
 
+## Release 0.27.4 (2026-10-22)
+
+- Real browser testing reproduced `Login rejected`: `Referrer-Policy: no-referrer`
+  caused the browser's form POST to carry `Origin: null`. Changes the policy to
+  `same-origin`; exact-origin and CSRF validation remain enforced.
+- Adds a real local HTTPS/Chromium approval and PKCE regression. The test fails
+  with the old policy (403) and must pass the corrected browser form exchange.
+  Existing HTTP-level OAuth tests now assert the form's referrer policy as well.
+- The browser test also caught CSP blocking the final OAuth form redirect. The
+  form allows only its own origin and the validated official ChatGPT OAuth
+  callback paths; arbitrary external form targets remain blocked.
+- The publisher runs the real browser gate in the clean snapshot when
+  `PLAYWRIGHT_PACKAGE` is configured. This release uses the bundled Playwright
+  module and cached Linux Chromium via explicit environment paths.
+
 ## Release 0.27.3 (2026-10-22)
 
+- Published from `efe7320`; exact version and latest verified at check 13. SHA1:
+  `365dbf2fa97e3c98bb73e5b2df6603f14db59b66`. Server activation was held while
+  investigating the owner's browser login rejection; 0.27.4 includes this fix.
 - Real macOS repeated-setup verification exposed asynchronous launchd removal:
   immediate bootstrap returned EIO once after bootout. The dedicated dot tunnel
   was restored with bootstrap and both public metadata endpoints returned 200.

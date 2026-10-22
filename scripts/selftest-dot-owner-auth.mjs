@@ -39,6 +39,8 @@ async function fixture(t) {
     const location = response.headers.get('location');
     const page = await request(location);
     assert.equal(page.status,200,await page.clone().text());
+    assert.equal(page.headers.get('referrer-policy'),'same-origin','approval form must preserve the browser Origin header');
+    assert.ok(page.headers.get('content-security-policy').includes("form-action 'self' https://chatgpt.com/connector_platform_oauth_redirect https://chatgpt.com/connector/oauth/;"));
     const html = await page.text();
     const csrf = /name="csrf" value="([^"]+)"/.exec(html)?.[1];assert.ok(csrf);
     return {location,csrf};

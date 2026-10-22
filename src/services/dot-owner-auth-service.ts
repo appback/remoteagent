@@ -153,9 +153,11 @@ export class DotOwnerAuthService {
     if (Date.now() - this.requestWindow.start > 60_000) this.requestWindow = { start: Date.now(), count: 0 };
     if (++this.requestWindow.count > 120) { res.writeHead(429, { "Retry-After": "60" }).end(); return true; }
     res.setHeader("Cache-Control", "no-store");
-    res.setHeader("Referrer-Policy", "no-referrer");
+    // no-referrer makes browsers serialize a form POST's Origin as "null".
+    // same-origin preserves CSRF origin checks without leaking OAuth URLs cross-site.
+    res.setHeader("Referrer-Policy", "same-origin");
     res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader("Content-Security-Policy", "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+    res.setHeader("Content-Security-Policy", "default-src 'none'; form-action 'self' https://chatgpt.com/connector_platform_oauth_redirect https://chatgpt.com/connector/oauth/; frame-ancestors 'none'; base-uri 'none'");
     // Only the loopback listener sits behind the configured HTTPS proxy.
     if (req.headers["x-forwarded-proto"] !== "https") { res.writeHead(400).end("HTTPS proxy required"); return true; }
     if ((req.headers["x-forwarded-host"] ?? req.headers.host) !== new URL(this.origin).host) { res.writeHead(400).end("Invalid host"); return true; }

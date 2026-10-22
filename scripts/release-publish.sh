@@ -75,6 +75,11 @@ npm run selftest:provider-install
 node --test scripts/selftest-dot.mjs
 node --test scripts/selftest-dot-owner-auth.mjs
 node --test scripts/selftest-dot-setup.mjs
+if [[ -n "${PLAYWRIGHT_PACKAGE:-}" ]]; then
+  node scripts/selftest-dot-browser.mjs
+else
+  echo "Optional browser gate not configured; set PLAYWRIGHT_PACKAGE and PLAYWRIGHT_EXECUTABLE to run it."
+fi
 node scripts/selftest-telegram-update.mjs
 node scripts/selftest-session-dispatch.mjs
 node scripts/selftest-telegram-upload.mjs

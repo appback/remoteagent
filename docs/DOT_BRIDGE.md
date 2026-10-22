@@ -267,6 +267,19 @@ test uses production Telegram tokens, real dot credentials or live OpenAI calls.
 - `git diff --check`: passed.
 
 Real dot OAuth/plugin linking and a live Telegram round trip remain unverified.
+Browser approval is additionally tested through a real local HTTPS reverse proxy:
+
+```bash
+PLAYWRIGHT_PACKAGE=file:///absolute/path/to/playwright/index.mjs \
+PLAYWRIGHT_EXECUTABLE=/absolute/path/to/chromium \
+npm run selftest:dot-browser
+```
+
+This optional browser test requires OpenSSL and Playwright/Chromium. It uses a
+temporary local TLS certificate, fake owner/client data and a locally intercepted
+ChatGPT callback, not operational accounts. The approval page uses
+`Referrer-Policy: same-origin`: `no-referrer` causes actual browsers to send a form
+POST with `Origin: null`, which must remain rejected by the CSRF origin check.
 Published to npm as `appback-remoteagent@0.27.0` from source `606f99d`.
 Exact version and `latest` were both verified as `0.27.0`. Operational server
 updates to 30, 40 and 60 completed; live dot account acceptance is still open.
