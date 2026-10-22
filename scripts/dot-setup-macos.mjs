@@ -4,12 +4,24 @@ import os from 'node:os';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
+import {pathToFileURL} from 'node:url';
 import dotenv from 'dotenv';
 
 const usage = 'remoteagent dot setup --hostname remoteagent-dot60.appback.app --cloudflared /absolute/path/cloudflared [--origin-cert /absolute/path/cert.pem] [--activate]';
 function privateWrite(file, text) {
   const temp=file+'.'+randomUUID()+'.tmp';
   try{fs.writeFileSync(temp,text,{mode:0o600,flag:'wx'});fs.renameSync(temp,file);}finally{if(fs.existsSync(temp))fs.unlinkSync(temp);}
+}
+export function provisionTunnelCredential(dir, certificate, tunnelId, home=os.homedir()) {
+  if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tunnelId))throw Error('Invalid tunnel ID.');
+  const target=path.join(dir,tunnelId+'.json');
+  const source=[target,path.join(path.dirname(certificate),tunnelId+'.json'),path.join(home,'.cloudflared',tunnelId+'.json')].find(file=>fs.existsSync(file));
+  if(!source)throw Error('Tunnel-specific credentials are missing; do not reuse another tunnel.');
+  const credentials=JSON.parse(fs.readFileSync(source,'utf8'));
+  if(credentials.TunnelID!==tunnelId||typeof credentials.TunnelSecret!=='string'||!credentials.TunnelSecret)throw Error('Tunnel credential identity mismatch.');
+  if(source!==target)privateWrite(target,JSON.stringify(credentials));
+  fs.chmodSync(target,0o600);
+  return target;
 }
 function assertIdle(data, message) {
   const polling=JSON.parse(fs.readFileSync(path.join(data,'bot-polling-state.json'),'utf8'));
@@ -42,7 +54,7 @@ async function main() {
   const certificate=path.resolve(values['--origin-cert']||path.join(os.homedir(),'.cloudflared/cert.pem'));
   if(!fs.existsSync(certificate))throw Error('Cloudflare approval is required. Run cloudflared tunnel login, then rerun this exact setup command.');
   const dir=path.join(data,'dot','transport');fs.mkdirSync(dir,{recursive:true,mode:0o700});fs.chmodSync(dir,0o700);
-  const binary=path.join(dir,'cloudflared');if(path.resolve(cloudflared)!==binary)fs.copyFileSync(cloudflared,binary);fs.chmodSync(binary,0o700);
+  const binary=path.join(dir,'cloudflared');if(!fs.existsSync(binary))fs.copyFileSync(cloudflared,binary);fs.chmodSync(binary,0o700);
   fs.chmodSync(certificate,0o600);
   const run=(args)=>execFileSync(binary,['tunnel','--origincert',certificate,...args],{encoding:'utf8',timeout:60000,maxBuffer:4*1024*1024});
   const stateFile=path.join(dir,'setup.json');
@@ -59,9 +71,7 @@ async function main() {
     privateWrite(stateFile,JSON.stringify({hostname,tunnelId:tunnel.id,routed:false}));
   }
   if(state&&state.tunnelId!==tunnel.id)throw Error('Tunnel identity mismatch; existing transport was not changed.');
-  const credential=path.join(os.homedir(),'.cloudflared',tunnel.id+'.json');
-  if(!fs.existsSync(credential))throw Error('Tunnel-specific credentials are missing; do not reuse another tunnel.');
-  fs.chmodSync(credential,0o600);
+  const credential=provisionTunnelCredential(dir,certificate,tunnel.id);
   if(!state?.routed){
     run(['route','dns',tunnel.id,hostname]);
     privateWrite(stateFile,JSON.stringify({hostname,tunnelId:tunnel.id,routed:true}));
@@ -103,4 +113,5 @@ async function main() {
     console.log('Dot OAuth and MCP metadata are ready. Send /login dot in the intended Telegram bot.');
   }else console.log('RemoteAgent was not restarted. Apply the npm release after provider work finishes, then send /login dot.');
 }
-main().catch(error=>{console.error('Dot setup failed: '+String(error.message).replace(/\d{6,}:[A-Za-z0-9_-]+/g,'[REDACTED_BOT_TOKEN]'));process.exitCode=1;});
+if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href)
+  main().catch(error=>{console.error('Dot setup failed: '+String(error.message).replace(/\d{6,}:[A-Za-z0-9_-]+/g,'[REDACTED_BOT_TOKEN]'));process.exitCode=1;});

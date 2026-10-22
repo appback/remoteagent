@@ -197,6 +197,15 @@ tail -80 ~/.remoteagent/logs/agent.log
 '"'"''
 ```
 
+## Release 0.27.2 (2026-10-22)
+
+- Makes the managed macOS installer accept tunnel credentials generated beside
+  an explicit Cloudflare certificate, as well as the default `.cloudflared`
+  location. It validates the tunnel UUID and stages the matching credential in
+  the private transport directory. Reruns retain an already running binary.
+- Four portable credential-location/identity/permissions regression tests added
+  to the canonical clean-snapshot publish gate.
+
 ## Release 0.27.1 (2026-10-22)
 
 - Replaces the external-IdP assumption with managed owner OAuth using pinned
@@ -210,8 +219,21 @@ tail -80 ~/.remoteagent/logs/agent.log
   application tunnels, sessions and the private local UI.
 - Managed callbacks enforce public-address validation, pinned TLS and challenge
   verification without requiring a guessed callback-host setting.
-- Local implementation and regression verification are complete. npm publication,
-  60 setup and actual ChatGPT plugin acceptance are recorded below after each gate.
+- Published from `4cc497c`, with exact npm version and `latest` verified at check
+  28. Tarball SHA1: `8f1f44c5f98cb32310869fa2f34769aee075303c`.
+- 60 deployment completed via `npm run release:deploy -- 0.27.1 60` with no active
+  provider work. Backup: `/Users/appback/.remoteagent/backups/npm-0.27.1-20261022T203736`.
+- Dedicated tunnel `3de791c1-06d8-4ef9-bffd-a673945d3a69` and hostname
+  `remoteagent-dot60.appback.app` created. The initial CLI attempt stopped before
+  DNS/runtime changes because cloudflared wrote its credential next to the
+  explicit certificate. The credential was migrated privately to the default
+  location and setup/activation then succeeded; 0.27.2 fixes the installer path.
+- Actual public checks: protected-resource metadata 200; OIDC metadata 200 with
+  PKCE S256 and CIMD; unauthenticated MCP 401; `/api/sessions` and root both 404.
+  Authorization using the real ChatGPT CIMD document returned 303, and the owner
+  approval page returned 200 with its code form and CSRF field.
+- This verifies transport and the real client metadata/authorization entry path,
+  not a user's completed ChatGPT plugin link or a cloud dot Telegram round trip.
 
 ## Release 0.27.0 (2026-10-22)
 
