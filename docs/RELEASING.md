@@ -223,6 +223,17 @@ tail -80 ~/.remoteagent/logs/agent.log
   all 11 host tests on the actual Mac 60 in an isolated temporary environment.
 - Deploy to 60 through the command above; refresh the MCP connection to discover
   the added tools. Screen/keyboard control is not part of this release.
+- Published and deployed to 60 using that exact command on 2026-10-22. npm
+  confirmed both the exact version and `latest`; package SHA1:
+  `a9786f221df80cf6da75a78844c198833c2f1e35`.
+- Post-deploy checks through the public HTTPS MCP endpoint and existing OAuth
+  grant returned all nine tools and actual host `darwin`,
+  `appbackui-Macmini.local`. Unauthenticated requests returned 401. All 13 local
+  sessions remained; the dedicated tunnel kept PID 38387 across deployment.
+- Configuration/runtime backup:
+  `/Users/appback/.remoteagent/backups/npm-0.28.0-20261022T215410`.
+  Refresh the client tool catalogue before the live dot command/report test;
+  public tool discovery alone is not proof that dot executed a host command.
 
 ## Release 0.27.4 (2026-10-22)
 
