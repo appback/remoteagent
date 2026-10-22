@@ -137,6 +137,19 @@ The deploy script performs:
 
 ### macOS server 60
 
+Enable direct dot host execution during an idle deployment (explicit owner opt-in):
+
+```bash
+DOT_HOST_ROOTS='["/Users/appback/workspaces/remoteagent"]' \
+  npm run release:deploy -- 0.28.0 60
+```
+
+The directories must exist. The script validates them before stopping the runtime,
+backs up `.env`, enables the tools, and restores configuration on rollback. Omit
+`DOT_HOST_ROOTS` to preserve existing host-tool settings. Active dot requests or
+host jobs block deployment. Refresh the ChatGPT MCP connection to discover tools.
+Shell commands run as the RemoteAgent OS user; these roots are not a shell sandbox.
+
 ```bash
 npm run release:deploy -- 0.26.1 60
 ```
@@ -196,6 +209,20 @@ systemctl status remoteagent --no-pager -n 20
 tail -80 ~/.remoteagent/logs/agent.log
 '"'"''
 ```
+
+## Release 0.28.0 (2026-10-22)
+
+- Adds opt-in direct dot host tools: inspect OS/roots, start/poll/cancel commands,
+  list/read/write UTF-8 files with optimistic hash checks, and forget reviewed jobs.
+- Commands execute as the RemoteAgent OS user, not through another LLM and not in
+  an OS sandbox. No automatic retry of shell commands after runtime restart.
+- Bounded concurrent jobs, output, timeout and history; owner/request checks;
+  `/stop` cancellation; new jobs pause on persistence failure without taking down
+  Telegram messaging. Final reports wait until tracked host jobs have exited.
+- Validation: 42 dot/OAuth/setup/host tests, Telegram injection regression, and
+  all 11 host tests on the actual Mac 60 in an isolated temporary environment.
+- Deploy to 60 through the command above; refresh the MCP connection to discover
+  the added tools. Screen/keyboard control is not part of this release.
 
 ## Release 0.27.4 (2026-10-22)
 

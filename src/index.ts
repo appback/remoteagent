@@ -15,6 +15,7 @@ import { BotManagementService } from "./services/bot-management-service.js";
 import { LocalUiService } from "./services/local-ui-service.js";
 import { DotBridgeService } from "./services/dot-bridge-service.js";
 import { DotMcpService, createDotAuthenticator } from "./services/dot-mcp-service.js";
+import { DotHostService } from "./services/dot-host-service.js";
 import { createDotWebhookPost } from "./services/dot-webhook.js";
 import { AgentMemoryService } from "./services/agent-memory-service.js";
 import { WorkspaceCleanupService } from "./services/workspace-cleanup-service.js";
@@ -129,8 +130,14 @@ async function main(): Promise<void> {
         createDotWebhookPost(hosts ? hosts.split(",") : managed ? undefined : required("DOT_CALLBACK_HOSTS").split(",")), Date.now,
         async header => (await authenticate(header))?.subject);
       if (auth) candidate.setLoginCodeIssuer(() => auth.issueLoginCode());
-      const mcp = new DotMcpService(candidate, "127.0.0.1", config.dotPort, oauth, authenticate, auth?.handle.bind(auth));
-      await mcp.start();
+      let host: DotHostService | undefined;
+      if (process.env.DOT_HOST_ENABLED === "true") {
+        try { host = new DotHostService(config.dataDir, JSON.parse(process.env.DOT_HOST_ROOTS ?? "[]") as string[]); }
+        catch { console.error("Dot host execution disabled: check DOT_HOST_ROOTS (existing absolute directories, JSON array)."); }
+      }
+      if (host) candidate.setHostCancellation(requestId => host.cancelRequest(requestId));
+      const mcp = new DotMcpService(candidate, "127.0.0.1", config.dotPort, oauth, authenticate, auth?.handle.bind(auth), host);
+      try { await mcp.start(); } catch (error) { host?.close(); throw error; }
       candidate.start();
       dot = candidate;
       console.log(`Dot MCP bridge listening on 127.0.0.1:${config.dotPort}; real dot linking must be verified separately.`);

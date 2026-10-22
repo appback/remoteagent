@@ -73,6 +73,7 @@ npm run check
 npm run build
 npm run selftest:provider-install
 node --test scripts/selftest-dot.mjs
+node --test scripts/selftest-dot-host.mjs
 node --test scripts/selftest-dot-owner-auth.mjs
 node --test scripts/selftest-dot-setup.mjs
 if [[ -n "${PLAYWRIGHT_PACKAGE:-}" ]]; then

@@ -37,10 +37,72 @@ Implementation checklist:
 - [x] Durable chat routing, request IDs and bounded delivery attempts.
 - [x] Telegram command/help integration and destination-bound replies.
 - [x] Local protocol, failure, restart and routing tests.
-- [ ] Real dot subscription and Telegram round trip (requires account setup).
+- [x] Real dot subscription and Telegram round trip on Mac 60 (2026-10-22).
 
 The first version handles text only. Attachments are explicitly rejected on a
 dot-bound chat, rather than forwarding inaccessible local file paths to dot.
+
+## Optional direct host execution
+
+Dot can execute commands and read/edit files directly through RemoteAgent without
+delegating to Codex or Claude. This is a separate, explicit owner opt-in; installing
+or linking the text bridge alone does not enable host execution.
+
+On the host, add these settings to `~/.remoteagent/.env` using real, existing
+absolute directories, then restart the idle RemoteAgent runtime once:
+
+```dotenv
+DOT_HOST_ENABLED=true
+DOT_HOST_ROOTS='["/Users/appback/workspaces/remoteagent"]'
+```
+
+The directories above are examples, not automatically created or enabled paths.
+An invalid configuration disables host tools while preserving the text bridge.
+Refresh the MCP connection in ChatGPT after deployment to discover the new tools.
+Existing OAuth and request ownership checks also protect all host tool calls.
+
+- `dot_host_info(requestId)`: actual host OS, hostname, directories and limits.
+- `dot_host_exec(requestId, operationId, command, cwd, timeoutSeconds?)`: start an
+  asynchronous `/bin/bash -c` job. Reuse the same operation ID and identical
+  arguments after a transport failure; it returns the existing job, not a rerun.
+- `dot_host_job(requestId, jobId)`: output, status, exit code and signal.
+- `dot_host_cancel(requestId, jobId)`: terminate that job's process group.
+- `dot_host_file(requestId, action, path, content?, expectedSha256?)`: list/read/write.
+  Read the file first; pass its returned hash to replace it, or null to create a
+  new file. Maximum 32 KiB, UTF-8 only. Parent directories must already exist.
+- `dot_host_forget(requestId, jobId)`: remove a finished job's output and retry
+  record. Never retry the original exec operation after forgetting it.
+
+Example instruction through Telegram:
+
+```text
+60 Mac에서 dot_host_info로 작업 경로를 확인하고, 해당 경로에서 pwd와
+sw_vers를 실행해. 작업 종료 코드와 실제 출력으로 결과를 보고해.
+```
+
+No additional LLM API key is needed. Dot performs the reasoning; RemoteAgent only
+executes tools. Jobs are limited to two concurrent commands, 600 seconds by
+default (maximum 3600), 32 KiB output per stream and 64 saved job records. When
+the history is full, forget reviewed terminal jobs before starting another job.
+There is no extra periodic job scheduler. Job records are private mode 600 files.
+Completed output is persisted; running output may be lost after an abrupt crash.
+Storage failures disable new starts rather than crashing the messaging runtime.
+
+`/stop`, switching away from dot and disconnecting the channel cancel active
+request jobs. Cancellation sends TERM followed by KILL after two seconds if still
+needed; it does not undo writes already performed. Orderly runtime exit stops tracked
+process groups. On restart, unfinished job records become `interrupted`; commands
+are never automatically replayed. A new owner instruction is needed to retry.
+
+**Privilege boundary:** working-directory roots restrict file tools and command
+cwd, not the shell's capabilities. Shell commands have the RemoteAgent OS user's
+filesystem and network privileges, including potential access to files outside
+those roots. This is not a security sandbox. RemoteAgent does not forward its bot
+tokens, OAuth credentials or secret-helper environment to children, but this is
+not isolation from the user's on-disk credentials. Use a dedicated OS account or
+OS sandbox if stronger isolation is required. No sudo password injection or
+interactive terminal is provided. There are no screen/keyboard/click tools in
+this implementation; GUI automation requires separate tools and macOS permissions.
 
 ## Official contracts
 

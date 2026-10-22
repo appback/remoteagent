@@ -246,7 +246,9 @@ REMOTE
 }
 
 deploy_60() {
-  ssh appback@192.168.33.60 "VERSION=$VERSION ALLOW_STALE_RUNNING=${ALLOW_STALE_RUNNING:-0} ACTIVATE_JEV=${ACTIVATE_JEV:-0} bash -s" <<'REMOTE'
+  local HOST_ROOTS_B64
+  HOST_ROOTS_B64="$(node -e 'process.stdout.write(Buffer.from(process.env.DOT_HOST_ROOTS || "").toString("base64"))')"
+  ssh appback@192.168.33.60 "VERSION=$VERSION ALLOW_STALE_RUNNING=${ALLOW_STALE_RUNNING:-0} ACTIVATE_JEV=${ACTIVATE_JEV:-0} HOST_ROOTS_B64=$HOST_ROOTS_B64 bash -s" <<'REMOTE'
 set -euo pipefail
 export PATH="$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export DATA_DIR="$HOME/.remoteagent"
@@ -259,6 +261,14 @@ node --input-type=module <<'NODE'
 import fs from 'node:fs';
 import {execFileSync} from 'node:child_process';
 const d=process.env.DATA_DIR;
+if(process.env.HOST_ROOTS_B64){
+ const roots=JSON.parse(Buffer.from(process.env.HOST_ROOTS_B64,'base64').toString('utf8'));
+ if(!Array.isArray(roots)||!roots.length||roots.some(p=>typeof p!=='string'||!p.startsWith('/')||p==='/'||/[\r\n\0']/.test(p)||!fs.statSync(p).isDirectory()))throw Error('DOT_HOST_ROOTS must name existing absolute directories');
+}
+const dotPath=d+'/dot/bridge.json';
+if(fs.existsSync(dotPath)&&JSON.parse(fs.readFileSync(dotPath,'utf8')).messages.some(m=>['pending','sending','accepted'].includes(m.status)))throw Error('Dot requests are active; finish cloud work before deployment');
+const hostPath=d+'/dot/host-jobs.json';
+if(fs.existsSync(hostPath)&&JSON.parse(fs.readFileSync(hostPath,'utf8')).some(j=>j.status==='running'))throw Error('Dot host jobs are active; inspect before deployment');
 const pid=Number(fs.readFileSync(d+'/remoteagent.pid','utf8').trim());
 const command=execFileSync('/bin/ps',['-p',String(pid),'-o','args='],{encoding:'utf8'});
 if(!command.includes(process.env.ROOT+'/dist/index.js'))throw Error('Runtime PID does not match the expected npm installation');
@@ -297,6 +307,7 @@ rollback() {
   npm install -g "appback-remoteagent@$OLD_VERSION" --prefer-online || true
   cp -p "$BACKUP/service.plist" "$PLIST"
   cp -p "$BACKUP/runner.sh" "$DATA_DIR/run-launchagent.sh"
+  cp -p "$BACKUP/.env" "$DATA_DIR/.env"
   if [[ -f "$BACKUP/jev.json" ]]; then cp -p "$BACKUP/jev.json" "$DATA_DIR/jev.json"; else rm -f "$DATA_DIR/jev.json"; fi
   launchctl bootstrap "gui/$(id -u)" "$PLIST" || true
   echo "Deployment failed; attempted rollback. Backup: $BACKUP" >&2
@@ -308,6 +319,19 @@ node --input-type=module <<'NODE'
 import fs from 'node:fs';
 import {execFileSync} from 'node:child_process';
 const home=process.env.HOME,d=process.env.DATA_DIR,root=process.env.ROOT;
+if(process.env.HOST_ROOTS_B64){
+ const roots=JSON.parse(Buffer.from(process.env.HOST_ROOTS_B64,'base64').toString('utf8'));
+ const {DotHostService}=await import(root+'/dist/services/dot-host-service.js');
+ const probe=new DotHostService(d,roots);probe.close();
+ const envFile=d+'/.env';
+ let text=fs.readFileSync(envFile,'utf8');
+ for(const [key,value] of [['DOT_HOST_ENABLED','true'],['DOT_HOST_ROOTS',"'"+JSON.stringify(roots)+"'"]]){
+  const pattern=new RegExp('^'+key+'=.*$','m');
+  text=pattern.test(text)?text.replace(pattern,()=>key+'='+value):text+'\n'+key+'='+value+'\n';
+ }
+ fs.writeFileSync(envFile,text,{mode:0o600});
+ console.log('Dot host tools enabled for',JSON.stringify(roots));
+}
 const file=home+'/Library/LaunchAgents/app.remoteagent.runtime.plist';
 const config=JSON.parse(execFileSync('/usr/bin/plutil',['-convert','json','-o','-',file],{encoding:'utf8'}));
 const runner=d+'/run-launchagent.sh';

@@ -25,6 +25,7 @@ export class DotBridgeService {
   private timer?: NodeJS.Timeout;
   private paused = false;
   private loginCodeIssuer?: () => { code: string; expiresAt: string };
+  private cancelHostRequest?: (requestId: string) => void;
 
   constructor(dataDir: string, readonly owner: string, private readonly post: DotWebhookPost,
     private readonly now: () => number = Date.now,
@@ -45,6 +46,7 @@ export class DotBridgeService {
 
   register(botId: string, reporter: Reporter): void { this.reporters.set(botId, reporter); }
   setLoginCodeIssuer(issuer: () => { code: string; expiresAt: string }): void { this.loginCodeIssuer = issuer; }
+  setHostCancellation(cancel: (requestId: string) => void): void { this.cancelHostRequest = cancel; }
   issueLoginCode() { return this.loginCodeIssuer?.(); }
   pause(): void { this.paused = true; this.close(); }
   start(): void {
@@ -92,7 +94,9 @@ export class DotBridgeService {
       if (!channel) return;
       channel.enabled = false;
       for (const message of this.state.messages) {
-        if (message.channelId === channel.id && !["completed", "canceled"].includes(message.status)) message.status = "canceled";
+        if (message.channelId === channel.id && !["completed", "canceled"].includes(message.status)) {
+          this.cancelHostRequest?.(message.id); message.status = "canceled";
+        }
       }
       this.save();
     });
@@ -115,7 +119,9 @@ export class DotBridgeService {
       if (!channel) return;
       this.state.channels = this.state.channels.filter(c => c.id !== channel.id);
       this.state.subscriptions = this.state.subscriptions.filter(s => s.channelId !== channel.id);
-      for (const message of this.state.messages) if (message.channelId === channel.id) message.status = "canceled";
+      for (const message of this.state.messages) if (message.channelId === channel.id) {
+        this.cancelHostRequest?.(message.id); message.status = "canceled";
+      }
       this.save();
     });
   }
@@ -141,7 +147,7 @@ export class DotBridgeService {
       let count = 0;
       for (const message of this.state.messages) {
         if (message.channelId === channel?.id && !["completed", "canceled"].includes(message.status)) {
-          message.status = "canceled"; count++;
+          this.cancelHostRequest?.(message.id); message.status = "canceled"; count++;
         }
       }
       this.save(); return count;

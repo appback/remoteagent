@@ -978,7 +978,7 @@ ${bridge.formatStatus(mapping)}`);
     if (dot?.isBound(dotBotId, String(ctx.chat.id))) {
       await ensureOwnerControlAccess(ctx);
       const count = await dot.cancel(dotBotId, String(ctx.chat.id));
-      await reply(ctx, `Canceled ${count} pending dot request(s) and blocked their later Telegram replies. This does not stop a task already running in OpenAI's cloud; stop that task in dot.`); return;
+      await reply(ctx, `Canceled ${count} pending dot request(s), requested cancellation of their RemoteAgent host jobs, and blocked later Telegram replies. This does not stop a task already running in OpenAI's cloud; stop that task in dot.`); return;
     }
     const botId = getBotId();
     const chatId = String(ctx.chat.id);
