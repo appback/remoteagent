@@ -42,7 +42,93 @@ Implementation checklist:
 The first version handles text only. Attachments are explicitly rejected on a
 dot-bound chat, rather than forwarding inaccessible local file paths to dot.
 
-## Optional direct host execution
+## Existing Webaton Browser Tools
+
+The optional Webaton adapter reuses an existing, authenticated loopback Webaton
+installation supporting `mode: external` and `/api/browser/:id/observe|action|finish|resume`.
+Dot selects browser actions itself; the adapter never starts a Gemini/Codex AI job.
+It does not install another browser engine or modify Webaton's existing service.
+An old Webaton release exposing only AI jobs is not sufficient.
+
+```dotenv
+DOT_WEBATON_ENABLED=true
+DOT_WEBATON_URL=http://127.0.0.1:4380
+DOT_WEBATON_TOKEN_FILE=/absolute/path/to/webaton/.data/mcp-token
+```
+
+For Mac 60, the running Webaton checkout was verified at
+`/Users/appback/workspaces/remoteagent/me6bwtlg`, with its agent token at
+`/Users/appback/workspaces/remoteagent/me6bwtlg/.data/mcp-token`. Set
+`DOT_WEBATON_TOKEN_FILE` to that path when invoking the existing
+`npm run release:deploy -- <published-version> 60` command. The deploy script checks
+the private file and Webaton health before stopping RemoteAgent, backs up `.env`,
+and enables the adapter without restarting Webaton. `DOT_WEBATON_URL` defaults to
+the verified `http://127.0.0.1:4380`. Omit the token-file deploy option on later
+updates to preserve the existing setting.
+
+The token file must belong to the runtime OS user and have mode 600. Its contents
+are read locally for each call (so Webaton token rotation works), never copied
+into the public MCP response, another LLM or a browser URL. Only the fixed
+loopback API is used; the Webaton UI, credentials and debugging ports stay private.
+Missing configuration disables these tools without disabling the text/host bridge.
+
+Tools, all protected by existing owner OAuth and a Telegram request ID:
+
+- `dot_webaton_accounts`: saved account IDs, names and modes; no credentials.
+- `dot_webaton_begin`: create an external browser task with a unique operation ID.
+- `dot_webaton_job`: status and downloads for this request's job only.
+- `dot_webaton_observe`: structured page observation, not a desktop screenshot.
+- `dot_webaton_act`: one navigate/click/fill/download action, with an operation ID.
+- `dot_webaton_resume`: resume after the user authenticates in Webaton; no OTP argument.
+- `dot_webaton_finish`: close after observing the requested result.
+- `dot_webaton_cancel`: cancel this request's browser task without undoing prior actions.
+- `dot_webaton_forget`: free terminal job records after reviewing the results.
+
+Observe before choosing selectors. Authentication pages and sensitive fields stay
+protected by Webaton; do not ask users to send passwords or OTP through Telegram.
+Allowed site origins are those already registered in Webaton. Add accounts/sites
+through Webaton's onboarding, not through a general public HTTP proxy.
+
+Mutating operations record intent before delivery and deduplicate identical retry
+IDs. Network ambiguity or a restart never automatically repeats a click or job
+start. Inspect the browser/job and cancel if necessary. A canceled Telegram request
+cannot start new browser actions. `/stop` also requests cancellation of its mapped
+Webaton tasks; failures are logged rather than canceling unrelated jobs. Active
+browser tasks must be finished/canceled before `dot_report(kind: result)`.
+
+Adapter history is bounded to 128 bindings and 512 operations, with at most 32 KiB
+cached per mutation result; page observations are not retained. Forget reviewed
+terminal jobs to free records; never retry removed operation IDs. Webaton's own
+external-task timeout and browser locking remain unchanged. There is no additional
+polling scheduler or LLM in this adapter.
+
+Validation:
+
+```bash
+npm run selftest:dot-webaton
+WEBATON_SERVER_MODULE=file:///absolute/path/to/webaton/src/server.js \
+  node scripts/selftest-dot-webaton-live.mjs
+```
+
+The live test creates a private temporary profile, synthetic account and local
+test site, uses real Chromium, and removes its own fixtures. It does not change
+the running Webaton service or use production accounts. Refresh the ChatGPT
+RemoteAgent MCP tool catalogue after deploying/enabling new tools. Existing dot
+conversations may need a fresh tool context; server deployment alone is not proof
+that the dot client can invoke the new tools. These tools control Webaton's
+Chromium, not Safari or the entire Mac desktop.
+
+Validation record (2026-10-22): 48 combined dot/owner-OAuth/setup/host/Webaton
+tests and the Telegram injection regression passed. On Mac 60, the isolated live
+test passed real Chromium observation, fill, click, changed-heading verification,
+Chrome DevTools MCP navigation, download with file-content verification and final
+job status `completed`. It used the existing Webaton checkout at commit `9c3ccf8`
+on `feat/remoteagent-backend`. The already-running Webaton listener remained PID
+51764 on port 4380 and stayed healthy. This validates the adapter and executor;
+deployment, client tool refresh and a real dot-driven browser test are separate
+acceptance steps and are not claimed by the isolated test.
+
+## Direct Host Execution Configuration
 
 Dot can execute commands and read/edit files directly through RemoteAgent without
 delegating to Codex or Claude. This is a separate, explicit owner opt-in; installing

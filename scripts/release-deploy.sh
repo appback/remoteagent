@@ -246,9 +246,10 @@ REMOTE
 }
 
 deploy_60() {
-  local HOST_ROOTS_B64
+  local HOST_ROOTS_B64 WEBATON_CONFIG_B64
   HOST_ROOTS_B64="$(node -e 'process.stdout.write(Buffer.from(process.env.DOT_HOST_ROOTS || "").toString("base64"))')"
-  ssh appback@192.168.33.60 "VERSION=$VERSION ALLOW_STALE_RUNNING=${ALLOW_STALE_RUNNING:-0} ACTIVATE_JEV=${ACTIVATE_JEV:-0} HOST_ROOTS_B64=$HOST_ROOTS_B64 bash -s" <<'REMOTE'
+  WEBATON_CONFIG_B64="$(node -e 'if(process.env.DOT_WEBATON_TOKEN_FILE)process.stdout.write(Buffer.from(JSON.stringify({url:process.env.DOT_WEBATON_URL||"http://127.0.0.1:4380",tokenFile:process.env.DOT_WEBATON_TOKEN_FILE})).toString("base64"))')"
+  ssh appback@192.168.33.60 "VERSION=$VERSION ALLOW_STALE_RUNNING=${ALLOW_STALE_RUNNING:-0} ACTIVATE_JEV=${ACTIVATE_JEV:-0} HOST_ROOTS_B64=$HOST_ROOTS_B64 WEBATON_CONFIG_B64=$WEBATON_CONFIG_B64 bash -s" <<'REMOTE'
 set -euo pipefail
 export PATH="$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export DATA_DIR="$HOME/.remoteagent"
@@ -261,6 +262,15 @@ node --input-type=module <<'NODE'
 import fs from 'node:fs';
 import {execFileSync} from 'node:child_process';
 const d=process.env.DATA_DIR;
+if(process.env.WEBATON_CONFIG_B64){
+ const c=JSON.parse(Buffer.from(process.env.WEBATON_CONFIG_B64,'base64').toString('utf8')),u=new URL(c.url);
+ const st=fs.statSync(c.tokenFile);
+ if(u.protocol!=='http:'||u.hostname!=='127.0.0.1'||u.pathname!=='/'||u.search||u.hash||u.username||u.password
+  ||!c.tokenFile.startsWith('/')||/[\r\n\0']/.test(c.tokenFile)||!st.isFile()||(st.mode&0o077)!==0||st.uid!==process.getuid())throw Error('Invalid private Webaton configuration');
+ if(!/^[a-f0-9]{64}$/i.test(fs.readFileSync(c.tokenFile,'utf8').trim()))throw Error('Invalid Webaton agent token format');
+ const health=await fetch(u.origin+'/health',{redirect:'error',signal:AbortSignal.timeout(3000)});
+ if(!health.ok)throw Error('Webaton is unavailable; do not restart RemoteAgent');
+}
 if(process.env.HOST_ROOTS_B64){
  const roots=JSON.parse(Buffer.from(process.env.HOST_ROOTS_B64,'base64').toString('utf8'));
  if(!Array.isArray(roots)||!roots.length||roots.some(p=>typeof p!=='string'||!p.startsWith('/')||p==='/'||/[\r\n\0']/.test(p)||!fs.statSync(p).isDirectory()))throw Error('DOT_HOST_ROOTS must name existing absolute directories');
@@ -269,6 +279,8 @@ const dotPath=d+'/dot/bridge.json';
 if(fs.existsSync(dotPath)&&JSON.parse(fs.readFileSync(dotPath,'utf8')).messages.some(m=>['pending','sending','accepted'].includes(m.status)))throw Error('Dot requests are active; finish cloud work before deployment');
 const hostPath=d+'/dot/host-jobs.json';
 if(fs.existsSync(hostPath)&&JSON.parse(fs.readFileSync(hostPath,'utf8')).some(j=>j.status==='running'))throw Error('Dot host jobs are active; inspect before deployment');
+const webPath=d+'/dot/webaton.json';
+if(fs.existsSync(webPath)&&JSON.parse(fs.readFileSync(webPath,'utf8')).bindings.some(j=>!j.closed))throw Error('Dot Webaton jobs are active; inspect before deployment');
 const pid=Number(fs.readFileSync(d+'/remoteagent.pid','utf8').trim());
 const command=execFileSync('/bin/ps',['-p',String(pid),'-o','args='],{encoding:'utf8'});
 if(!command.includes(process.env.ROOT+'/dist/index.js'))throw Error('Runtime PID does not match the expected npm installation');
@@ -319,6 +331,17 @@ node --input-type=module <<'NODE'
 import fs from 'node:fs';
 import {execFileSync} from 'node:child_process';
 const home=process.env.HOME,d=process.env.DATA_DIR,root=process.env.ROOT;
+if(process.env.WEBATON_CONFIG_B64){
+ const c=JSON.parse(Buffer.from(process.env.WEBATON_CONFIG_B64,'base64').toString('utf8'));
+ const {DotWebatonService}=await import(root+'/dist/services/dot-webaton-service.js');
+ new DotWebatonService(d,c.url,c.tokenFile);
+ const envFile=d+'/.env';let text=fs.readFileSync(envFile,'utf8');
+ for(const [key,value] of [['DOT_WEBATON_ENABLED','true'],['DOT_WEBATON_URL',new URL(c.url).origin],['DOT_WEBATON_TOKEN_FILE',"'"+c.tokenFile+"'"]]){
+  const pattern=new RegExp('^'+key+'=.*$','m');
+  text=pattern.test(text)?text.replace(pattern,()=>key+'='+value):text+'\n'+key+'='+value+'\n';
+ }
+ fs.writeFileSync(envFile,text,{mode:0o600});console.log('Dot Webaton adapter enabled; existing Webaton service unchanged.');
+}
 if(process.env.HOST_ROOTS_B64){
  const roots=JSON.parse(Buffer.from(process.env.HOST_ROOTS_B64,'base64').toString('utf8'));
  const {DotHostService}=await import(root+'/dist/services/dot-host-service.js');

@@ -16,6 +16,7 @@
   "scripts": {
     "selftest:dot": "npm run build && node --test scripts/selftest-dot.mjs",
     "selftest:dot-host": "npm run build && node --test scripts/selftest-dot-host.mjs",
+    "selftest:dot-webaton": "npm run build && node --test scripts/selftest-dot-webaton.mjs",
     "selftest:dot-auth": "npm run build && node --test scripts/selftest-dot-owner-auth.mjs",
     "selftest:dot-browser": "npm run build && node scripts/selftest-dot-browser.mjs",
     "selftest:session-dispatch": "npm run build && node scripts/selftest-session-dispatch.mjs",
