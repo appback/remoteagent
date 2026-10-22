@@ -1,9 +1,10 @@
 # Server Account Login
 
-Send `/login` in Telegram and select GitHub, Codex, Claude, or Jev / OpenRouter.
+Send `/login` in Telegram and select GitHub, Codex, Claude, Dot, or Jev / OpenRouter.
 `/help` lists this entry once. Telegram's slash-command menu offers `/login`;
 provider names are chosen with buttons, not subcommand autocomplete.
-The login applies to the RemoteAgent OS account on that server. Existing
+CLI login applies to the RemoteAgent OS account on that server. Dot instead
+links a ChatGPT MCP plugin and this chat's event subscription. Existing
 Telegram sessions and their selected models remain unchanged.
 
 Direct commands:
@@ -13,9 +14,48 @@ Direct commands:
 /login git
 /login codex
 /login claude
+/login dot
 /login jev
 /login <OPENROUTER_API_KEY>
 ```
+
+## Dot Connection
+
+Use the existing ChatGPT account, not a separate dot account or Codex device code.
+On a server with the dot MCP endpoint prepared:
+
+1. Send `/login dot`. It prepares an opaque channel ID without changing the
+   current local session or routing incoming work to dot.
+2. Press **플러그인 등록** to open `https://chatgpt.com/plugins`, select **+ → Add
+   custom MCP server**, enter the displayed MCP URL and name `RemoteAgent`, and
+   finish the connection authentication/consent. Reuse a matching existing plugin.
+3. Press **Dot 열기**. Enable the RemoteAgent plugin in the intended dot, then
+   press **구독 지시문 복사** in Telegram and send that exact instruction to dot.
+   It includes this chat's channel ID and asks dot to subscribe, retrieve complete
+   messages, execute them and report using `dot_report`.
+4. Press **연결 확인** in Telegram. Only an actual verified `events/subscribe`
+   request changes the displayed subscription state to confirmed. Clicking a URL
+   or sending the instruction alone is not proof of a subscription.
+5. Send `/start dot` or press **Dot 시작**. An unverified subscription cannot start.
+
+`/start codex` and `/start claude` switch back through their usual session-start
+flow and suspend dot delivery while retaining its channel/subscription for a
+later `/start dot`. Active or queued local work blocks switching to dot until it
+finishes or the owner stops it. Login can be prepared while local work continues.
+
+The public setup documentation describes a ChatGPT UI registration and a dot
+subscription instruction, not a Codex CLI command to register a plugin or control
+the existing dot. `/login dot` guides these supported steps; it does not claim to
+have performed account consent or fabricate an OAuth device code. If the server
+endpoint/authentication is unavailable, it reports that condition without
+advertising a placeholder URL or changing the current session. See
+[dot infrastructure and validation](DOT_BRIDGE.md).
+
+Official procedures:
+https://developers.openai.com/plugins/deploy/connect-chatgpt and
+https://developers.openai.com/plugins/build/mcp-events.
+
+## Other Providers
 
 Jev is API-key authentication, not a CLI/browser device login. In an owner-only
 private chat, `/login <OPENROUTER_API_KEY>` validates the `sk-or-v1-` key with one

@@ -13,6 +13,9 @@ import { FileStore } from "./store/file-store.js";
 import { BridgeService } from "./services/bridge-service.js";
 import { BotManagementService } from "./services/bot-management-service.js";
 import { LocalUiService } from "./services/local-ui-service.js";
+import { DotBridgeService } from "./services/dot-bridge-service.js";
+import { DotMcpService, createDotAuthenticator } from "./services/dot-mcp-service.js";
+import { createDotWebhookPost } from "./services/dot-webhook.js";
 import { AgentMemoryService } from "./services/agent-memory-service.js";
 import { WorkspaceCleanupService } from "./services/workspace-cleanup-service.js";
 import { BotPollingStateService } from "./services/bot-polling-state-service.js";
@@ -102,10 +105,44 @@ async function main(): Promise<void> {
       });
   }
 
+  let dot: DotBridgeService | undefined;
+  if (config.dotEnabled) {
+    try {
+      const required = (name: string): string => {
+        const value = process.env[name]?.trim();
+        if (!value) throw Error(`Missing ${name}`);
+        return value;
+      };
+      const oauth = {
+        resource: required("DOT_PUBLIC_URL"), issuer: required("DOT_OAUTH_ISSUER"),
+        introspectionUrl: required("DOT_OAUTH_INTROSPECTION_URL"), clientId: required("DOT_OAUTH_CLIENT_ID"),
+        clientSecret: required("DOT_OAUTH_CLIENT_SECRET"), subject: required("DOT_OAUTH_SUBJECT"),
+      };
+      const authenticate = createDotAuthenticator(oauth);
+      const candidate = new DotBridgeService(config.dataDir, oauth.subject,
+        createDotWebhookPost(required("DOT_CALLBACK_HOSTS").split(",")), Date.now,
+        async header => (await authenticate(header))?.subject);
+      const mcp = new DotMcpService(candidate, "127.0.0.1", config.dotPort, oauth, authenticate);
+      await mcp.start();
+      candidate.start();
+      dot = candidate;
+      console.log(`Dot MCP bridge listening on 127.0.0.1:${config.dotPort}; real dot linking must be verified separately.`);
+    } catch (error) {
+      console.error("Dot bridge was not enabled; existing providers are unchanged.",
+        error instanceof Error && error.message.startsWith("Missing DOT_") ? error.message : "Check Dot OAuth/port configuration.");
+    }
+  }
+  if (!dot && fs.existsSync(path.join(config.dataDir, "dot", "bridge.json"))) {
+    // Keep explicit dot chat bindings paused on configuration failure, never silently route them to Codex.
+    dot = new DotBridgeService(config.dataDir, process.env.DOT_OAUTH_SUBJECT?.trim() ?? "",
+      async () => { throw Error("DOT_CONFIGURATION_UNAVAILABLE"); });
+    dot.pause();
+  }
+
   const botInfos = await Promise.all(config.telegramBotTokens.map((token, index) =>
     resolveBotInfo(token, index, config.telegramBotUsernames[index])
   ));
-  const bots = config.telegramBotTokens.map((token, index) => createBot(token, bridge, botManagement, botInfos[index]!));
+  const bots = config.telegramBotTokens.map((token, index) => createBot(token, bridge, botManagement, botInfos[index]!, dot));
 
   if (!config.telegramCommandMenuEnabled) {
     console.log("Telegram command menu registration is disabled.");

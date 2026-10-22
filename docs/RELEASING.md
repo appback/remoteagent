@@ -75,6 +75,7 @@ The publish script performs:
 - `npm pack`
 - guarded `npm publish`
 - provider installation regression tests in the clean staging snapshot before publishing
+- dot protocol tests and Telegram command/button injection tests in that same snapshot
 - exact published version and `latest` dist-tag verification with bounded propagation retries
 
 The package publish entrypoint is `npm run release:publish`.
@@ -184,6 +185,21 @@ systemctl status remoteagent --no-pager -n 20
 tail -80 ~/.remoteagent/logs/agent.log
 '"'"''
 ```
+
+## Release 0.27.0 (2026-10-22)
+
+- Adds the optional, default-off dot MCP Events bridge.
+- `/login dot` prepares a channel without changing current work and provides the
+  configured MCP endpoint, plugin registration link, copyable dot subscription
+  instruction and verify/start buttons.
+- `/start dot` requires a verified subscription. Explicit local-provider starts
+  suspend dot routing while preserving its subscription for later reuse.
+- Dot protocol tests cover signing, callback address/deadline validation,
+  authentication, bounded retries, cancellation, disk failure and restart.
+- The clean-snapshot publish gate now includes dot and Telegram injection tests.
+- Local tests do not constitute live dot account acceptance. Server authentication,
+  endpoint setup and a real account round trip remain separate deployment checks.
+- Publication and server rollout results are recorded below after verification.
 
 ## Release 0.26.3 (2026-10-14)
 

@@ -91,6 +91,7 @@ process.env.TELEGRAM_AUTO_PROGRESS_MAX_TURNS = "1";
 process.env.TELEGRAM_EMPTY_RESPONSE_RETRIES = "0";
 process.env.TELEGRAM_RETRYABLE_ERROR_RETRIES = "0";
 process.env.LOCAL_UI_ENABLED = "false";
+process.env.DOT_PUBLIC_URL = "https://remoteagent-dot.example.test";
 process.env.TELEGRAM_SELFTEST_RATE_LIMIT_FILE = rateLimitOnce;
 
 let jevApiCalls = 0;
@@ -579,7 +580,7 @@ if (calls.some((call) => /미완료 TODO|\/task|새 작업으로 접수/.test(ca
 
 await send("/login");
 const loginMenu = await waitForTelegramCall(call => call.text.includes("Choose an account to authenticate"));
-for (const label of ["GitHub", "Codex", "Claude", "Jev / OpenRouter"]) {
+for (const label of ["GitHub", "Codex", "Claude", "Dot", "Jev / OpenRouter"]) {
   if (!findInlineButton(loginMenu, label)?.callback_data?.startsWith("remoteagent:action:")) {
     throw new Error(`Missing login button: ${label}`);
   }
@@ -1129,8 +1130,78 @@ await send('/peer');
 await waitForTelegramCall(call => call.text.includes('최종 왕복 확인'));
 await send('/peer remove remote');
 
+// Dot routing is opt-in, uses numeric bot identity, and never invokes a local provider.
+const { DotBridgeService } = await import(path.join(root, 'dist/services/dot-bridge-service.js'));
+const dotEvents = [];
+const dotBridge = new DotBridgeService(dataDir, 'dot-owner', async (...args) => {
+  const payload = JSON.parse(args[4]);
+  if (payload.type === 'verification') return {status: 200, body: JSON.stringify({challenge: payload.challenge})};
+  dotEvents.push(payload); return {status: 204, body: ''};
+});
+const dotBot = createBot('000004:test-token', bridge, botManagement, {
+  id: 999004, is_bot: true, first_name: 'Dot Test', username: 'dot_test_bot',
+}, dotBridge);
+const dotSend = async text => dotBot.handleUpdates([update(text)]);
+const localBeforeDot = await bridge.startSession('dot_test_bot', '111222333', 'codex');
+const providerBeforeDot = providerCalls.length;
+await dotSend('/login dot');
+if (dotBridge.isBound('999004', '111222333')) throw Error('Dot login changed local routing before subscription approval');
+const channelId = dotBridge.channels('dot-owner')[0].channelId;
+const dotLogin = (await readTelegramCalls()).findLast(call => call.text.startsWith('Dot 연결:'));
+if (!dotLogin?.text.includes('https://remoteagent-dot.example.test/mcp')) throw Error('Dot login did not provide the configured MCP endpoint');
+if (findInlineButton(dotLogin, '플러그인 등록')?.url !== 'https://chatgpt.com/plugins') throw Error('Dot login did not provide the plugin registration page');
+const copiedPrompt = findInlineButton(dotLogin, '구독 지시문 복사')?.copy_text?.text;
+if (!copiedPrompt?.includes(channelId) || copiedPrompt.length > 256) throw Error('Dot subscription prompt is missing its channel or exceeds Telegram copy limit');
+await dotSend('/start dot');
+if (dotBridge.isBound('999004', '111222333')) throw Error('Dot start accepted an unverified subscription');
+if ((await bridge.status('dot_test_bot', '111222333')).session.sessionId !== localBeforeDot.session.sessionId) throw Error('Unverified dot start replaced the local session');
+await dotBridge.subscribe('dot-owner', {name: 'telegram.message.created', arguments: {channelId},
+  delivery: {mode: 'webhook', url: 'https://callback.example.test/', secret: 'whsec_' + Buffer.alloc(32, 7).toString('base64')}});
+await dotBot.handleUpdates([callbackUpdate(findInlineButton(dotLogin, '연결 확인').callback_data)]);
+const connectedDotLogin = (await readTelegramCalls()).findLast(call => call.text.startsWith('Dot 연결:'));
+if (!connectedDotLogin.text.includes('구독 확인됨')) throw Error('Dot login failed to observe the actual verified subscription');
+await dotBot.handleUpdates([callbackUpdate(findInlineButton(connectedDotLogin, 'Dot 시작').callback_data)]);
+if (!dotBridge.isBound('999004', '111222333')) throw Error('Dot start button failed to activate verified routing');
+await dotSend('/new');
+if ((await bridge.status('dot_test_bot', '111222333')).session.sessionId !== localBeforeDot.session.sessionId) {
+  throw Error('Dot routing unexpectedly replaced a local session');
+}
+await dotSend('dot integration instruction');
+await waitForTelegramCall(call => call.text.startsWith('Dot request queued:'));
+for (let i = 0; i < 30 && !dotEvents.length; i++) await new Promise(resolve => setTimeout(resolve, 5));
+if (dotEvents.length !== 1) throw Error('Dot message did not reach its event subscription');
+await dotBridge.report('dot-owner', {requestId: dotEvents[0].eventId, reportId: 'done', kind: 'result', text: 'Dot integration response'});
+const dotReply = await waitForTelegramCall(call => call.text.includes('Dot integration response'));
+if (dotReply.chat_id !== '111222333') throw Error('Dot response used the wrong chat');
+const fileUpdate = update('');
+delete fileUpdate.message.text;
+fileUpdate.message.document = {file_id: 'not-downloaded', file_name: 'test.txt'};
+await dotBot.handleUpdates([fileUpdate]);
+await waitForTelegramCall(call => call.text.includes('This dot bridge currently supports text only'));
+await dotSend('dot request to cancel');
+await dotSend('/stop');
+await dotSend('/start codex');
+if (dotBridge.isBound('999004', '111222333')) throw Error('Explicit local provider start failed to suspend dot');
+if (dotBridge.connection('999004', '111222333').channelId !== channelId
+  || !dotBridge.connection('999004', '111222333').subscribed) throw Error('Local provider switch destroyed the dot subscription');
+const localAfterDot = await bridge.status('dot_test_bot', '111222333');
+await dotSend('/start dot');
+if (!dotBridge.isBound('999004', '111222333')) throw Error('Dot could not resume its existing subscription');
+await dotSend('/dot off');
+if (dotBridge.isBound('999004', '111222333')) throw Error('Dot off did not restore local routing');
+if ((await bridge.status('dot_test_bot', '111222333')).session.sessionId !== localAfterDot.session.sessionId) {
+  throw Error('Dot off lost the existing local provider session');
+}
+if (providerCalls.length !== providerBeforeDot) throw Error('Dot bridge invoked a local provider');
+await send('/dot');
+await waitForTelegramCall(call => call.text.includes('Dot bridge is disabled or not configured'));
+await send('/login dot');
+await waitForTelegramCall(call => call.text.includes('이 서버의 dot 연결 기능이 아직 준비되지 않았습니다'));
+
 console.log(JSON.stringify({
   ok: true,
+  dotTelegramInjection: true,
+  dotLoginAndStart: true,
   dataDir,
   session: session.publicId,
   developmentState: /기프티쇼 개발 진행해/.test(developmentCurrent),

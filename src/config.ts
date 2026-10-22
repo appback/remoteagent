@@ -193,6 +193,8 @@ export const config = {
   localUiEnabled: readBoolean("LOCAL_UI_ENABLED", true),
   localUiHost: readOptional("LOCAL_UI_HOST") || "127.0.0.1",
   localUiPort: readPort("LOCAL_UI_PORT", 3794),
+  dotEnabled: readBoolean("DOT_ENABLED", false),
+  dotPort: readPort("DOT_PORT", 3796),
   commands: {
     codex: codexCommand,
     claude: claudeCommand,

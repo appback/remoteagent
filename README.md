@@ -23,6 +23,12 @@ It has three layers:
 
 The runtime machine is the source of truth. Telegram is the client.
 
+An optional [dot text bridge](docs/DOT_BRIDGE.md) connects Telegram to an existing
+OpenAI dot through authenticated MCP Events. It is disabled by default and is
+separate from local Codex/Claude providers. Local protocol and Telegram injection
+tests cover the bridge; a real dot account connection still requires OAuth/plugin
+setup and a live round-trip test.
+
 ## What it does
 
 RemoteAgent is currently organized around six core capabilities.
@@ -105,7 +111,7 @@ Current command surface implemented in `src/bot.ts`:
 
 | Command | What it does |
 | --- | --- |
-| `/start [codex|claude]` | Starts a fresh fixed-mode session in a new managed workspace under `WORKSPACE_ROOT` |
+| `/start [codex\|claude\|dot]` | Starts a local provider session, or activates a verified dot subscription prepared with `/login dot` |
 | `/help` | Shows the current command list |
 | `/list` | Lists recent sessions |
 | `/list -a` | Lists all sessions with active/unused status, managed workspace size, and last update time |
@@ -136,7 +142,8 @@ Current command surface implemented in `src/bot.ts`:
 | `/option jev off\|observe\|on` | Optional Noul report review; default off, no restart; see [Jev guide](docs/JEV.md) |
 | `/option jev threshold 0.7` | Inclusive Noul acceptance threshold; greater than 0.5 through 1 |
 | `/option jev retries 2` | Correction budget per instruction, 0-5; stop earlier when issues do not improve |
-| `/login` | Owner-only GitHub / Codex / Claude selection buttons; returns authentication URL and any device code, then reports completion |
+| `/login` | Owner-only GitHub / Codex / Claude / Dot selection buttons; CLI login returns its URL/code, while Dot guides plugin registration and subscription |
+| `/login dot` | Shows the configured MCP URL, ChatGPT plugin/dot links, copyable subscription instruction and verification/start buttons; see [login guide](docs/LOGIN.md#dot-connection) |
 | `/login github\|codex\|claude` | Starts the selected login directly; `git` is an alias for `github` |
 | `/reset` | Clears the current chat binding |
 | `/batch start` | Starts manual batching of multiple text messages |

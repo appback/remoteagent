@@ -11,6 +11,7 @@ import { Bot, GrammyError, HttpError } from "grammy";
 import type { Context } from "grammy";
 import { config } from "./config.js";
 import { BridgeService } from "./services/bridge-service.js";
+import type { DotBridgeService } from "./services/dot-bridge-service.js";
 import { BotManagementService } from "./services/bot-management-service.js";
 import { ProviderSetupService } from "./services/provider-setup-service.js";
 import { LoginService, MissingLoginToolError, type LoginTarget } from "./services/login-service.js";
@@ -37,7 +38,9 @@ const JEV_LOGIN_HELP = "Jev uses OpenRouter. Create an API key at https://openro
 
 const HELP_TEXT = [
   "Commands:",
-  "/start [codex|claude]",
+  "/start [codex|claude|dot]",
+  "/login dot - connect the RemoteAgent plugin and dot subscription",
+  "/dot [status|off] - inspect or disconnect dot",
   "/help",
   "/version (alias: /v)",
   "/list [-a]",
@@ -71,7 +74,7 @@ const HELP_TEXT = [
   "/login <API_KEY> - connect Jev through OpenRouter",
   "/option jev off|observe|on",
   "/option jev threshold <0.7> | /option jev retries <2>",
-  "/login - choose GitHub, Codex or Claude",
+  "/login - choose GitHub, Codex, Claude or Dot",
   "/reset",
   "/! <command>",
   '/! ip addr | grep "inet"',
@@ -102,6 +105,7 @@ const REPORT_PROTOCOL_PROMPT = [
 ].join("\n");
 const RECOGNIZED_COMMANDS = new Set([
   "start",
+  "dot",
   "help",
   "version",
   "v",
@@ -152,6 +156,8 @@ type QueuedWorkLoopEntry = {
 };
 
 type InlineAction =
+  | { kind: "dot.login" }
+  | { kind: "dot.start" }
   | { kind: "peer.check"; alias: string }
   | { kind: "install.run"; target: "remoteagent" | "codex" | "claude" }
   | { kind: "jev.login" }
@@ -180,6 +186,7 @@ type InlineKeyboardButton = {
   text: string;
   callback_data?: string;
   url?: string;
+  copy_text?: { text: string };
 };
 
 class InlineActionRegistry {
@@ -313,7 +320,7 @@ class AutoContinueController {
   }
 }
 
-export function createBot(token: string, bridge: BridgeService, botManagement: BotManagementService, botInfo: UserFromGetMe): Bot {
+export function createBot(token: string, bridge: BridgeService, botManagement: BotManagementService, botInfo: UserFromGetMe, dot?: DotBridgeService): Bot {
   const bot = new Bot(token, { botInfo });
   const inlineActions = new InlineActionRegistry();
   const peers = new PeerService(config.dataDir, String(botInfo.id));
@@ -374,6 +381,12 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
     },
   );
   const getBotId = (): string => bot.botInfo?.username ?? String(bot.botInfo?.id ?? token);
+  // Dot's destination is resolved from the saved numeric bot ID, never model-supplied tokens/chat IDs.
+  const dotBotId = String(botInfo.id);
+  dot?.register(dotBotId, async (chatId, text) => {
+    // A timed-out send may already have reached Telegram. Do not blindly retry this write.
+    await callTelegramApi(token, "sendMessage", { chat_id: chatId, text });
+  });
   bridge.dispatch.register(getBotId(), async request => {
     const botId=getBotId(),chatId=request.chatId;
     if(!await bridge.isChatBoundToSession(botId,chatId,request.sessionId))throw Error("TARGET_BINDING_CHANGED");
@@ -566,11 +579,79 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
       });
     }
     const command = /^\/([a-z]+)(?:@\w+)?(?:\s|$)/i.exec(text)?.[1]?.toLowerCase();
+    if (dot?.isBound(dotBotId, String(ctx.chat?.id)) && text.startsWith("/")
+      && !["start", "dot", "stop", "help", "status", "version", "v", "bots", "bot", "option", "secret", "login", "install"].includes(command ?? "")) {
+      await reply(ctx, "This chat routes to dot. Use /dot off before running local-session commands."); return;
+    }
     if (fsSync.existsSync(path.join(config.dataDir, "self-update.json")) && !["help", "status", "stop", "v", "version"].includes(command ?? "")) {
       await reply(ctx, "RemoteAgent self-update is pending. This request was not started. Please resend it after the update result is reported.");
       return;
     }
     await next();
+  });
+
+  const showDotLogin = async (ctx: Context): Promise<void> => {
+    await ensureOwnerControlAccess(ctx);
+    if (!ctx.chat) throw Error("Telegram chat context is missing.");
+    const publicUrl = process.env.DOT_PUBLIC_URL?.trim();
+    let endpoint: string | undefined;
+    try {
+      const url = new URL(publicUrl ?? "");
+      if (url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash) endpoint = new URL("/mcp", url).href;
+    } catch { /* Server setup must exist before advertising an endpoint. */ }
+    if (!dot?.connection(dotBotId, String(ctx.chat.id)).available || !endpoint) {
+      await reply(ctx, "이 서버의 dot 연결 기능이 아직 준비되지 않았습니다. 등록할 MCP 주소와 서버 인증 구성이 먼저 준비되어야 합니다.\n기존 Codex 계정과 같은 ChatGPT 계정을 사용하며, 별도 dot 계정이나 API 키를 입력할 필요는 없습니다.\n기존 세션은 변경하지 않았습니다.");
+      return;
+    }
+    const chatId = String(ctx.chat.id);
+    const channelId = await dot.prepare(dotBotId, chatId);
+    const connection = dot.connection(dotBotId, chatId);
+    const prompt = `RemoteAgent의 telegram.message.created 이벤트를 channelId="${channelId}"로 구독해. 이벤트마다 dot_read_request로 전체 지시를 읽고 수행한 뒤 dot_report로 중간/완료 결과를 Telegram에 보내.`;
+    await reply(ctx, [
+      `Dot 연결: ${connection.subscribed ? "구독 확인됨" : "플러그인 연결·구독 대기"}`,
+      "Codex와 같은 ChatGPT 계정으로 진행하세요. CLI 로그인과 별개인 플러그인 연결 승인입니다.",
+      "1. 아래 '플러그인 등록' → + → Add custom MCP server를 선택하세요.",
+      `2. 이름 RemoteAgent, MCP 주소 ${endpoint} 를 입력하고 연결 인증·승인을 완료하세요. 이미 등록했다면 기존 플러그인을 사용하세요.`,
+      "3. 'Dot 열기'에서 RemoteAgent 플러그인을 사용할 수 있게 하고 아래 구독 지시문을 보내세요.",
+      prompt,
+      "4. '연결 확인'에서 구독 확인됨이 나오면 /start dot 으로 시작하세요.",
+      "등록 버튼을 누른 것만으로 연결 완료로 처리하지 않습니다. 실제 events/subscribe와 콜백 검증으로 확인합니다.",
+    ].join("\n\n"), keyboardOptions([
+      [{ text: "플러그인 등록", url: "https://chatgpt.com/plugins" }, { text: "Dot 열기", url: "https://chatgpt.com/dots" }],
+      [{ text: "구독 지시문 복사", copy_text: { text: prompt } }],
+      [actionButton(ctx, "연결 확인", { kind: "dot.login" }), actionButton(ctx, "Dot 시작", { kind: "dot.start" })],
+    ]));
+  };
+
+  const startDot = async (ctx: Context): Promise<void> => {
+    await ensureOwnerControlAccess(ctx);
+    if (!ctx.chat) throw Error("Telegram chat context is missing.");
+    const chatId = String(ctx.chat.id);
+    const connection = dot?.connection(dotBotId, chatId);
+    if (!dot || !connection?.available || !connection.subscribed) { await showDotLogin(ctx); return; }
+    const mapping = await bridge.status(getBotId(), chatId).catch(() => undefined);
+    if ((mapping && workLoopTails.has(workLoopKey(getBotId(), chatId, mapping.session.sessionId)))
+      || messageBatcher.hasPending(getBotId(), chatId)) {
+      await reply(ctx, "로컬 작업이 실행 중이거나 대기 중입니다. 완료하거나 /stop 한 뒤 /start dot 을 사용하세요. 기존 작업은 변경하지 않았습니다."); return;
+    }
+    const channelId = await dot.activate(dotBotId, chatId);
+    await reply(ctx, `Started dot connection.\nchannel: ${channelId}\n이 채팅의 텍스트 지시를 dot으로 전달합니다. 기존 Codex/Claude 세션 기록은 유지됩니다.\n/status\n/start codex\n/start claude`);
+  };
+
+  bot.command("dot", async (ctx) => {
+    await ensureOwnerControlAccess(ctx);
+    if (!dot) { await reply(ctx, "Dot bridge is disabled or not configured. See docs/DOT_BRIDGE.md for OAuth and MCP setup."); return; }
+    const action = ctx.match.trim() || "status";
+    const chatId = String(ctx.chat.id);
+    if (action === "status") { await reply(ctx, dot.status(dotBotId, chatId)); return; }
+    if (action === "off") {
+      await dot.disconnect(dotBotId, chatId);
+      await reply(ctx, "Dot disconnected. Pending dot replies are canceled; existing Codex/Claude session is unchanged."); return;
+    }
+    if (action === "connect") {
+      await showDotLogin(ctx); return;
+    }
+    await reply(ctx, "Usage: /dot [connect|status|off]");
   });
 
   bot.command("peer", async (ctx) => {
@@ -613,21 +694,29 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
     const first = args[0]?.trim();
 
     if (rest?.trim()) {
-      await reply(ctx, "Usage: `/start` or `/start codex` or `/start claude`", {
+      await reply(ctx, "Usage: `/start [codex|claude|dot]`", {
         parse_mode: "Markdown",
       });
       return;
     }
 
+    if (first?.toLowerCase() === "dot") { await startDot(ctx); return; }
     if (first && !(["codex", "claude"] as const).includes(first.toLowerCase() as Provider)) {
-      await reply(ctx, "Usage: `/start` or `/start codex` or `/start claude`", {
+      await reply(ctx, "Usage: `/start [codex|claude|dot]`", {
         parse_mode: "Markdown",
       });
       return;
     }
 
     const explicitProvider = first ? first.toLowerCase() as Provider : undefined;
+    if (!explicitProvider && dot?.isBound(dotBotId, chatId)) {
+      await reply(ctx, dot.status(dotBotId, chatId)); return;
+    }
     const provider = await bridge.resolveStartProvider(explicitProvider);
+    if (dot?.isBound(dotBotId, chatId)) {
+      await ensureOwnerControlAccess(ctx);
+      await dot.suspend(dotBotId, chatId);
+    }
     await stopPreviousSessionForRebind(botId, chatId, "Chat started a new session; previous session execution was stopped.");
     const mapping = await bridge.startSession(botId, chatId, provider);
     await reply(ctx, `Started a fresh ${provider} session.
@@ -883,6 +972,11 @@ ${bridge.formatStatus(mapping)}`);
   });
 
   bot.command("stop", async (ctx) => {
+    if (dot?.isBound(dotBotId, String(ctx.chat.id))) {
+      await ensureOwnerControlAccess(ctx);
+      const count = await dot.cancel(dotBotId, String(ctx.chat.id));
+      await reply(ctx, `Canceled ${count} pending dot request(s) and blocked their later Telegram replies. This does not stop a task already running in OpenAI's cloud; stop that task in dot.`); return;
+    }
     const botId = getBotId();
     const chatId = String(ctx.chat.id);
     const mapping = await bridge.status(botId, chatId);
@@ -915,6 +1009,10 @@ ${bridge.formatStatus(mapping)}`);
   });
 
   bot.command("status", async (ctx) => {
+    if (dot?.isBound(dotBotId, String(ctx.chat.id))) {
+      await ensureOwnerControlAccess(ctx);
+      await reply(ctx, dot.status(dotBotId, String(ctx.chat.id))); return;
+    }
     const botId = getBotId();
     const chatId = String(ctx.chat.id);
     const mapping = await bridge.status(botId, chatId);
@@ -1475,12 +1573,17 @@ ${bridge.formatStatus(mapping)}`);
       return;
     }
     if (provider === "jev") { await reply(ctx, JEV_LOGIN_HELP); return; }
+    if (provider === "dot") {
+      if (rest?.trim()) { await reply(ctx, "Usage: /login dot"); return; }
+      await showDotLogin(ctx); return;
+    }
     if (!provider) {
       await reply(ctx, "Choose an account to authenticate on this server. Authentication belongs to the OS account, not an individual session.", keyboardOptions([
         [actionButton(ctx, "Jev / OpenRouter", { kind: "jev.login" })],
         [actionButton(ctx, "GitHub", { kind: "login.start", target: "github" })],
         [actionButton(ctx, "Codex", { kind: "login.start", target: "codex" })],
         [actionButton(ctx, "Claude", { kind: "login.start", target: "claude" })],
+        [actionButton(ctx, "Dot", { kind: "dot.login" })],
       ]));
       return;
     }
@@ -1490,7 +1593,7 @@ ${bridge.formatStatus(mapping)}`);
     }
     const target = provider === "git" ? "github" : provider;
     if (target !== "github" && target !== "codex" && target !== "claude") {
-      await reply(ctx, "Use /login to choose GitHub, Codex, Claude or Jev. /login <OpenRouter API key> connects Jev. /login git is a GitHub alias.");
+      await reply(ctx, "Use /login to choose GitHub, Codex, Claude, Dot or Jev. /login dot connects the ChatGPT plugin. /login <OpenRouter API key> connects Jev. /login git is a GitHub alias.");
       return;
     }
     await startLogin(ctx, target);
@@ -1607,6 +1710,8 @@ ${bridge.formatStatus(mapping)}`);
         await startLogin(ctx, action.target, action.force);
         return;
       }
+      if (action.kind === "dot.login") { await showDotLogin(ctx); return; }
+      if (action.kind === "dot.start") { await startDot(ctx); return; }
       if (action.kind === "session.switch") {
         await reply(ctx, await switchChatSession(ctx, action.selector));
         return;
@@ -1664,6 +1769,16 @@ ${bridge.formatStatus(mapping)}`);
     const voice = ctx.message.voice;
     const audio = ctx.message.audio;
     const text = ctx.message.text?.trim();
+
+    if (dot?.isBound(dotBotId, chatId) && !(text?.startsWith("/"))) {
+      await ensureOwnerControlAccess(ctx);
+      if (!text || photo || document || voice || audio) {
+        await reply(ctx, "This dot bridge currently supports text only. Send the file through dot's own interface; local Telegram upload paths are not accessible to dot."); return;
+      }
+      const requestId = await dot.enqueue(dotBotId, chatId, String(ctx.update.update_id), text);
+      await reply(ctx, `Dot request queued: ${requestId}\nThis confirms local receipt, not dot task completion. /dot status`);
+      return;
+    }
 
     const planReinforcement = parseKoreanPlanReinforcementCommand(text, botId);
     if (planReinforcement.kind === "matched") {
@@ -1886,6 +2001,11 @@ type TelegramReplyTarget = {
 class TelegramMessageBatcher {
   private readonly pending = new Map<string, PendingTelegramBatch>();
   private readonly manual = new Map<string, ManualTelegramBatch>();
+
+  hasPending(botId: string, chatId: string): boolean {
+    const key = this.key(botId, chatId);
+    return this.pending.has(key) || this.manual.has(key);
+  }
 
   constructor(
     private readonly delayMs: number,

@@ -4,7 +4,8 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 
 export const TELEGRAM_COMMAND_MENU = [
-  { command: "start", description: "Start a new Codex or Claude session" },
+  { command: "start", description: "Start Codex, Claude or Dot (/start dot)" },
+  { command: "dot", description: "Connect, inspect or disconnect an optional dot bridge" },
   { command: "list", description: "List sessions" },
   { command: "new", description: "Start a fresh session" },
   { command: "switch", description: "Switch to a session" },
@@ -29,7 +30,7 @@ export const TELEGRAM_COMMAND_MENU = [
   { command: "bot", description: "Manage Telegram bots" },
   { command: "peer", description: "Register peer bots and verify Telegram connectivity" },
   { command: "install", description: "Choose RemoteAgent, Codex or Claude to install/update" },
-  { command: "login", description: "GitHub, Codex, Claude login or Jev API key registration" },
+  { command: "login", description: "GitHub, Codex, Claude, Dot connection or Jev API key" },
   { command: "reset", description: "Clear this chat binding" },
   { command: "help", description: "Show command help" },
 ];
