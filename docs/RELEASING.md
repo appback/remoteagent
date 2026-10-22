@@ -197,6 +197,16 @@ tail -80 ~/.remoteagent/logs/agent.log
 '"'"''
 ```
 
+## Release 0.27.3 (2026-10-22)
+
+- Real macOS repeated-setup verification exposed asynchronous launchd removal:
+  immediate bootstrap returned EIO once after bootout. The dedicated dot tunnel
+  was restored with bootstrap and both public metadata endpoints returned 200.
+- Unchanged transport/plist settings now leave the existing tunnel running.
+  Changed settings use bounded bootstrap retries after one targeted bootout.
+  Regression tests cover both the launchd race and exhausted retries, without
+  stopping RemoteAgent or any unrelated service.
+
 ## Release 0.27.2 (2026-10-22)
 
 - Makes the managed macOS installer accept tunnel credentials generated beside
@@ -205,6 +215,9 @@ tail -80 ~/.remoteagent/logs/agent.log
   the private transport directory. Reruns retain an already running binary.
 - Four portable credential-location/identity/permissions regression tests added
   to the canonical clean-snapshot publish gate.
+- Published from `1a65333`; exact and latest npm version confirmed at check 20.
+  SHA1: `329bf0b2c66d8840aa34938039138edbf9867bf3`. Deployed to 60 with backup
+  `/Users/appback/.remoteagent/backups/npm-0.27.2-20261022T204451`.
 
 ## Release 0.27.1 (2026-10-22)
 

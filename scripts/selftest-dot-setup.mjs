@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {test} from 'node:test';
-import {provisionTunnelCredential} from './dot-setup-macos.mjs';
+import {provisionTunnelCredential,reloadTunnelAgent} from './dot-setup-macos.mjs';
 
 const id='3de791c1-06d8-4ef9-bffd-a673945d3a69';
 const credentials={TunnelID:id,TunnelSecret:'test-only-fake-tunnel-secret',AccountTag:'test-account'};
@@ -36,4 +36,21 @@ test('existing staged credential identity is revalidated instead of overwritten'
  const f=fixture(t);fs.writeFileSync(path.join(f.dir,id+'.json'),JSON.stringify({...credentials,TunnelID:'wrong'}));
  fs.writeFileSync(path.join(f.standard,id+'.json'),JSON.stringify(credentials));
  assert.throws(()=>provisionTunnelCredential(f.dir,f.cert,id,f.root),/mismatch/);
+});
+
+test('launchd asynchronous bootout retries bootstrap without repeatedly stopping the tunnel',async()=>{
+ const calls=[];let boots=0;
+ await reloadTunnelAgent('gui/501','/private/test.plist',(_file,args)=>{
+   calls.push(args);if(args[0]==='bootstrap'&&++boots<3)throw Error('EIO while launchd removes registration');
+ },async()=>{});
+ assert.equal(boots,3);assert.equal(calls.filter(a=>a[0]==='bootout').length,1);
+ assert.ok(calls.filter(a=>a[0]==='bootout').every(a=>a[1]==='gui/501/app.remoteagent.dot-tunnel'));
+});
+test('bootstrap retries are bounded and do not touch the RemoteAgent runtime',async()=>{
+ let boots=0;
+ await assert.rejects(()=>reloadTunnelAgent('gui/501','/private/test.plist',(_file,args)=>{
+   if(args[0]==='print')throw Error('not registered');
+   assert.equal(args[0],'bootstrap');boots++;throw Error('bootstrap failure');
+ },async()=>{}),/bootstrap failure/);
+ assert.equal(boots,10);
 });

@@ -5,6 +5,7 @@ import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {pathToFileURL} from 'node:url';
+import {isDeepStrictEqual} from 'node:util';
 import dotenv from 'dotenv';
 
 const usage = 'remoteagent dot setup --hostname remoteagent-dot60.appback.app --cloudflared /absolute/path/cloudflared [--origin-cert /absolute/path/cert.pem] [--activate]';
@@ -22,6 +23,19 @@ export function provisionTunnelCredential(dir, certificate, tunnelId, home=os.ho
   if(source!==target)privateWrite(target,JSON.stringify(credentials));
   fs.chmodSync(target,0o600);
   return target;
+}
+export async function reloadTunnelAgent(manager, plist, run=execFileSync, delay=ms=>new Promise(resolve=>setTimeout(resolve,ms))) {
+  const target=manager+'/app.remoteagent.dot-tunnel';
+  let registered=false;
+  try{run('/bin/launchctl',['print',target],{stdio:'ignore'});registered=true;}catch{}
+  if(registered)run('/bin/launchctl',['bootout',target]);
+  let last;
+  // launchd may acknowledge bootout before the old registration is fully removed.
+  for(let i=0;i<10;i++){
+    try{run('/bin/launchctl',['bootstrap',manager,plist]);return;}catch(error){last=error;}
+    if(i<9)await delay(500);
+  }
+  throw last;
 }
 function assertIdle(data, message) {
   const polling=JSON.parse(fs.readFileSync(path.join(data,'bot-polling-state.json'),'utf8'));
@@ -77,20 +91,26 @@ async function main() {
     privateWrite(stateFile,JSON.stringify({hostname,tunnelId:tunnel.id,routed:true}));
   }
   const config=path.join(dir,'cloudflared.json');
-  privateWrite(config,JSON.stringify({tunnel:tunnel.id,'credentials-file':credential,ingress:[
+  const oldConfig=fs.existsSync(config)?fs.readFileSync(config,'utf8'):undefined;
+  const nextConfig=JSON.stringify({tunnel:tunnel.id,'credentials-file':credential,ingress:[
     {hostname,path:'^/(mcp|\\.well-known/oauth-protected-resource|oauth/.*)$',service:'http://127.0.0.1:'+port,originRequest:{httpHostHeader:hostname}},
     {service:'http_status:404'},
-  ]}));
+  ]});
+  privateWrite(config,nextConfig);
   execFileSync(binary,['tunnel','--config',config,'ingress','validate'],{encoding:'utf8',timeout:10000});
   const label='app.remoteagent.dot-tunnel',plistDir=path.join(os.homedir(),'Library/LaunchAgents');fs.mkdirSync(plistDir,{recursive:true});
   const plist=path.join(plistDir,label+'.plist');
   if(fs.existsSync(plist)&&!state)throw Error('An unmanaged dot tunnel LaunchAgent already exists.');
-  privateWrite(plist,JSON.stringify({Label:label,ProgramArguments:[binary,'--no-autoupdate','tunnel','--config',config,'run',tunnel.id],RunAtLoad:true,KeepAlive:true,
-    StandardOutPath:path.join(dir,'tunnel.log'),StandardErrorPath:path.join(dir,'tunnel-error.log'),ThrottleInterval:30}));
+  let oldPlist;
+  if(fs.existsSync(plist))oldPlist=JSON.parse(execFileSync('/usr/bin/plutil',['-convert','json','-o','-',plist],{encoding:'utf8'}));
+  const nextPlist={Label:label,ProgramArguments:[binary,'--no-autoupdate','tunnel','--config',config,'run',tunnel.id],RunAtLoad:true,KeepAlive:true,
+    StandardOutPath:path.join(dir,'tunnel.log'),StandardErrorPath:path.join(dir,'tunnel-error.log'),ThrottleInterval:30};
+  privateWrite(plist,JSON.stringify(nextPlist));
   execFileSync('/usr/bin/plutil',['-convert','xml1',plist]);
   const manager='gui/'+process.getuid();
-  try{execFileSync('/bin/launchctl',['print',manager+'/'+label],{stdio:'ignore'});execFileSync('/bin/launchctl',['bootout',manager+'/'+label]);}catch{}
-  execFileSync('/bin/launchctl',['bootstrap',manager,plist]);
+  let registered=false;
+  try{execFileSync('/bin/launchctl',['print',manager+'/'+label],{stdio:'ignore'});registered=true;}catch{}
+  if(!registered||oldConfig!==nextConfig||!isDeepStrictEqual(oldPlist,nextPlist))await reloadTunnelAgent(manager,plist);
   const backupDir=path.join(data,'dot','setup-backups');fs.mkdirSync(backupDir,{recursive:true,mode:0o700});
   const backup=path.join(backupDir,'before-owner-oauth-'+Date.now()+'.env');fs.writeFileSync(backup,raw,{mode:0o600,flag:'wx'});
   const settings={DOT_ENABLED:'true',DOT_PUBLIC_URL:publicUrl,DOT_AUTH_MODE:'owner'};
