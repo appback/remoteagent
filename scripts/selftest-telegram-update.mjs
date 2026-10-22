@@ -1169,10 +1169,15 @@ await dotSend('/new');
 if ((await bridge.status('dot_test_bot', '111222333')).session.sessionId !== localBeforeDot.session.sessionId) {
   throw Error('Dot routing unexpectedly replaced a local session');
 }
-await dotSend('dot integration instruction');
-await waitForTelegramCall(call => call.text.startsWith('Dot request queued:'));
+const beforeDotInstruction = (await readTelegramCalls()).length;
+const dotInstruction = update('dot integration instruction');
+await dotBot.handleUpdates([dotInstruction]);
+await dotBot.handleUpdates([dotInstruction]);
 for (let i = 0; i < 30 && !dotEvents.length; i++) await new Promise(resolve => setTimeout(resolve, 5));
 if (dotEvents.length !== 1) throw Error('Dot message did not reach its event subscription');
+if ((await readTelegramCalls()).slice(beforeDotInstruction).some(call => call.method === 'sendMessage')) {
+  throw Error('Dot enqueue must remain silent, including duplicate Telegram updates');
+}
 await dotBridge.report('dot-owner', {requestId: dotEvents[0].eventId, reportId: 'done', kind: 'result', text: 'Dot integration response'});
 const dotReply = await waitForTelegramCall(call => call.text.includes('Dot integration response'));
 if (dotReply.chat_id !== '111222333') throw Error('Dot response used the wrong chat');

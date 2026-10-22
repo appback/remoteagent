@@ -111,6 +111,9 @@ this implementation; GUI automation requires separate tools and macOS permission
 
 MCP Events uses protocol `2026-07-28`. A webhook acknowledgement means receipt,
 not task completion. Dot must invoke the reporting tool to return its answer.
+Normal Telegram request enqueue is silent, including repeated delivery of the same
+update. Progress/results and errors remain visible; `/dot status` provides request
+IDs and queue/delivery status when explicitly requested.
 Authentication uses OAuth authorization code + mandatory PKCE S256. The managed
 mode uses the established `oidc-provider` protocol implementation and the existing
 Telegram owner for approval. No new password account, LLM decision or OpenAI API

@@ -1778,8 +1778,7 @@ ${bridge.formatStatus(mapping)}`);
       if (!text || photo || document || voice || audio) {
         await reply(ctx, "This dot bridge currently supports text only. Send the file through dot's own interface; local Telegram upload paths are not accessible to dot."); return;
       }
-      const requestId = await dot.enqueue(dotBotId, chatId, String(ctx.update.update_id), text);
-      await reply(ctx, `Dot request queued: ${requestId}\nThis confirms local receipt, not dot task completion. /dot status`);
+      await dot.enqueue(dotBotId, chatId, String(ctx.update.update_id), text);
       return;
     }
 

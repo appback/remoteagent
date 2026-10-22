@@ -210,6 +210,16 @@ tail -80 ~/.remoteagent/logs/agent.log
 '"'"''
 ```
 
+## Release 0.28.1 (2026-10-22)
+
+- Normal dot instruction enqueue no longer sends a Telegram receipt message.
+  Progress/results, existing error handling and explicit `/dot status` remain.
+- Telegram regression repeats the same update, verifies one event delivery and
+  zero receipt messages, then verifies the final answer still reaches its chat.
+- Publish through `npm run release:publish`, then deploy with
+  `npm run release:deploy -- 0.28.1 60`. Omit `DOT_HOST_ROOTS` to preserve the
+  existing host-tool configuration. No tool schemas or OAuth settings change.
+
 ## Release 0.28.0 (2026-10-22)
 
 - Adds opt-in direct dot host tools: inspect OS/roots, start/poll/cancel commands,
