@@ -218,7 +218,32 @@ tail -80 ~/.remoteagent/logs/agent.log
 - `npm run release:publish -- --verify-only` confirmed both exact version and
   `latest` as `0.27.0` on check 12 of the extended window.
 - Package tarball SHA1: `e67237ba1e3a7972f5e91df14a712b231a85f64b`.
-- Server rollout awaits target selection; no operational service was restarted.
+- User-selected rollout completed on 30, 40 and 60 using these exact commands:
+
+  ```bash
+  npm run release:deploy -- 0.27.0 30
+  npm run release:deploy -- 0.27.0 40
+  ALLOW_STALE_RUNNING=1 npm run release:deploy -- 0.27.0 60
+  ```
+
+- 30: system service active/running, PID 1199865, npm runtime version 0.27.0.
+  Startup reported seven bot credentials as Unauthorized; ten other bots reached
+  ready state. No bot credentials, registrations or sessions were removed.
+- 40: user service active/running, PID 3437602, npm runtime version 0.27.0.
+  Its old system unit is disabled/inactive. The original deployment command
+  exited at the final system-unit status check after successful installation and
+  user-service restart. Independent user-service checks confirmed success.
+  The repository deployment script now verifies the selected user unit first.
+- 60: LaunchAgent running, PID 33549, npm runtime version 0.27.0. Initial preflight
+  stopped before changes because polling metadata still marked S009 as running.
+  Read-only inspection found no Codex process or non-transport runtime children,
+  and S009 events recorded a final result at 2026-10-22T02:36:43.691Z. Only after
+  these checks was the documented stale-state override used; preflight checked
+  process descendants again. No provider process was terminated.
+- 60 backup: `/Users/appback/.remoteagent/backups/npm-0.27.0-20261022T194358`.
+- All three local session-list endpoints returned HTTP 200 after rollout.
+  `DOT_ENABLED` remains unset/default-off on all three; real dot authentication,
+  plugin registration and a Telegram round trip are not yet verified.
 - The follow-up repository release-script change adds `--verify-only` and a
   36-check window. It is not retroactively included in the immutable npm tarball.
 

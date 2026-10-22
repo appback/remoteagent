@@ -193,7 +193,10 @@ else
 fi
 npm list -g appback-remoteagent --depth=0
 pgrep -af 'appback-remoteagent/dist/index.js'
-if systemctl cat remoteagent >/dev/null 2>&1; then
+if systemctl --user cat remoteagent >/dev/null 2>&1; then
+  systemctl --user status remoteagent --no-pager -n 20
+  journalctl --user -u remoteagent --since '1 minute ago' --no-pager -n 80
+elif systemctl cat remoteagent >/dev/null 2>&1; then
   systemctl status remoteagent --no-pager -n 20
   tail -80 ~/.remoteagent/logs/agent.log
 else
