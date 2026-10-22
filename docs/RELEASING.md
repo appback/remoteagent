@@ -211,6 +211,22 @@ tail -80 ~/.remoteagent/logs/agent.log
 - The publisher runs the real browser gate in the clean snapshot when
   `PLAYWRIGHT_PACKAGE` is configured. This release uses the bundled Playwright
   module and cached Linux Chromium via explicit environment paths.
+- Published from `353ee67`; all clean-snapshot gates passed, including the real
+  HTTPS/Chromium approval and token-exchange test. Exact npm version and latest
+  both confirmed as 0.27.4 at check 28. SHA1:
+  `891a69994951582b8532f8b5e0f555925f805ecd`.
+- Applied to 60 with `npm run release:deploy -- 0.27.4 60`; LaunchAgent PID 39824,
+  npm runtime path verified. Backup:
+  `/Users/appback/.remoteagent/backups/npm-0.27.4-20261022T210449`.
+- Post-deployment real Windows Edge form check preserved the exact public Origin
+  and browser cookies. An intentionally invalid test code reached the expected
+  invalid/expired-code response instead of failing at the origin check.
+- The npm-installed setup command was rerun without `--activate`. It staged the
+  tunnel credential correctly and left the existing tunnel PID unchanged (38387).
+  Existing sessions were not deleted; 13/13 were preserved at the rollout check.
+- Owner's completed plugin authorization and cloud dot Telegram round trip are
+  still pending. Retry with a fresh `/login dot` code and a new authorization page;
+  previous browser forms/codes expired during investigation.
 
 ## Release 0.27.3 (2026-10-22)
 

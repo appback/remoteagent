@@ -267,6 +267,11 @@ test uses production Telegram tokens, real dot credentials or live OpenAI calls.
 - `git diff --check`: passed.
 
 Real dot OAuth/plugin linking and a live Telegram round trip remain unverified.
+Managed infrastructure on 60 is now configured at
+`https://remoteagent-dot60.appback.app/mcp` (npm 0.27.4). Public metadata, the real
+ChatGPT CIMD authorization entry point and browser form-origin/cookie handling
+were checked. Completed owner consent and a real dot event/report are separate
+remaining acceptance gates; they are not implied by those infrastructure checks.
 Browser approval is additionally tested through a real local HTTPS reverse proxy:
 
 ```bash
