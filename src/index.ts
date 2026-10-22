@@ -113,16 +113,23 @@ async function main(): Promise<void> {
         if (!value) throw Error(`Missing ${name}`);
         return value;
       };
-      const oauth = {
-        resource: required("DOT_PUBLIC_URL"), issuer: required("DOT_OAUTH_ISSUER"),
+      const managed = process.env.DOT_AUTH_MODE?.trim() !== "external" && !process.env.DOT_OAUTH_ISSUER?.trim();
+      const owner = config.telegramOwnerId?.trim();
+      if (managed && !/^\d+$/.test(owner ?? "")) throw Error("Missing DOT_TELEGRAM_OWNER");
+      const resource = required("DOT_PUBLIC_URL");
+      const auth = managed ? new (await import("./services/dot-owner-auth-service.js")).DotOwnerAuthService(config.dataDir, resource, `telegram:${owner}`) : undefined;
+      const oauth = auth ? { resource, issuer: auth.issuer, subject: auth.owner } : {
+        resource, issuer: required("DOT_OAUTH_ISSUER"),
         introspectionUrl: required("DOT_OAUTH_INTROSPECTION_URL"), clientId: required("DOT_OAUTH_CLIENT_ID"),
         clientSecret: required("DOT_OAUTH_CLIENT_SECRET"), subject: required("DOT_OAUTH_SUBJECT"),
       };
-      const authenticate = createDotAuthenticator(oauth);
+      const authenticate = auth ? auth.authenticate.bind(auth) : createDotAuthenticator(oauth as Parameters<typeof createDotAuthenticator>[0]);
+      const hosts = process.env.DOT_CALLBACK_HOSTS?.trim();
       const candidate = new DotBridgeService(config.dataDir, oauth.subject,
-        createDotWebhookPost(required("DOT_CALLBACK_HOSTS").split(",")), Date.now,
+        createDotWebhookPost(hosts ? hosts.split(",") : managed ? undefined : required("DOT_CALLBACK_HOSTS").split(",")), Date.now,
         async header => (await authenticate(header))?.subject);
-      const mcp = new DotMcpService(candidate, "127.0.0.1", config.dotPort, oauth, authenticate);
+      if (auth) candidate.setLoginCodeIssuer(() => auth.issueLoginCode());
+      const mcp = new DotMcpService(candidate, "127.0.0.1", config.dotPort, oauth, authenticate, auth?.handle.bind(auth));
       await mcp.start();
       candidate.start();
       dot = candidate;

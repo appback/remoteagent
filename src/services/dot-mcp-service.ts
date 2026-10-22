@@ -57,7 +57,8 @@ export class DotMcpService {
   private activeRequests = 0;
   constructor(private readonly bridge: DotBridgeService, private readonly host: string, private readonly port: number,
     private readonly metadata: { resource: string; issuer: string },
-    private readonly authenticate: (header: string | undefined) => Promise<DotPrincipal | undefined>) {}
+    private readonly authenticate: (header: string | undefined) => Promise<DotPrincipal | undefined>,
+    private readonly authorizationHandler?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>) {}
 
   async start(): Promise<void> {
     this.server = http.createServer((req, res) => {
@@ -87,6 +88,7 @@ export class DotMcpService {
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
     res.setHeader("Cache-Control", "no-store");
+    if (this.authorizationHandler && await this.authorizationHandler(req, res)) return;
     if (req.method === "GET" && pathname === "/.well-known/oauth-protected-resource") {
       this.json(res, 200, { resource: this.metadata.resource, authorization_servers: [this.metadata.issuer], scopes_supported: [SCOPE] }); return;
     }

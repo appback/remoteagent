@@ -1141,6 +1141,7 @@ const dotBridge = new DotBridgeService(dataDir, 'dot-owner', async (...args) => 
 const dotBot = createBot('000004:test-token', bridge, botManagement, {
   id: 999004, is_bot: true, first_name: 'Dot Test', username: 'dot_test_bot',
 }, dotBridge);
+dotBridge.setLoginCodeIssuer(() => ({code:'test-owner-approval-code',expiresAt:new Date(Date.now()+300000).toISOString()}));
 const dotSend = async text => dotBot.handleUpdates([update(text)]);
 const localBeforeDot = await bridge.startSession('dot_test_bot', '111222333', 'codex');
 const providerBeforeDot = providerCalls.length;
@@ -1148,6 +1149,7 @@ await dotSend('/login dot');
 if (dotBridge.isBound('999004', '111222333')) throw Error('Dot login changed local routing before subscription approval');
 const channelId = dotBridge.channels('dot-owner')[0].channelId;
 const dotLogin = (await readTelegramCalls()).findLast(call => call.text.startsWith('Dot 연결:'));
+if (!dotLogin?.text.includes('test-owner-approval-code') || findInlineButton(dotLogin, '승인 코드 복사')?.copy_text?.text !== 'test-owner-approval-code') throw Error('Owner OAuth login code was not delivered in the private chat');
 if (!dotLogin?.text.includes('https://remoteagent-dot.example.test/mcp')) throw Error('Dot login did not provide the configured MCP endpoint');
 if (findInlineButton(dotLogin, '플러그인 등록')?.url !== 'https://chatgpt.com/plugins') throw Error('Dot login did not provide the plugin registration page');
 const copiedPrompt = findInlineButton(dotLogin, '구독 지시문 복사')?.copy_text?.text;
@@ -1159,6 +1161,7 @@ await dotBridge.subscribe('dot-owner', {name: 'telegram.message.created', argume
   delivery: {mode: 'webhook', url: 'https://callback.example.test/', secret: 'whsec_' + Buffer.alloc(32, 7).toString('base64')}});
 await dotBot.handleUpdates([callbackUpdate(findInlineButton(dotLogin, '연결 확인').callback_data)]);
 const connectedDotLogin = (await readTelegramCalls()).findLast(call => call.text.startsWith('Dot 연결:'));
+if (connectedDotLogin.text.includes('test-owner-approval-code')) throw Error('Verified subscription unnecessarily exposed a new login code');
 if (!connectedDotLogin.text.includes('구독 확인됨')) throw Error('Dot login failed to observe the actual verified subscription');
 await dotBot.handleUpdates([callbackUpdate(findInlineButton(connectedDotLogin, 'Dot 시작').callback_data)]);
 if (!dotBridge.isBound('999004', '111222333')) throw Error('Dot start button failed to activate verified routing');

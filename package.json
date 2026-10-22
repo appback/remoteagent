@@ -1,6 +1,6 @@
 {
   "name": "appback-remoteagent",
-  "version": "0.27.0",
+  "version": "0.27.1",
   "description": "Personal installable session server for continuing local AI work across PC and Telegram",
   "license": "MIT",
   "type": "module",
@@ -15,6 +15,7 @@
   },
   "scripts": {
     "selftest:dot": "npm run build && node --test scripts/selftest-dot.mjs",
+    "selftest:dot-auth": "npm run build && node --test scripts/selftest-dot-owner-auth.mjs",
     "selftest:session-dispatch": "npm run build && node scripts/selftest-session-dispatch.mjs",
     "selftest:peer": "npm run build && node scripts/selftest-peer.mjs",
     "selftest:provider-install": "node scripts/selftest-provider-install.mjs",
@@ -36,10 +37,12 @@
   },
   "dependencies": {
     "dotenv": "^16.6.1",
-    "grammy": "^1.38.3"
+    "grammy": "^1.38.3",
+    "oidc-provider": "9.12.2"
   },
   "devDependencies": {
     "@types/node": "^24.6.1",
+    "@types/oidc-provider": "^9.12.1",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
   },

@@ -73,6 +73,7 @@ npm run check
 npm run build
 npm run selftest:provider-install
 node --test scripts/selftest-dot.mjs
+node --test scripts/selftest-dot-owner-auth.mjs
 node scripts/selftest-telegram-update.mjs
 node scripts/selftest-session-dispatch.mjs
 node scripts/selftest-telegram-upload.mjs

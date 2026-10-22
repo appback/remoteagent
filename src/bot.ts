@@ -606,10 +606,12 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
     const chatId = String(ctx.chat.id);
     const channelId = await dot.prepare(dotBotId, chatId);
     const connection = dot.connection(dotBotId, chatId);
+    const approval = connection.subscribed ? undefined : dot.issueLoginCode();
     const prompt = `RemoteAgent의 telegram.message.created 이벤트를 channelId="${channelId}"로 구독해. 이벤트마다 dot_read_request로 전체 지시를 읽고 수행한 뒤 dot_report로 중간/완료 결과를 Telegram에 보내.`;
     await reply(ctx, [
       `Dot 연결: ${connection.subscribed ? "구독 확인됨" : "플러그인 연결·구독 대기"}`,
       "Codex와 같은 ChatGPT 계정으로 진행하세요. CLI 로그인과 별개인 플러그인 연결 승인입니다.",
+      ...(approval ? [`인증 화면에서 입력할 일회용 승인 코드: ${approval.code}\n5분간 유효하며 한 번만 사용할 수 있습니다. 코드나 승인 화면을 다른 사람에게 전달하지 마세요.`] : []),
       "1. 아래 '플러그인 등록' → + → Add custom MCP server를 선택하세요.",
       `2. 이름 RemoteAgent, MCP 주소 ${endpoint} 를 입력하고 연결 인증·승인을 완료하세요. 이미 등록했다면 기존 플러그인을 사용하세요.`,
       "3. 'Dot 열기'에서 RemoteAgent 플러그인을 사용할 수 있게 하고 아래 구독 지시문을 보내세요.",
@@ -619,6 +621,7 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
     ].join("\n\n"), keyboardOptions([
       [{ text: "플러그인 등록", url: "https://chatgpt.com/plugins" }, { text: "Dot 열기", url: "https://chatgpt.com/dots" }],
       [{ text: "구독 지시문 복사", copy_text: { text: prompt } }],
+      ...(approval ? [[{ text: "승인 코드 복사", copy_text: { text: approval.code } }]] : []),
       [actionButton(ctx, "연결 확인", { kind: "dot.login" }), actionButton(ctx, "Dot 시작", { kind: "dot.start" })],
     ]));
   };

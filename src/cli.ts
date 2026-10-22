@@ -26,6 +26,12 @@ async function main(): Promise<void> {
 
   const dataDir = path.resolve(takeOption(args, "--data-dir") || process.env.DATA_DIR?.trim() || path.join(os.homedir(), ".remoteagent"));
   const [group, action] = args;
+  if (group === "dot" && action === "setup") {
+    execFileSync(process.execPath, [fileURLToPath(new URL("../scripts/dot-setup-macos.mjs", import.meta.url)), ...args.slice(2)], {
+      stdio: "inherit", env: { ...process.env, DATA_DIR: dataDir },
+    });
+    return;
+  }
   if (group === "jev") {
     const { runJevCommand } = await import("./jev-helper.js");
     await runJevCommand(args.slice(1), dataDir);
@@ -277,6 +283,7 @@ Usage:
   remoteagent                         Start the foreground runtime
   remoteagent bot add [token] [--owner <telegram-user-id>]
   remoteagent service install
+  remoteagent dot setup --hostname <DNS-name> --cloudflared <absolute-path> [--origin-cert <cert.pem>]
   remoteagent jev status
   remoteagent jev evaluate <request.json>
   remoteagent delegate run <request.json>

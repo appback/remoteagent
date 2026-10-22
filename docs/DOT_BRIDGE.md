@@ -2,10 +2,10 @@
 
 ## Readiness and setup ownership
 
-Current status: experimental bridge implementation with local tests, not a
-completed usable dot integration. An existing OAuth authorization server was an
-implementation assumption, not verified infrastructure in this environment.
-The resource-server implementation does not provision that authorization server.
+The bridge now includes a managed OAuth authorization server using
+`oidc-provider`. The earlier implementation assumed an external identity provider
+already existed; that assumption prevented a fresh installation from linking.
+External OAuth remains an optional integration, not the installation default.
 
 RemoteAgent development/installation work must resolve and prepare the transport,
 authentication integration and plugin connection before live acceptance. The
@@ -49,11 +49,68 @@ dot-bound chat, rather than forwarding inaccessible local file paths to dot.
 
 MCP Events uses protocol `2026-07-28`. A webhook acknowledgement means receipt,
 not task completion. Dot must invoke the reporting tool to return its answer.
-Authentication uses an existing OAuth 2.1 authorization server; RemoteAgent does
-not implement a new identity provider. Custom API-key auth is not a replacement
-for dot's OAuth linking flow.
+Authentication uses OAuth authorization code + mandatory PKCE S256. The managed
+mode uses the established `oidc-provider` protocol implementation and the existing
+Telegram owner for approval. No new password account, LLM decision or OpenAI API
+key is involved. Custom fixed API-key auth is not a replacement for OAuth linking.
 
-## Configure a development instance
+## Managed macOS setup
+
+Use the npm-installed CLI on the Mac hosting RemoteAgent:
+
+```bash
+remoteagent dot setup \
+  --hostname remoteagent-dot60.appback.app \
+  --cloudflared /Users/appback/workspaces/remoteagent/lynrvjru/.runtime/cloudflared \
+  --origin-cert /Users/appback/.cloudflared/cert.pem \
+  --activate
+```
+
+The hostname must belong to the Cloudflare account authorized by that certificate.
+If no certificate exists, run `cloudflared tunnel login` using the installed binary
+and approve its actual URL. A downloaded certificate can be transferred privately
+and passed with `--origin-cert`. Do not paste certificate contents in a chat.
+
+The command creates a dedicated named tunnel, DNS record and user LaunchAgent.
+It copies cloudflared out of the session workspace into the private dot transport
+directory. It does not alter an existing application tunnel or overwrite a DNS
+record owned elsewhere. It exposes only `/mcp`, OAuth discovery and `/oauth/*`;
+the unauthenticated local UI on port 3794 remains private. The configuration is
+backed up under `dot/setup-backups` before enabling managed OAuth.
+
+`--activate` refuses running-session markers or live non-transport runtime
+children before changing anything. It restarts only RemoteAgent's LaunchAgent and
+checks the dot metadata endpoint. Without `--activate`, it prepares the transport
+and configuration but leaves the existing RemoteAgent process untouched.
+
+Then, in the intended private Telegram bot:
+
+1. Send `/login dot`. The reply contains the real MCP address, plugin registration
+   link, subscription instruction and a five-minute one-use owner approval code.
+2. Register the MCP address in ChatGPT Plugins with OAuth. Managed OAuth supports
+   the official ChatGPT CIMD URLs. If manually configuring a predefined client,
+   its public client ID is `remoteagent-dot` (no client secret).
+3. Enter the Telegram approval code on the RemoteAgent authorization page. This
+   grants access to the prepared Telegram channels on this server. The code is
+   not a token to give to an LLM. Cookies, exact origin and CSRF are also checked.
+4. Give the selected dot the subscription instruction. Use **연결 확인**, then
+   `/start dot`. A real event/report round trip is still the final acceptance gate.
+
+Only the configured Telegram owner can obtain approval codes. Codes live in
+bounded process memory, expire after five minutes and are consumed once. OAuth
+signing keys, opaque tokens and grants persist in private files under `dot/auth`,
+independent of LLM sessions. Access tokens expire in one hour; refresh tokens and
+grants in 30 days. Owner or public-origin changes are rejected instead of silently
+reusing credentials. At most 4096 OAuth records are retained; expired records are
+pruned on writes, with no extra polling timer.
+
+Managed mode accepts callback destinations supplied by the OAuth-authenticated
+owner, after public-address/DNS-pinning, HTTPS, no-redirect and signed challenge
+checks. It does not require a guessed OpenAI callback hostname. Set
+`DOT_CALLBACK_HOSTS` to additionally enforce an exact-host allowlist. External
+OAuth mode retains its required explicit callback-host policy.
+
+## Optional External OAuth Configuration
 
 1. Provide a stable HTTPS hostname for the MCP bridge and an existing OAuth 2.1
    authorization server. The identity provider must support authorization-code
@@ -212,7 +269,7 @@ test uses production Telegram tokens, real dot credentials or live OpenAI calls.
 Real dot OAuth/plugin linking and a live Telegram round trip remain unverified.
 Published to npm as `appback-remoteagent@0.27.0` from source `606f99d`.
 Exact version and `latest` were both verified as `0.27.0`. Operational server
-updates are awaiting target selection; live dot account acceptance is still open.
+updates to 30, 40 and 60 completed; live dot account acceptance is still open.
 
 Follow-up verification added failure-path coverage and corrected three gaps:
 

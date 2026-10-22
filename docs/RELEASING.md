@@ -197,6 +197,22 @@ tail -80 ~/.remoteagent/logs/agent.log
 '"'"''
 ```
 
+## Release 0.27.1 (2026-10-22)
+
+- Replaces the external-IdP assumption with managed owner OAuth using pinned
+  `oidc-provider` 9.12.2. Existing external OAuth remains supported explicitly.
+- `/login dot` supplies a five-minute one-use owner approval code in private chat.
+  Actual PKCE, token refresh, restart, revocation, cookie/origin/CSRF and code-replay
+  tests run against the real OAuth library, not a mocked token exchanger.
+- Adds `remoteagent dot setup` for a dedicated macOS Cloudflare tunnel and user
+  LaunchAgent. Exact parameter examples are in `docs/DOT_BRIDGE.md`. Activation
+  checks provider work before changing configuration and preserves existing
+  application tunnels, sessions and the private local UI.
+- Managed callbacks enforce public-address validation, pinned TLS and challenge
+  verification without requiring a guessed callback-host setting.
+- Local implementation and regression verification are complete. npm publication,
+  60 setup and actual ChatGPT plugin acceptance are recorded below after each gate.
+
 ## Release 0.27.0 (2026-10-22)
 
 - Adds the optional, default-off dot MCP Events bridge.

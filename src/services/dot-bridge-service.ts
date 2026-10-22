@@ -24,6 +24,7 @@ export class DotBridgeService {
   private storageFailed = false;
   private timer?: NodeJS.Timeout;
   private paused = false;
+  private loginCodeIssuer?: () => { code: string; expiresAt: string };
 
   constructor(dataDir: string, readonly owner: string, private readonly post: DotWebhookPost,
     private readonly now: () => number = Date.now,
@@ -43,6 +44,8 @@ export class DotBridgeService {
   }
 
   register(botId: string, reporter: Reporter): void { this.reporters.set(botId, reporter); }
+  setLoginCodeIssuer(issuer: () => { code: string; expiresAt: string }): void { this.loginCodeIssuer = issuer; }
+  issueLoginCode() { return this.loginCodeIssuer?.(); }
   pause(): void { this.paused = true; this.close(); }
   start(): void {
     if (!this.timer) {

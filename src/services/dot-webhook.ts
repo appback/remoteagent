@@ -42,10 +42,10 @@ export function dotWebhookHeaders(secret: string, subscriptionId: string, eventI
   return headers;
 }
 
-export function createDotWebhookPost(allowedHosts: string[],
+export function createDotWebhookPost(allowedHosts: string[] | undefined,
   resolveHost = (hostname: string) => lookup(hostname, { all: true }),
   requestHttps = https.request): DotWebhookPost {
-  const hosts = new Set(allowedHosts.map(host => host.trim().toLowerCase()));
+  const hosts = allowedHosts && new Set(allowedHosts.map(host => host.trim().toLowerCase()));
   return async (destination, secret, subscriptionId, eventId, body, previousSecret) => {
     const deadline = Date.now() + 10000;
     const url = new URL(destination);
@@ -53,7 +53,7 @@ export function createDotWebhookPost(allowedHosts: string[],
       || (url.port && url.port !== "443")) {
       throw Error("CALLBACK_NOT_ALLOWED");
     }
-    if (!hosts.has(url.hostname.toLowerCase())) throw Error(`CALLBACK_HOST_NOT_ALLOWED: ${url.hostname}`);
+    if (hosts && !hosts.has(url.hostname.toLowerCase())) throw Error(`CALLBACK_HOST_NOT_ALLOWED: ${url.hostname}`);
     if (Buffer.byteLength(body) > 256 * 1024) throw Error("EVENT_TOO_LARGE");
     // Pin the validated resolution to this connection; never follow redirects.
     const addresses = await new Promise<Awaited<ReturnType<typeof resolveHost>>>((resolve, reject) => {
