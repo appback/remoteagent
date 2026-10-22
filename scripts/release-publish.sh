@@ -7,8 +7,31 @@ cd "$ROOT"
 PACKAGE_NAME="$(node -p 'require("./package.json").name')"
 VERSION="$(node -p 'require("./package.json").version')"
 
+verify_registry() {
+  local published="" latest=""
+  echo "Verifying registry version (bounded processing window):"
+  for attempt in {1..36}; do
+    published="$(npm view "$PACKAGE_NAME@$VERSION" version --prefer-online 2>/dev/null || true)"
+    latest="$(npm view "$PACKAGE_NAME@latest" version --prefer-online 2>/dev/null || true)"
+    echo "attempt=$attempt published=${published:-missing} latest=${latest:-missing}"
+    if [[ "$published" == "$VERSION" && "$latest" == "$VERSION" ]]; then return 0; fi
+    sleep 5
+  done
+  echo "Registry processing is not verified yet. Check again without republishing: npm run release:publish -- --verify-only" >&2
+  return 1
+}
+
 if [[ "$PACKAGE_NAME" != "appback-remoteagent" ]]; then
   echo "Unexpected package name: $PACKAGE_NAME" >&2
+  exit 1
+fi
+
+if [[ $# -eq 1 && "$1" == "--verify-only" ]]; then
+  verify_registry
+  exit $?
+fi
+if [[ $# -ne 0 ]]; then
+  echo "Usage: npm run release:publish [-- --verify-only]" >&2
   exit 1
 fi
 
@@ -61,20 +84,4 @@ echo "Publishing tarball: $TARBALL"
 REMOTEAGENT_PUBLISH_GUARD_OK=1 npm publish "$TARBALL" --access public
 
 echo
-echo "Verifying registry version:"
-PUBLISHED_VERSION=""
-LATEST_VERSION=""
-for ATTEMPT in {1..12}; do
-  PUBLISHED_VERSION="$(npm view "$PACKAGE_NAME@$VERSION" version --prefer-online 2>/dev/null || true)"
-  LATEST_VERSION="$(npm view "$PACKAGE_NAME@latest" version --prefer-online 2>/dev/null || true)"
-  echo "attempt=$ATTEMPT published=${PUBLISHED_VERSION:-missing} latest=${LATEST_VERSION:-missing}"
-  if [[ "$PUBLISHED_VERSION" == "$VERSION" && "$LATEST_VERSION" == "$VERSION" ]]; then
-    break
-  fi
-  sleep 5
-done
-
-if [[ "$PUBLISHED_VERSION" != "$VERSION" || "$LATEST_VERSION" != "$VERSION" ]]; then
-  echo "Registry verification failed: expected published/latest=$VERSION" >&2
-  exit 1
-fi
+verify_registry

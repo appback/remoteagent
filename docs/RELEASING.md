@@ -64,6 +64,17 @@ Publish:
 npm run release:publish
 ```
 
+After npm has accepted an upload but registry processing is still pending, run
+only verification (no new upload, build, authentication change or version bump):
+
+```bash
+npm run release:publish -- --verify-only
+```
+
+The verification window is bounded to 36 checks with five-second waits plus npm
+request time. A pending registry response after upload acceptance is not evidence
+that the npm credential failed.
+
 The publish script performs:
 
 - tracked working tree check
@@ -199,7 +210,17 @@ tail -80 ~/.remoteagent/logs/agent.log
 - The clean-snapshot publish gate now includes dot and Telegram injection tests.
 - Local tests do not constitute live dot account acceptance. Server authentication,
   endpoint setup and a real account round trip remain separate deployment checks.
-- Publication and server rollout results are recorded below after verification.
+- Published from source `606f99d` using `npm run release:publish`; clean-snapshot
+  provider installation, 19 dot protocol tests, Telegram command/button injection,
+  session dispatch and upload tests passed before the upload.
+- npm accepted the upload, then registry processing exceeded the old 12-check
+  window. No credentials were changed and the package was not republished.
+- `npm run release:publish -- --verify-only` confirmed both exact version and
+  `latest` as `0.27.0` on check 12 of the extended window.
+- Package tarball SHA1: `e67237ba1e3a7972f5e91df14a712b231a85f64b`.
+- Server rollout awaits target selection; no operational service was restarted.
+- The follow-up repository release-script change adds `--verify-only` and a
+  36-check window. It is not retroactively included in the immutable npm tarball.
 
 ## Release 0.26.3 (2026-10-14)
 

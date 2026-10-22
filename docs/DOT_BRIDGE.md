@@ -210,7 +210,9 @@ test uses production Telegram tokens, real dot credentials or live OpenAI calls.
 - `git diff --check`: passed.
 
 Real dot OAuth/plugin linking and a live Telegram round trip remain unverified.
-This change has not been published to npm or deployed to an operational server.
+Published to npm as `appback-remoteagent@0.27.0` from source `606f99d`.
+Exact version and `latest` were both verified as `0.27.0`. Operational server
+updates are awaiting target selection; live dot account acceptance is still open.
 
 Follow-up verification added failure-path coverage and corrected three gaps:
 
