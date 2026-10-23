@@ -310,6 +310,9 @@ cp -p "$DATA_DIR/run-launchagent.sh" "$BACKUP/runner.sh"
 cp -p "$DATA_DIR/state.json" "$DATA_DIR/.env" "$BACKUP/"
 if [[ -f "$DATA_DIR/jev.json" ]]; then cp -p "$DATA_DIR/jev.json" "$BACKUP/"; fi
 if [[ -f "$DATA_DIR/g2/clients.json" ]]; then cp -p "$DATA_DIR/g2/clients.json" "$BACKUP/g2-clients.json"; fi
+# Keep an npm-installable rollback even when the current installation is a local prerelease.
+BACKUP_PACKAGE="$(npm pack "$ROOT" --pack-destination "$BACKUP" --ignore-scripts --json | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>process.stdout.write(JSON.parse(s)[0].filename));')"
+test -f "$BACKUP/$BACKUP_PACKAGE"
 # Unload only RemoteAgent. Other application services and browser runtimes stay up.
 RUNTIME_PID="$(cat "$DATA_DIR/remoteagent.lock")"
 if launchctl print "$LABEL" >/dev/null 2>&1; then launchctl bootout "$LABEL"; fi
@@ -328,7 +331,7 @@ fi
 rollback() {
   trap - ERR
   launchctl bootout "$LABEL" 2>/dev/null || true
-  npm install -g "appback-remoteagent@$OLD_VERSION" --prefer-online || true
+  npm install -g "$BACKUP/$BACKUP_PACKAGE" --prefer-online || true
   cp -p "$BACKUP/service.plist" "$PLIST"
   cp -p "$BACKUP/runner.sh" "$DATA_DIR/run-launchagent.sh"
   cp -p "$BACKUP/.env" "$DATA_DIR/.env"
