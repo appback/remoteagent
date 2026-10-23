@@ -9,6 +9,7 @@ import {isDeepStrictEqual} from 'node:util';
 import dotenv from 'dotenv';
 
 const usage = 'remoteagent dot setup --hostname remoteagent-dot60.appback.app --cloudflared /absolute/path/cloudflared [--origin-cert /absolute/path/cert.pem] [--activate]';
+export const DOT_HTTPS_PATHS = '^/(mcp|\\.well-known/oauth-protected-resource(/api/v1)?|oauth/.*|api/v1(/.*)?)$';
 function privateWrite(file, text) {
   const temp=file+'.'+randomUUID()+'.tmp';
   try{fs.writeFileSync(temp,text,{mode:0o600,flag:'wx'});fs.renameSync(temp,file);}finally{if(fs.existsSync(temp))fs.unlinkSync(temp);}
@@ -93,7 +94,7 @@ async function main() {
   const config=path.join(dir,'cloudflared.json');
   const oldConfig=fs.existsSync(config)?fs.readFileSync(config,'utf8'):undefined;
   const nextConfig=JSON.stringify({tunnel:tunnel.id,'credentials-file':credential,ingress:[
-    {hostname,path:'^/(mcp|\\.well-known/oauth-protected-resource|oauth/.*)$',service:'http://127.0.0.1:'+port,originRequest:{httpHostHeader:hostname}},
+    {hostname,path:DOT_HTTPS_PATHS,service:'http://127.0.0.1:'+port,originRequest:{httpHostHeader:hostname}},
     {service:'http_status:404'},
   ]});
   privateWrite(config,nextConfig);

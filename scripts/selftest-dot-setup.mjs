@@ -3,10 +3,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {test} from 'node:test';
-import {provisionTunnelCredential,reloadTunnelAgent} from './dot-setup-macos.mjs';
+import {provisionTunnelCredential,reloadTunnelAgent,DOT_HTTPS_PATHS} from './dot-setup-macos.mjs';
 
 const id='3de791c1-06d8-4ef9-bffd-a673945d3a69';
 const credentials={TunnelID:id,TunnelSecret:'test-only-fake-tunnel-secret',AccountTag:'test-account'};
+test('HTTPS ingress exposes protected G2 routes but never the unauthenticated local UI',()=>{
+ const pattern=new RegExp(DOT_HTTPS_PATHS);
+ for(const route of ['/mcp','/oauth/auth','/oauth/device/auth','/.well-known/oauth-protected-resource','/.well-known/oauth-protected-resource/api/v1','/api/v1','/api/v1/targets','/api/v1/requests/req_example/events'])assert.equal(pattern.test(route),true,route);
+ for(const route of ['/','/api/sessions','/api/dispatches','/api/v11/targets','/mcp/anything','/.well-known/oauth-protected-resource/private'])assert.equal(pattern.test(route),false,route);
+});
 function fixture(t){
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'dot-setup-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
  const dir=path.join(root,'transport'),certDir=path.join(root,'certificates'),standard=path.join(root,'.cloudflared');

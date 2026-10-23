@@ -416,6 +416,26 @@ launchctl print "$LABEL" | grep -E 'state =|pid =|last exit code'
 PID="$(cat "$DATA_DIR/remoteagent.pid")"
 kill -0 "$PID"
 ps -p "$PID" -o args= | grep -F "$ROOT/dist/index.js"
+node --input-type=module <<'NODE'
+import fs from 'node:fs';
+const root=process.env.ROOT,d=process.env.DATA_DIR;
+const dotenv=await import(root+'/node_modules/dotenv/lib/main.js');
+const env=dotenv.parse(fs.readFileSync(d+'/.env'));
+if(env.G2_API_ENABLED==='true'){
+ let verified=false;
+ for(let i=0;i<3;i++){
+  try{
+   const metadata=await fetch(env.DOT_PUBLIC_URL+'/.well-known/oauth-protected-resource/api/v1',{signal:AbortSignal.timeout(10000)});
+   if(!metadata.ok||(await metadata.json()).resource!==env.DOT_PUBLIC_URL+'/api/v1')throw Error('G2 metadata unavailable');
+   const response=await fetch(env.DOT_PUBLIC_URL+'/api/v1/targets',{signal:AbortSignal.timeout(10000)});
+   if(response.status!==401)throw Error('G2 public authentication boundary invalid');
+   verified=true;break;
+  }catch{if(i<2)await new Promise(r=>setTimeout(r,5000));}
+ }
+ if(!verified)throw Error('G2_API_PUBLIC_PROBE_FAILED');
+ console.log('Public G2 route and OAuth boundary verified.');
+}
+NODE
 trap - ERR
 echo "Deployed npm $VERSION; backup: $BACKUP"
 REMOTE
