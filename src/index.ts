@@ -18,6 +18,7 @@ import { DotMcpService, createDotAuthenticator } from "./services/dot-mcp-servic
 import { readG2Clients, type G2Client } from "./services/g2-config.js";
 import { G2RequestService } from "./services/g2-request-service.js";
 import { G2ApiService } from "./services/g2-api-service.js";
+import { acquireProcessLock, releaseProcessLock } from "./services/runtime-lock.js";
 import { DotHostService } from "./services/dot-host-service.js";
 import type { DotMacService } from "./services/dot-mac-service.js";
 import { createDotWebhookPost } from "./services/dot-webhook.js";
@@ -737,44 +738,6 @@ function commandExists(command: string): boolean {
 }
 
 
-async function acquireProcessLock(dataDir: string): Promise<string> {
-  await fsp.mkdir(dataDir, { recursive: true });
-  const lockPath = path.join(dataDir, "remoteagent.lock");
-
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const handle = await fsp.open(lockPath, "wx");
-      await handle.writeFile(String(process.pid));
-      await handle.close();
-      return lockPath;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "EEXIST") {
-        throw error;
-      }
-
-      const existingPid = Number.parseInt((await fsp.readFile(lockPath, "utf8").catch(() => "")).trim(), 10);
-      if (!Number.isFinite(existingPid) || !isProcessAlive(existingPid)) {
-        await fsp.rm(lockPath, { force: true }).catch(() => undefined);
-        continue;
-      }
-
-      throw new Error(`RemoteAgent is already running with PID ${existingPid}.`);
-    }
-  }
-
-  throw new Error("RemoteAgent could not acquire its process lock.");
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
 function registerProcessLifecycle(): void {
   process.on("unhandledRejection", (reason) => {
     console.error("Unhandled promise rejection:", reason);
@@ -817,12 +780,5 @@ function releaseProcessLockSync(): void {
     return;
   }
 
-  try {
-    const recordedPid = fs.readFileSync(processLockPath, "utf8").trim();
-    if (recordedPid === String(process.pid)) {
-      fs.rmSync(processLockPath, { force: true });
-    }
-  } catch {
-    // Ignore best-effort cleanup errors.
-  }
+  releaseProcessLock(processLockPath);
 }

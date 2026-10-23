@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { G2_SCOPE, type G2Client, type G2Principal } from "./g2-config.js";
+import { G2_SCOPE, g2OriginAllowed, type G2Client, type G2Principal } from "./g2-config.js";
 import type { G2RequestService } from "./g2-request-service.js";
 
 export class G2ApiService {
@@ -17,7 +17,7 @@ export class G2ApiService {
     res.setHeader("Cache-Control", "no-store"); res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Vary", "Origin");
     const origin = req.headers.origin;
-    if (origin && !this.clients.some(client => client.origins.includes(origin))) {
+    if (origin && !this.clients.some(client => g2OriginAllowed(client, origin))) {
       this.json(res, 403, { error: "ORIGIN_NOT_ALLOWED" }); return true;
     }
     if (origin) res.setHeader("Access-Control-Allow-Origin", origin);
@@ -31,7 +31,7 @@ export class G2ApiService {
       res.setHeader("Access-Control-Max-Age", "300"); res.writeHead(204).end(); return true;
     }
     const principal = await this.authenticate(req.headers.authorization);
-    if (!principal || !this.clients.some(client => client.clientId === principal.clientId && (!origin || client.origins.includes(origin)))) {
+    if (!principal || !this.clients.some(client => client.clientId === principal.clientId && (!origin || g2OriginAllowed(client, origin)))) {
       res.setHeader("WWW-Authenticate", `Bearer resource_metadata="${this.resource}/.well-known/oauth-protected-resource/api/v1", scope="${G2_SCOPE}"`);
       this.json(res, 401, { error: "UNAUTHORIZED" }); return true;
     }

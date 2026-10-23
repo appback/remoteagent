@@ -33,7 +33,15 @@ $proc = Start-Process -FilePath "cmd.exe" `
   -WindowStyle Hidden `
   -PassThru
 
-Set-Content -Path $pidFile -Value $proc.Id
-
-Write-Host "RemoteAgent started with PID $($proc.Id)"
-Write-Host "Logs: $stdoutLog"
+for ($attempt = 0; $attempt -lt 50; $attempt++) {
+  $ownerPid = Get-Content $pidFile -ErrorAction SilentlyContinue
+  $lockPid = Get-Content (Join-Path $dataDir "remoteagent.lock") -ErrorAction SilentlyContinue
+  if ($ownerPid -and $ownerPid -eq $lockPid -and (Get-Process -Id $ownerPid -ErrorAction SilentlyContinue)) {
+    Write-Host "RemoteAgent started with PID $ownerPid"
+    Write-Host "Logs: $stdoutLog"
+    exit 0
+  }
+  if ($proc.HasExited) { throw "RemoteAgent startup failed. Inspect $stderrLog" }
+  Start-Sleep -Milliseconds 100
+}
+throw "RemoteAgent PID ownership was not confirmed. Inspect $stderrLog before starting again."

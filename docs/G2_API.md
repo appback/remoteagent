@@ -1,6 +1,7 @@
 # Direct G2 Request API
 
-Contract version: 1, package version 0.30.0. Published to npm and installed on Mac60
+Contract version: 1. Package 0.31.0 adds explicit device-code clients for packaged
+Even WebViews; the PKCE contract remains supported. Package 0.30.0 was installed on Mac60
 on 2026-10-23. G2 API activation and OAuth grants still require a separate owner
 confirmation; the deployed runtime keeps G2 disabled. Installing this code does
 not register a G2 client, change a tunnel, enable the API or restart a server.
@@ -9,6 +10,36 @@ G2 sends text directly to RemoteAgent over HTTPS. Codex/Claude run on that
 RemoteAgent host; dot receives a separate MCP event. Telegram remains an
 independent input/output route. G2 responses are never automatically mirrored
 to Telegram.
+
+## Packaged Even G2 Device Login
+
+An explicitly approved device client may use RFC 8628 without an HTTPS callback.
+For the S010 integration the approved client is `remoteagent-g2-even`, using only
+its operator-provided S010 target ID. Configuration is:
+
+```json
+{"clients":[{"clientId":"remoteagent-g2-even","deviceFlow":true,"loopbackOrigin":true,"origins":[],"redirectUris":[],"targetIds":["<approved-S010-targetId>"]}]}
+```
+
+`loopbackOrigin=true` permits only exact numeric `http://127.0.0.1:<port>` origins
+with nonprivileged ports (1024-65535). It does not permit null origins, LAN hosts,
+localhost aliases, credentials, paths, wildcard HTTPS origins or other clients.
+An Origin match is not authentication: an approved owner-issued access token is
+still required, and its target allowlist is unchanged.
+
+1. POST `/oauth/device/auth` as form data with `client_id=remoteagent-g2-even`,
+   `scope=remoteagent:g2`, and the same `/api/v1` resource below.
+2. Display `user_code` and open `verification_uri_complete` in a browser. The
+   owner verifies the device code and approves on the existing owner-consent page.
+3. Poll `/oauth/token` at the returned `interval`, using grant type
+   `urn:ietf:params:oauth:grant-type:device_code`, client ID, device code, and resource.
+   Respect `authorization_pending` and `slow_down`; stop on denial or expiration.
+4. Keep the access token only in memory. No refresh token is granted. Device codes
+   expire after five minutes and are not a substitute for owner approval.
+
+The feature is opt-in per configured client. Ordinary HTTPS web clients retain
+PKCE and exact redirect registration. Test the packaged flow locally with
+`G2_DEVICE_FLOW_TEST=1 npm run selftest:g2-browser`.
 
 ## Addresses and authentication
 
@@ -39,7 +70,8 @@ registration. Example pending confirmation: `https://g2.example.app` and
 The G2 team must supply its actual deployed origin/callback before activation.
 An embedded G2 runtime must support this browser OAuth flow or launch an external
 browser that returns to that same web app. Native custom schemes/loopback
-redirects and a BFF session backend are not implemented in version 1.
+redirects and a BFF session backend are not implemented in version 1. Packaged
+clients can instead use the explicitly enabled device flow described above.
 
 ### Login and token storage
 

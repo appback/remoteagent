@@ -107,6 +107,25 @@ The package publish entrypoint is `npm run release:publish`.
 
 ## 5. Deploy Published Version
 
+For Mac60, `remoteagent-start`/`remoteagent-stop` use its existing LaunchAgent.
+The runtime publishes `remoteagent.pid` only after acquiring its process lock.
+The deployment script identifies the live owner from `remoteagent.lock`, handles
+an absent LaunchAgent before stopping a verified idle unmanaged runtime, and
+never runs a second instance while that process is still alive.
+
+To activate an already owner-approved G2 client file on Mac60 during deployment:
+
+```bash
+G2_CLIENT_CONFIG=/Users/appback/.remoteagent/g2/deploy-0.30.1-g2.1/client.json \
+  npm run release:deploy -- 0.31.0 60
+```
+
+This argument is the path on Mac60, not a local machine path. The canonical script
+checks that the targets still exist, validates the client with the installed
+package, backs up the previous client/configuration, and applies only that file.
+Omit `G2_CLIENT_CONFIG` to preserve existing grants. The retired `activate.mjs`
+file-swap job is not part of the release procedure.
+
 Deploy to server 30:
 
 ```bash

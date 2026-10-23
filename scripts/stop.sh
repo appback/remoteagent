@@ -4,6 +4,16 @@ set -euo pipefail
 DATA_DIR="${DATA_DIR:-$HOME/.remoteagent}"
 PID_FILE="$DATA_DIR/remoteagent.pid"
 
+if [[ "$(uname -s)" == "Darwin" && -f "$HOME/Library/LaunchAgents/app.remoteagent.runtime.plist" ]]; then
+  SOURCE="${BASH_SOURCE[0]}"
+  while [[ -L "$SOURCE" ]]; do
+    DIRECTORY="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    case "$SOURCE" in /*) ;; *) SOURCE="$DIRECTORY/$SOURCE" ;; esac
+  done
+  exec "${NODE_BIN:-node}" "$(cd -P "$(dirname "$SOURCE")" && pwd)/macos-service.mjs" stop
+fi
+
 if systemctl --user cat remoteagent >/dev/null 2>&1; then
   if systemctl is-active --quiet remoteagent; then
     echo "Both service scopes exist. Check system service before stopping." >&2

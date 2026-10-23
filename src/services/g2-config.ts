@@ -1,7 +1,7 @@
 import fs from "node:fs";
 
 export const G2_SCOPE = "remoteagent:g2";
-export type G2Client = { clientId: string; redirectUris: string[]; origins: string[]; targetIds: string[] };
+export type G2Client = { clientId: string; redirectUris: string[]; origins: string[]; targetIds: string[]; deviceFlow?: boolean; loopbackOrigin?: boolean };
 export type G2Principal = { subject: string; clientId: string; expiresAt: number; targetIds: string[] };
 
 // Operator-managed allowlist. Merely installing the package grants no G2 access.
@@ -12,10 +12,13 @@ export function readG2Clients(file: string | undefined): G2Client[] {
   const seen = new Set<string>();
   for (const client of config.clients) {
     if (!client || !/^remoteagent-g2-[a-z0-9_-]{1,48}$/.test(client.clientId) || seen.has(client.clientId)
-      || !Array.isArray(client.origins) || !client.origins.length || client.origins.length > 4
-      || !Array.isArray(client.redirectUris) || !client.redirectUris.length || client.redirectUris.length > 4
+      || !Array.isArray(client.origins) || (!client.origins.length && !client.loopbackOrigin) || client.origins.length > 4
+      || !Array.isArray(client.redirectUris) || (!client.redirectUris.length && !client.deviceFlow) || client.redirectUris.length > 4
       || !Array.isArray(client.targetIds) || client.targetIds.length > 100
       || client.targetIds.some(id => typeof id !== "string" || !/^tgt_[a-f0-9]{32}$/.test(id))) throw Error("G2_CONFIG_INVALID");
+    if ((client.deviceFlow !== undefined && typeof client.deviceFlow !== "boolean")
+      || (client.loopbackOrigin !== undefined && typeof client.loopbackOrigin !== "boolean")
+      || (client.deviceFlow && client.redirectUris.length) || (client.loopbackOrigin && !client.deviceFlow)) throw Error("G2_CONFIG_INVALID");
     seen.add(client.clientId);
     for (const origin of client.origins) {
       const url = new URL(origin);
@@ -28,4 +31,14 @@ export function readG2Clients(file: string | undefined): G2Client[] {
     }
   }
   return config.clients;
+}
+
+export function g2OriginAllowed(client: G2Client, origin: string): boolean {
+  if (client.origins.includes(origin)) return true;
+  if (!client.deviceFlow || !client.loopbackOrigin) return false;
+  try {
+    const url = new URL(origin);
+    return url.origin === origin && url.protocol === "http:" && url.hostname === "127.0.0.1"
+      && Boolean(url.port) && Number(url.port) >= 1024 && !url.username && !url.password;
+  } catch { return false; }
 }

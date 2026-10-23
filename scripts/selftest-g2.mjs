@@ -9,7 +9,7 @@ import {DotBridgeService} from '../dist/services/dot-bridge-service.js';
 import {DotMcpService} from '../dist/services/dot-mcp-service.js';
 import {G2RequestService} from '../dist/services/g2-request-service.js';
 import {G2ApiService} from '../dist/services/g2-api-service.js';
-import {readG2Clients} from '../dist/services/g2-config.js';
+import {readG2Clients,g2OriginAllowed} from '../dist/services/g2-config.js';
 import {FileStore} from '../dist/store/file-store.js';
 import {BridgeService} from '../dist/services/bridge-service.js';
 import {spawnWithPlatformShell} from '../dist/adapters/windows-shell.js';
@@ -117,6 +117,13 @@ test('configuration validates explicit origins, callbacks and target allowlists'
   for(const bad of [{...valid,redirectUris:['https://evil.test/cb']},{...valid,origins:['http://g2.example.test']},{...valid,targetIds:['*']},{...valid,clientId:'remoteagent-dot'}]) {
     fs.writeFileSync(file,JSON.stringify({clients:[bad]}));assert.throws(()=>readG2Clients(file));
   }
+});
+
+test('device clients explicitly allow numeric loopback WebViews without LAN/null/wildcard CORS',()=>{
+  const client={clientId,deviceFlow:true,loopbackOrigin:true,origins:[],redirectUris:[],targetIds:[]};
+  for(const allowed of ['http://127.0.0.1:8080','http://127.0.0.1:65535'])assert.equal(g2OriginAllowed(client,allowed),true);
+  for(const denied of ['null','http://localhost:8080','http://192.168.33.60:8080','http://127.0.0.1:80','http://127.0.0.1:8080/','http://127.0.0.1:8080/path','http://user@127.0.0.1:8080','https://evil.test'])assert.equal(g2OriginAllowed(client,denied),false);
+  assert.equal(g2OriginAllowed({...client,loopbackOrigin:false},'http://127.0.0.1:8080'),false);
 });
 
 test('durable target IDs, restricted inventory and no unauthenticated local API exposure',async t=>{

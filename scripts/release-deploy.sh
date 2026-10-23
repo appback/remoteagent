@@ -246,9 +246,10 @@ REMOTE
 }
 
 deploy_60() {
-  local HOST_ROOTS_B64
+  local HOST_ROOTS_B64 G2_CONFIG_PATH_B64
   HOST_ROOTS_B64="$(node -e 'process.stdout.write(Buffer.from(process.env.DOT_HOST_ROOTS || "").toString("base64"))')"
-  ssh appback@192.168.33.60 "VERSION=$VERSION ALLOW_STALE_RUNNING=${ALLOW_STALE_RUNNING:-0} ACTIVATE_JEV=${ACTIVATE_JEV:-0} ACTIVATE_MAC=${ACTIVATE_MAC:-0} HOST_ROOTS_B64=$HOST_ROOTS_B64 bash -s" <<'REMOTE'
+  G2_CONFIG_PATH_B64="$(node -e 'process.stdout.write(Buffer.from(process.env.G2_CLIENT_CONFIG || "").toString("base64"))')"
+  ssh appback@192.168.33.60 "VERSION=$VERSION ALLOW_STALE_RUNNING=${ALLOW_STALE_RUNNING:-0} ACTIVATE_JEV=${ACTIVATE_JEV:-0} ACTIVATE_MAC=${ACTIVATE_MAC:-0} HOST_ROOTS_B64=$HOST_ROOTS_B64 G2_CONFIG_PATH_B64=$G2_CONFIG_PATH_B64 bash -s" <<'REMOTE'
 set -euo pipefail
 export PATH="$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export DATA_DIR="$HOME/.remoteagent"
@@ -257,6 +258,7 @@ LABEL="gui/$(id -u)/app.remoteagent.runtime"
 ROOT="$(npm root -g)/appback-remoteagent"
 export ROOT
 OLD_VERSION="$(node -p 'require(process.env.ROOT + "/package.json").version')"
+export G2_CONFIG_HASH="$(node -e 'if(process.env.G2_CONFIG_PATH_B64){const fs=require("fs"),crypto=require("crypto"),file=Buffer.from(process.env.G2_CONFIG_PATH_B64,"base64").toString("utf8");process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex"));}')"
 node --input-type=module <<'NODE'
 import fs from 'node:fs';
 import {execFileSync} from 'node:child_process';
@@ -275,7 +277,8 @@ const dotPath=d+'/dot/bridge.json';
 if(fs.existsSync(dotPath)&&JSON.parse(fs.readFileSync(dotPath,'utf8')).messages.some(m=>['pending','sending','accepted'].includes(m.status)))throw Error('Dot requests are active; finish cloud work before deployment');
 const hostPath=d+'/dot/host-jobs.json';
 if(fs.existsSync(hostPath)&&JSON.parse(fs.readFileSync(hostPath,'utf8')).some(j=>j.status==='running'))throw Error('Dot host jobs are active; inspect before deployment');
-const pid=Number(fs.readFileSync(d+'/remoteagent.pid','utf8').trim());
+const pid=Number(fs.readFileSync(d+'/remoteagent.lock','utf8').trim());
+if(!Number.isSafeInteger(pid)||pid<2)throw Error('Invalid runtime lock PID');
 const command=execFileSync('/bin/ps',['-p',String(pid),'-o','args='],{encoding:'utf8'});
 if(!command.includes(process.env.ROOT+'/dist/index.js'))throw Error('Runtime PID does not match the expected npm installation');
 const rows=execFileSync('/bin/ps',['-axo','pid,ppid,comm'],{encoding:'utf8'}).trim().split('\n').slice(1).map(l=>{const m=l.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);return m&&{pid:+m[1],ppid:+m[2],comm:m[3]};}).filter(Boolean);
@@ -292,6 +295,13 @@ const work=rows.filter(r=>r.pid!==pid&&ids.has(r.pid)&&!/(^|\/)curl$/.test(r.com
 if(work.length)throw Error('Runtime has non-transport children; finish work before deployment');
 const polling=JSON.parse(fs.readFileSync(d+'/bot-polling-state.json','utf8'));
 if(Object.values(polling.bots||{}).some(b=>b.runningSessionIds?.length)&&process.env.ALLOW_STALE_RUNNING!=='1')throw Error('Running state present. Inspect first; override only confirmed stale metadata with ALLOW_STALE_RUNNING=1');
+if(process.env.G2_CONFIG_PATH_B64){
+ const file=Buffer.from(process.env.G2_CONFIG_PATH_B64,'base64').toString('utf8');
+ if(!file.startsWith('/')||/[\r\n\0]/.test(file))throw Error('G2_CLIENT_CONFIG must be an absolute file path on Mac60');
+ const clients=JSON.parse(fs.readFileSync(file,'utf8')).clients;
+ const inventory=JSON.parse(execFileSync(process.execPath,[process.env.ROOT+'/scripts/g2-targets.mjs','--data-dir',d],{encoding:'utf8'}));
+ if(!Array.isArray(clients)||!clients.length||clients.some(c=>!Array.isArray(c.targetIds)||c.targetIds.some(id=>!inventory.targets.some(t=>t.targetId===id))))throw Error('G2 target allowlist does not match current inventory');
+}
 NODE
 BACKUP="$DATA_DIR/backups/npm-$VERSION-$(date +%Y%m%dT%H%M%S)"
 mkdir -p -m 700 "$BACKUP"
@@ -299,9 +309,10 @@ cp -p "$PLIST" "$BACKUP/service.plist"
 cp -p "$DATA_DIR/run-launchagent.sh" "$BACKUP/runner.sh"
 cp -p "$DATA_DIR/state.json" "$DATA_DIR/.env" "$BACKUP/"
 if [[ -f "$DATA_DIR/jev.json" ]]; then cp -p "$DATA_DIR/jev.json" "$BACKUP/"; fi
+if [[ -f "$DATA_DIR/g2/clients.json" ]]; then cp -p "$DATA_DIR/g2/clients.json" "$BACKUP/g2-clients.json"; fi
 # Unload only RemoteAgent. Other application services and browser runtimes stay up.
-RUNTIME_PID="$(cat "$DATA_DIR/remoteagent.pid")"
-launchctl bootout "$LABEL"
+RUNTIME_PID="$(cat "$DATA_DIR/remoteagent.lock")"
+if launchctl print "$LABEL" >/dev/null 2>&1; then launchctl bootout "$LABEL"; fi
 # Older installations may have started the npm runtime outside launchd.
 if kill -0 "$RUNTIME_PID" 2>/dev/null; then
   kill -TERM "$RUNTIME_PID"
@@ -322,6 +333,11 @@ rollback() {
   cp -p "$BACKUP/runner.sh" "$DATA_DIR/run-launchagent.sh"
   cp -p "$BACKUP/.env" "$DATA_DIR/.env"
   if [[ -f "$BACKUP/jev.json" ]]; then cp -p "$BACKUP/jev.json" "$DATA_DIR/jev.json"; else rm -f "$DATA_DIR/jev.json"; fi
+  if [[ -f "$BACKUP/g2-clients.json" ]]; then
+    cp -p "$BACKUP/g2-clients.json" "$DATA_DIR/g2/clients.json"
+  elif [[ -n "$G2_CONFIG_PATH_B64" ]]; then
+    rm -f "$DATA_DIR/g2/clients.json"
+  fi
   launchctl bootstrap "gui/$(id -u)" "$PLIST" || true
   echo "Deployment failed; attempted rollback. Backup: $BACKUP" >&2
 }
@@ -331,7 +347,22 @@ test "$(node -p 'require(process.env.ROOT + "/package.json").version')" = "$VERS
 node --input-type=module <<'NODE'
 import fs from 'node:fs';
 import {execFileSync} from 'node:child_process';
+import {createHash} from 'node:crypto';
 const home=process.env.HOME,d=process.env.DATA_DIR,root=process.env.ROOT;
+if(process.env.G2_CONFIG_PATH_B64){
+ const source=Buffer.from(process.env.G2_CONFIG_PATH_B64,'base64').toString('utf8');
+ if(createHash('sha256').update(fs.readFileSync(source)).digest('hex')!==process.env.G2_CONFIG_HASH)throw Error('Approved G2 configuration changed during deployment');
+ const {readG2Clients}=await import(root+'/dist/services/g2-config.js');
+ const clients=readG2Clients(source);
+ fs.mkdirSync(d+'/g2',{recursive:true,mode:0o700});
+ fs.writeFileSync(d+'/g2/clients.json',JSON.stringify({clients},null,2),{mode:0o600});
+ const file=d+'/.env';let text=fs.readFileSync(file,'utf8');
+ for(const [key,value] of [['G2_API_ENABLED','true'],['G2_OAUTH_CONFIG_FILE',"'"+d+"/g2/clients.json'"]]){
+  const pattern=new RegExp('^'+key+'=.*$','m');text=pattern.test(text)?text.replace(pattern,()=>key+'='+value):text+'\n'+key+'='+value+'\n';
+ }
+ fs.writeFileSync(file,text,{mode:0o600});
+ console.log('Applied explicitly approved G2 client/target configuration.');
+}
 if(process.env.ACTIVATE_MAC==='1'){
  const {DotMacService}=await import(root+'/dist/services/dot-mac-service.js');
  const {DotMacScreenService}=await import(root+'/dist/services/dot-mac-screen-service.js');
@@ -370,7 +401,7 @@ if(process.env.HOST_ROOTS_B64){
 const file=home+'/Library/LaunchAgents/app.remoteagent.runtime.plist';
 const config=JSON.parse(execFileSync('/usr/bin/plutil',['-convert','json','-o','-',file],{encoding:'utf8'}));
 const runner=d+'/run-launchagent.sh';
-fs.writeFileSync(runner,'#!/bin/bash\nset -euo pipefail\nexport PATH="$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"\ncd "$HOME"\nset -a\nsource "$HOME/.remoteagent/.env"\nset +a\nexport DATA_DIR="$HOME/.remoteagent"\necho $$ > "$DATA_DIR/remoteagent.pid"\nexec '+JSON.stringify(process.execPath)+' '+JSON.stringify(root+'/dist/index.js')+'\n',{mode:0o700});
+fs.writeFileSync(runner,'#!/bin/bash\nset -euo pipefail\nexport PATH="$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"\ncd "$HOME"\nset -a\nsource "$HOME/.remoteagent/.env"\nset +a\nexport DATA_DIR="$HOME/.remoteagent"\nexec '+JSON.stringify(process.execPath)+' '+JSON.stringify(root+'/dist/index.js')+'\n',{mode:0o700});
 config.ProgramArguments=['/bin/bash',runner];config.WorkingDirectory=home;config.RunAtLoad=true;
 fs.writeFileSync(file,JSON.stringify(config));execFileSync('/usr/bin/plutil',['-convert','xml1',file]);
 if(process.env.ACTIVATE_JEV==='1'){

@@ -4,7 +4,7 @@ import { createHash, generateKeyPairSync, randomBytes, randomUUID, timingSafeEqu
 import type { IncomingMessage, ServerResponse } from "node:http";
 import Provider, { errors, type AdapterPayload, type Configuration } from "oidc-provider";
 import type { DotPrincipal } from "./dot-mcp-service.js";
-import { G2_SCOPE, type G2Client, type G2Principal } from "./g2-config.js";
+import { G2_SCOPE, g2OriginAllowed, type G2Client, type G2Principal } from "./g2-config.js";
 
 const SCOPE = "remoteagent:dot";
 const LOGIN_TTL = 300_000;
@@ -101,14 +101,25 @@ export class DotOwnerAuthService {
       clients: [{ client_id: "remoteagent-dot", client_name: "RemoteAgent for ChatGPT", token_endpoint_auth_method: "none",
         redirect_uris: ["https://chatgpt.com/connector_platform_oauth_redirect"], response_types: ["code"], grant_types: ["authorization_code", "refresh_token"] },
         ...g2Clients.map(client => ({ client_id: client.clientId, client_name: "RemoteAgent G2", token_endpoint_auth_method: "none" as const,
-          redirect_uris: client.redirectUris, response_types: ["code"] as const, grant_types: ["authorization_code"] as const, scope: G2_SCOPE }))],
+          redirect_uris: client.redirectUris, response_types: client.deviceFlow ? [] : ["code"] as const,
+          grant_types: client.deviceFlow ? ["urn:ietf:params:oauth:grant-type:device_code"] as const : ["authorization_code"] as const, scope: G2_SCOPE }))],
       scopes: ["openid", "offline_access", SCOPE, ...(g2Clients.length ? [G2_SCOPE] : [])],
-      clientBasedCORS: (_ctx, origin, client) => g2Clients.find(c => c.clientId === client.clientId)?.origins.includes(origin) ?? false,
+      clientBasedCORS: (_ctx, origin, client) => g2Clients.some(c => c.clientId === client.clientId && g2OriginAllowed(c, origin)),
       claims: { openid: ["sub"] },
       responseTypes: ["code"],
       pkce: { required: () => true },
       features: {
         devInteractions: { enabled: false },
+        deviceFlow: { enabled: g2Clients.some(client => client.deviceFlow),
+          userCodeInputSource: async (ctx, form) => {
+            ctx.body = `<!doctype html><html lang="ko"><meta charset="utf-8"><h1>G2 연결 코드</h1><p>본인의 G2 앱에 표시된 코드를 입력하세요.</p>${form}<button type="submit" form="op.deviceInputForm">코드 확인</button></html>`;
+          },
+          userCodeConfirmSource: async (ctx, form, _client, _info, userCode) => {
+            const code = String(userCode).replace(/[^A-Z0-9-]/g, "");
+            ctx.body = `<!doctype html><html lang="ko"><meta charset="utf-8"><h1>G2 연결 확인</h1><p>G2 앱의 코드와 일치하는지 확인하세요.</p><strong>${code}</strong>${form}<button type="submit" form="op.deviceConfirmForm">일치합니다</button><button type="submit" form="op.deviceConfirmForm" name="abort" value="yes">취소</button></html>`;
+          },
+          successSource: async ctx => { ctx.body = '<!doctype html><html lang="ko"><meta charset="utf-8"><h1>연결 승인 완료</h1><p>G2 앱으로 돌아가세요.</p></html>'; },
+        },
         clientIdMetadataDocument: { enabled: true, ack: "draft-02",
           allowFetch: (_ctx, id) => isChatGptClient(id),
           allowClient: (_ctx, client) => isChatGptClient(client.clientId) && Boolean(client.redirectUris?.length) && client.redirectUris!.every(validRedirect) },
@@ -121,7 +132,7 @@ export class DotOwnerAuthService {
           } },
         revocation: { enabled: true },
       },
-      ttl: { AccessToken: 3600, IdToken: 3600, AuthorizationCode: 60, Interaction: 300, Session: 86400, Grant: 30 * 86400, RefreshToken: 30 * 86400 },
+      ttl: { DeviceCode: 300, AccessToken: 3600, IdToken: 3600, AuthorizationCode: 60, Interaction: 300, Session: 86400, Grant: 30 * 86400, RefreshToken: 30 * 86400 },
       expiresWithSession: () => false,
       issueRefreshToken: (_ctx, client) => client.grantTypeAllowed("refresh_token"),
       findAccount: async (_ctx, sub) => sub === owner ? { accountId: owner, claims: async () => ({ sub: owner }) } : undefined,
@@ -177,7 +188,9 @@ export class DotOwnerAuthService {
     res.setHeader("Referrer-Policy", "same-origin");
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Content-Security-Policy", "default-src 'none'; form-action 'self' https://chatgpt.com/connector_platform_oauth_redirect https://chatgpt.com/connector/oauth/"
-      + this.g2Clients.flatMap(c => c.redirectUris).map(uri => ` ${uri}`).join("") + "; frame-ancestors 'none'; base-uri 'none'");
+      // oidc-provider appends the exact SHA-256 for its own form-post script to
+      // this empty directive; arbitrary inline scripts remain disallowed.
+      + this.g2Clients.flatMap(c => c.redirectUris).map(uri => ` ${uri}`).join("") + "; script-src; frame-ancestors 'none'; base-uri 'none'");
     // Only the loopback listener sits behind the configured HTTPS proxy.
     if (req.headers["x-forwarded-proto"] !== "https") { res.writeHead(400).end("HTTPS proxy required"); return true; }
     if ((req.headers["x-forwarded-host"] ?? req.headers.host) !== new URL(this.origin).host) { res.writeHead(400).end("Invalid host"); return true; }

@@ -24,6 +24,10 @@ ENV_FILE="$DATA_DIR/.env"
 
 mkdir -p "$DATA_DIR" "$(dirname "$LOG_FILE")"
 
+if [[ "$(uname -s)" == "Darwin" && -f "$HOME/Library/LaunchAgents/app.remoteagent.runtime.plist" ]]; then
+  exec "$NODE_BIN" "$ROOT_DIR/scripts/macos-service.mjs" start
+fi
+
 if systemctl --user cat remoteagent >/dev/null 2>&1; then
   if systemctl is-active --quiet remoteagent || systemctl is-enabled --quiet remoteagent; then
     echo "System service still active/enabled. Run remoteagent service migrate first." >&2
@@ -58,7 +62,18 @@ if [ -f "$ENV_FILE" ]; then
 fi
 
 nohup env DATA_DIR="$DATA_DIR" "$NODE_BIN" "$ROOT_DIR/dist/index.js" >>"$LOG_FILE" 2>&1 &
-echo $! > "$PID_FILE"
-
-echo "RemoteAgent started with PID $(cat "$PID_FILE")"
-echo "Logs: $LOG_FILE"
+STARTED_PID=$!
+for ATTEMPT in {1..50}; do
+  if [[ -f "$PID_FILE" && "$(cat "$PID_FILE")" == "$STARTED_PID" ]] && kill -0 "$STARTED_PID" 2>/dev/null; then
+    echo "RemoteAgent started with PID $STARTED_PID"
+    echo "Logs: $LOG_FILE"
+    exit 0
+  fi
+  if ! kill -0 "$STARTED_PID" 2>/dev/null; then
+    echo "RemoteAgent startup failed. Logs: $LOG_FILE" >&2
+    exit 1
+  fi
+  sleep 0.1
+done
+echo "RemoteAgent PID ownership was not confirmed. Inspect $LOG_FILE before starting again." >&2
+exit 1
