@@ -592,11 +592,12 @@ if (calls.some((call) => /미완료 TODO|\/task|새 작업으로 접수/.test(ca
 
 await send("/login");
 const loginMenu = await waitForTelegramCall(call => call.text.includes("Choose an account to authenticate"));
-for (const label of ["GitHub", "Codex", "Claude", "Dot", "Jev / OpenRouter"]) {
+for (const label of ["GitHub", "Codex", "Claude", "Jev / OpenRouter"]) {
   if (!findInlineButton(loginMenu, label)?.callback_data?.startsWith("remoteagent:action:")) {
     throw new Error(`Missing login button: ${label}`);
   }
 }
+if (findInlineButton(loginMenu, "Dot")) throw new Error('Disabled dot must not appear in the login menu');
 await click(findInlineButton(loginMenu, 'Jev / OpenRouter').callback_data);
 await waitForTelegramCall(call => call.text.includes('openrouter.ai/settings/keys'));
 const syntheticKey = 'sk-or-v1-synthetic-telegram-test';
