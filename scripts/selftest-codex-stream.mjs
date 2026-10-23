@@ -42,14 +42,16 @@ for (const raw of [upgradeError, JSON.stringify({type: "error", status: 400, err
 const unrelatedError = "This request was blocked by our safety systems. Reason: Potentially unintended activity.";
 if (adapter.formatProcessError(unrelatedError, "", false, 1) !== unrelatedError) throw new Error("Unrelated error was changed");
 for (const method of ["buildExecArgs", "buildResumeArgs"]) {
+ for (const model of ["gpt-6-astra", "gpt-6.1-sol"]) {
   for (const reasoningEffort of ["low", "medium", "high", "xhigh", "max"]) {
-    const args = adapter[method]({model: "gpt-6-astra", reasoningEffort, cwd: tmp, sessionId: "stream-thread"}, path.join(tmp, "output"), "read-only");
+    const args = adapter[method]({model, reasoningEffort, cwd: tmp, sessionId: "stream-thread"}, path.join(tmp, "output"), "read-only");
     if (!args.includes(`model_reasoning_effort="${reasoningEffort}"`)) throw new Error(`Missing ${reasoningEffort} in ${method}`);
   }
-  const args = adapter[method]({model: "gpt-6-astra", cwd: tmp, sessionId: "stream-thread"}, path.join(tmp, "output"), "read-only");
-  if (args[args.indexOf("-m") + 1] !== "gpt-6-astra" || !args.some((arg, i) => arg === "-c" && args[i + 1] === 'model_reasoning_effort="medium"')) {
+  const args = adapter[method]({model, cwd: tmp, sessionId: "stream-thread"}, path.join(tmp, "output"), "read-only");
+  if (args[args.indexOf("-m") + 1] !== model || !args.some((arg, i) => arg === "-c" && args[i + 1] === 'model_reasoning_effort="medium"')) {
     throw new Error(`Astra medium missing from ${method}`);
   }
+ }
 }
 const progress = [];
 let settled = false;

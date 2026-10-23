@@ -18,7 +18,7 @@ const dataDir = path.join(root, "data");
 const workspaceRoot = path.join(root, "workspaces");
 const defaultWorkspace = path.join(root, "default-workspace");
 const fallbackStatePath = path.join(dataDir, "codex-usage-fallback.json");
-const primaryModel = "gpt-6-astra";
+const primaryModel = "gpt-6.1-sol";
 const usageError = "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Aug 27th, 2099 3:52 AM.";
 
 try {
@@ -66,7 +66,7 @@ try {
   process.env.CODEX_REASONING_EFFORT = "max";
   assert.match(bridge.formatResponses([{provider: "codex", model: primaryModel, reasoningEffort: "high", publicSessionId: "S081", output: "done"}])[0], /\| high \| S081/);
   process.env.CODEX_REASONING_EFFORT = "medium";
-  assert.equal(bridge.formatResponses([{provider: "codex", model: primaryModel, publicSessionId: "S081", output: "done"}])[0], "[CODEX | gpt-6-astra | medium | S081]\ndone");
+  assert.equal(bridge.formatResponses([{provider: "codex", model: primaryModel, publicSessionId: "S081", output: "done"}])[0], "[CODEX | gpt-6.1-sol | medium | S081]\ndone");
   const started = await bridge.startSession("test-bot", "test-chat", "codex");
   const originalSessionId = started.session.sessionId;
   const first = await bridge.routeMessage("test-bot", "test-chat", "first request", async (response) => {

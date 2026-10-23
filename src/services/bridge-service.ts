@@ -16,7 +16,7 @@ import type {
   TelegramContact,
 } from "../types.js";
 import { FileStore } from "../store/file-store.js";
-import { getAstraReasoning } from "./codex-reasoning.js";
+import { getAstraReasoning, supportsCodexReasoning } from "./codex-reasoning.js";
 import { stopSpawnedExecution } from "../adapters/windows-shell.js";
 import {
   CODEX_USAGE_FALLBACK_MODEL,
@@ -25,11 +25,11 @@ import {
 } from "./codex-usage-fallback-service.js";
 
 const MODEL_PRESETS: Record<Provider, string[]> = {
-  codex: ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark", "gpt-5.2", "gpt-5.1-codex-max"],
+  codex: ["gpt-6.1-sol", "gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark", "gpt-5.2", "gpt-5.1-codex-max"],
   claude: ["sonnet", "opus", "haiku"],
 };
 
-const DEFAULT_CODEX_MODEL = "gpt-6-astra";
+const DEFAULT_CODEX_MODEL = "gpt-6.1-sol";
 type ProviderProgressHandler = (response: ProviderResponse) => void | Promise<void>;
 
 export type ModelSelection = {
@@ -508,7 +508,7 @@ export class BridgeService {
     return responses.map((response) => {
       const sessionLabel = response.publicSessionId ?? response.sessionId;
       const modelLabel = response.model?.trim() || this.defaultModelFor(response.provider);
-      const effortLabel = response.provider === "codex" && modelLabel === "gpt-6-astra" ? ` | ${response.reasoningEffort ?? getAstraReasoning()}` : "";
+      const effortLabel = response.provider === "codex" && supportsCodexReasoning(modelLabel) ? ` | ${response.reasoningEffort ?? getAstraReasoning()}` : "";
       const header = `[${response.provider.toUpperCase()} | ${modelLabel}${effortLabel} | ${sessionLabel}]`;
       return `${header}\n${response.output}`;
     });
@@ -682,7 +682,7 @@ export class BridgeService {
 
       const forwardProgress = async (output: string, model: string): Promise<void> => {
         const progressResponse: ProviderResponse = {
-          reasoningEffort: provider === "codex" && model === "gpt-6-astra" ? reasoningEffort : undefined,
+          reasoningEffort: provider === "codex" && supportsCodexReasoning(model) ? reasoningEffort : undefined,
           provider,
           sessionId: providerSession.sessionId ?? session.sessionId,
           publicSessionId: session.publicId,
@@ -706,7 +706,7 @@ export class BridgeService {
       const sendWithModel = (model: string): Promise<ProviderResponse> => {
         signal?.throwIfAborted();
         return this.adapters[provider]!.send({
-        reasoningEffort: provider === "codex" && model === "gpt-6-astra" ? reasoningEffort : undefined,
+        reasoningEffort: provider === "codex" && supportsCodexReasoning(model) ? reasoningEffort : undefined,
         botId,
         chatId: chatId ?? requestSource,
         remoteSessionId: session.sessionId,
@@ -808,7 +808,7 @@ export class BridgeService {
         ...response,
         publicSessionId: session.publicId,
         model: executionModel,
-        reasoningEffort: provider === "codex" && executionModel === "gpt-6-astra" ? reasoningEffort : undefined,
+        reasoningEffort: provider === "codex" && supportsCodexReasoning(executionModel) ? reasoningEffort : undefined,
       });
     }
 

@@ -93,6 +93,19 @@ export class FileStore {
     return this.dataDir;
   }
 
+  // Maintenance callers must hold the runtime lock while the server is stopped.
+  async setAllCodexModels(model: string): Promise<string[]> {
+    const state = await this.readState();
+    const changed: string[] = [];
+    for (const session of Object.values(state.sessions)) {
+      if (!session.codex || session.codex.model === model) continue;
+      session.codex.model = model;
+      changed.push(session.publicId);
+    }
+    if (changed.length) await this.writeState(state);
+    return changed;
+  }
+
   async listActiveSessionIds(botId?: string): Promise<Set<string>> {
     const state = await this.readState();
     const sessionIds = Object.values(state.chats)

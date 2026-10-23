@@ -1094,7 +1094,7 @@ ${bridge.formatStatus(mapping)}`);
       }
       await upsertInstalledEnvValue("CODEX_REASONING_EFFORT", effort);
       process.env.CODEX_REASONING_EFFORT = effort;
-      await reply(ctx, `Set Astra reasoning effort to ${effort}. Applies to the next Astra execution for all bots on this server; running executions keep their current effort.\n\nSaved: CODEX_REASONING_EFFORT=${effort}`);
+      await reply(ctx, `Set Codex reasoning effort to ${effort}. Applies to the next GPT-6.1 Sol or Astra execution for all bots on this server; running executions keep their current effort.\n\nSaved: CODEX_REASONING_EFFORT=${effort}`);
       return;
     }
 
@@ -3339,7 +3339,7 @@ function formatRuntimeOptions(): string {
     `- jev: ${jev.status().mode} (optional; /option jev off|observe|on)`,
     `- retry: ${formatRetryLimit(config.telegramAutoProgressMaxTurns)} (TELEGRAM_AUTO_PROGRESS_MAX_TURNS)`,
     `- timeout: ${formatTimeoutSeconds(config.commandTimeoutMs)} (COMMAND_TIMEOUT_MS)`,
-    `- reasoning: ${getAstraReasoning()} (Astra, server-wide, CODEX_REASONING_EFFORT)`,
+    `- reasoning: ${getAstraReasoning()} (GPT-6.1 Sol / Astra, server-wide, CODEX_REASONING_EFFORT)`,
     `- command-menu: ${config.telegramCommandMenuEnabled ? "on" : "off"} (TELEGRAM_COMMAND_MENU_ENABLED)`,
     "",
     "Usage:",
@@ -3355,7 +3355,7 @@ function formatRuntimeOptions(): string {
 
 function formatRuntimeOptionDetail(option: RuntimeOptionName): string {
   if (option === "reasoning") {
-    return `Current Astra reasoning effort: ${getAstraReasoning()}\n\nUsage: /option reasoning <low|medium|high|xhigh|max>\nApplies to the next Astra execution for all bots on this server. No restart required.`;
+    return `Current Codex reasoning effort: ${getAstraReasoning()}\n\nUsage: /option reasoning <low|medium|high|xhigh|max>\nApplies to the next GPT-6.1 Sol or Astra execution for all bots on this server. No restart required.`;
   }
   if (option === "retry") {
     return `Current automatic continuation retry limit: ${formatRetryLimit(config.telegramAutoProgressMaxTurns)}\n\nUsage: \`/option retry <count>\``;

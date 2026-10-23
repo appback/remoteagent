@@ -97,6 +97,9 @@ else
 fi
 node scripts/selftest-telegram-update.mjs
 node scripts/selftest-session-dispatch.mjs
+node scripts/selftest-codex-stream.mjs
+node scripts/selftest-model-fallback.mjs
+node scripts/selftest-codex-model-migration.mjs
 node scripts/selftest-telegram-upload.mjs
 
 TARBALL="$(npm pack --silent)"
