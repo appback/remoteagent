@@ -86,6 +86,13 @@ try {
       tokens=await response.json();if(!response.ok)throw Error('Token exchange failed');
     } finally {sessionStorage.removeItem('g2_login_attempt');}
     }
+    let oldRefresh;
+    if(device){
+      oldRefresh=tokens.refresh_token;
+      if(!oldRefresh)throw Error('Missing refresh token');
+      const renewal=await fetch(resource+'/oauth/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'refresh_token',client_id:clientId,refresh_token:oldRefresh,resource:resource+'/api/v1'})});
+      tokens=await renewal.json();if(!renewal.ok||!tokens.refresh_token||tokens.refresh_token===oldRefresh)throw Error('Refresh rotation failed');
+    }
     const headers={authorization:'Bearer '+tokens.access_token,'content-type':'application/json'};
     const targetsResponse=await fetch(resource+'/api/v1/targets',{headers});
     if(!targetsResponse.ok)throw Error('Targets failed');const {targets}=await targetsResponse.json();
@@ -97,13 +104,19 @@ try {
       if(snapshot.status==='completed')break;await new Promise(resolve=>setTimeout(resolve,20));
     }
     const events=await(await fetch(resource+'/api/v1/requests/'+request.requestId+'/events?after=0',{headers})).json();
-    return {status:snapshot.status,text:snapshot.result?.text,eventTypes:events.events.map(event=>event.type),
+    let replayProtected=false;
+    if(device){
+      const refresh=token=>fetch(resource+'/oauth/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'refresh_token',client_id:clientId,refresh_token:token,resource:resource+'/api/v1'})});
+      const replay=await refresh(oldRefresh),family=await refresh(tokens.refresh_token);
+      replayProtected=replay.status===400&&family.status===400;if(!replayProtected)throw Error('Refresh replay did not revoke token family');
+    }
+    return {replayProtected,status:snapshot.status,text:snapshot.result?.text,eventTypes:events.events.map(event=>event.type),
       noRefresh:!tokens.refresh_token,sessionKeys:Object.keys(sessionStorage),localKeys:Object.keys(localStorage),query:location.search};
   },{resource,redirect,clientId,device});
-  assert.equal(result.status,'completed');assert.equal(result.text,'browser final');assert.equal(result.noRefresh,true);
+  assert.equal(result.status,'completed');assert.equal(result.text,'browser final');assert.equal(result.noRefresh,!deviceFlow);assert.equal(result.replayProtected,deviceFlow);
   assert.deepEqual(result.sessionKeys,[]);assert.deepEqual(result.localKeys,[]);assert.equal(result.query,'');
   assert.ok(result.eventTypes.includes('progress'));assert.ok(result.eventTypes.includes('result'));
-  console.log(JSON.stringify({ok:true,flow:deviceFlow?'device_code':'pkce',crossOriginTokenAndApi:true,memoryOnlyToken:true,requestAndEvents:true}));
+  console.log(JSON.stringify({ok:true,flow:deviceFlow?'device_code':'pkce',crossOriginTokenAndApi:true,accessTokenInMemory:true,refreshRotation:deviceFlow,requestAndEvents:true}));
 } finally {
   await browser?.close();await mcp.close();
   for(const server of [proxy,ui]){server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}

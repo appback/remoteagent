@@ -5,3 +5,6 @@ dist
 *.tgz
 *.tar.gz
 *.ra-secrets
+*.ehpk
+._*
+test-results

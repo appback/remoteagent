@@ -20,7 +20,7 @@ const resource = 'https://bridge.example.test', owner = 'telegram:123', origin =
 const redirect = origin + '/oauth/callback', clientId = 'remoteagent-g2-test';
 const settle = async () => { for(let i=0;i<12;i++) await new Promise(r=>setImmediate(r)); };
 
-async function fixture(t, standalone=false) {
+async function fixture(t, standalone=false, speech, deviceFlow=false) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'remoteagent-g2-'));
   const deliveries=[], telegram=[];
   const dot = new DotBridgeService(dir, owner, async (...args) => {
@@ -48,9 +48,9 @@ async function fixture(t, standalone=false) {
   };
   const service=new G2RequestService(dir,owner,sessions,standalone?undefined:dot);await service.restore();
   const inventory=await service.inventory(), session=inventory.find(t=>t.type==='session'), channel=inventory.find(t=>t.type==='dot_channel');
-  const client={clientId,origins:[origin],redirectUris:[redirect],targetIds:inventory.map(t=>t.targetId)};
+  const client={clientId,origins:[origin],redirectUris:deviceFlow?[]:[redirect],targetIds:inventory.map(t=>t.targetId),deviceFlow};
   const auth=new DotOwnerAuthService(dir,resource,owner,[client],!standalone);
-  const api=new G2ApiService(service,resource,[client],auth.authenticateG2.bind(auth));
+  const api=new G2ApiService(service,resource,[client],auth.authenticateG2.bind(auth),speech);
   const mcp=standalone ? new G2ServerService(auth.handle.bind(auth),api.handle.bind(api))
     : new DotMcpService(dot,'127.0.0.1',0,{resource,issuer:auth.issuer},auth.authenticate.bind(auth),auth.handle.bind(auth),undefined,undefined,api.handle.bind(api));
   await mcp.start(0);
@@ -110,6 +110,44 @@ test('standalone G2 runs sessions without dot clients, MCP, channels or host too
   assert.equal(f.service.get(f.principal,submitted.requestId).status,'completed');
   assert.equal(f.telegram.length,0);
   assert.equal((await f.request('/mcp',{method:'POST',headers:{authorization:bearer},body:'{}'})).status,404);
+});
+
+test('PCM API is authenticated, target-bound, bounded and never executes a transcript',async t=>{
+  let calls=0;
+  const f=await fixture(t,true,{async transcribe(bytes){calls++;assert.equal(bytes.length,6400);return {text:'실제 입력은 별도 전송',durationMs:200};}});
+  const login=await f.login(),headers={authorization:'Bearer '+login.tokens.access_token,'content-type':'audio/pcm',origin};
+  const url='/api/v1/audio/transcriptions?targetId='+f.session.targetId;
+  assert.equal((await f.request(url,{method:'POST',body:Buffer.alloc(6400)})).status,401);
+  assert.equal((await f.request(url.replace(f.session.targetId,'tgt_unknown'),{method:'POST',headers,body:Buffer.alloc(6400)})).status,403);
+  assert.equal((await f.request(url,{method:'POST',headers:{...headers,'content-type':'application/json'},body:'{}'})).status,415);
+  assert.equal((await f.request(url,{method:'POST',headers,body:Buffer.alloc(1920002)})).status,413);
+  const result=await f.request(url,{method:'POST',headers,body:Buffer.alloc(6400)});
+  assert.equal(result.status,200);assert.equal((await result.json()).text,'실제 입력은 별도 전송');
+  assert.equal(calls,1);assert.equal(f.calls(),0);
+});
+
+test('trusted Telegram owner approves standard device grant without browser/copy codes; deny, expiry and replay fail closed',async t=>{
+  const f=await fixture(t,true,undefined,true);
+  const form=body=>({method:'POST',headers:{origin,'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams(body)});
+  const create=async()=>{
+    const result=await f.request('/oauth/device/auth',form({client_id:clientId,scope:'remoteagent:g2',resource:resource+'/api/v1'}));
+    assert.equal(result.status,200,await result.clone().text());return result.json();
+  };
+  const input=await create();
+  const preview=await f.auth.previewG2Device(input.user_code);assert.deepEqual(preview.targetIds,[f.session.targetId]);
+  await assert.rejects(f.auth.decideG2Device(input.user_code,true,'telegram:another-user'),/UNAUTHORIZED/);
+  const decisions=await Promise.allSettled([f.auth.decideG2Device(input.user_code,true,owner),f.auth.decideG2Device(input.user_code,true,owner)]);
+  assert.equal(decisions.filter(x=>x.status==='fulfilled').length,1);
+  const fields={grant_type:'urn:ietf:params:oauth:grant-type:device_code',client_id:clientId,device_code:input.device_code,resource:resource+'/api/v1'};
+  const exchange=await f.request('/oauth/token',form(fields));assert.equal(exchange.status,200,await exchange.clone().text());
+  const tokens=await exchange.json();assert.ok(tokens.access_token);assert.ok(tokens.refresh_token);
+  assert.equal((await f.auth.authenticateG2('Bearer '+tokens.access_token)).targetIds.length,1);
+  await assert.rejects(f.auth.previewG2Device(input.user_code),/INVALID_DEVICE_CODE/);
+  const denied=await create();await f.auth.decideG2Device(denied.user_code,false,owner);
+  const denial=await f.request('/oauth/token',form({...fields,device_code:denied.device_code}));
+  assert.equal(denial.status,400);assert.equal((await denial.json()).error,'access_denied');
+  const expired=await create();const row=await f.auth.provider.DeviceCode.findByUserCode(expired.user_code.replace(/-/g,''));await row.destroy();
+  await assert.rejects(f.auth.decideG2Device(expired.user_code,true,owner),/INVALID_DEVICE_CODE/);
 });
 
 test('G2 real-library OAuth PKCE, CORS, resource isolation and revocation',async t=>{

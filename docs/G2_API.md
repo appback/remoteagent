@@ -1,5 +1,17 @@
 # Direct G2 Request API
 
+## Current Development Candidate: Voice and Button Approval
+
+The rebuild in `clients/even-g2` (app 0.5.0) uses official G2 SDK microphone PCM,
+an authenticated local-transcription endpoint, and Telegram owner-bound device
+approval buttons. Device clients issue rotating refresh tokens; the former
+memory-only/no-refresh device policy is superseded. No browser approval form or
+copied Telegram login code is needed in the new app flow. S010 remains the only
+approved production target. See `G2_REBUILD.md` for the complete contract,
+verified tests, explicit activation commands and physical-device limitations.
+This is a development candidate, not a claim that the existing Mac app has been
+updated. The records below describe prior deployed versions.
+
 ## Mac60: G2 Without Dot
 
 Dot is retired on Mac60. G2 connects directly to the local S010 Codex session.

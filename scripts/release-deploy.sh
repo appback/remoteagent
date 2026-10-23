@@ -246,10 +246,11 @@ REMOTE
 }
 
 deploy_60() {
-  local HOST_ROOTS_B64 G2_CONFIG_PATH_B64
+  local HOST_ROOTS_B64 G2_CONFIG_PATH_B64 G2_SPEECH_MODEL_B64
   HOST_ROOTS_B64="$(node -e 'process.stdout.write(Buffer.from(process.env.DOT_HOST_ROOTS || "").toString("base64"))')"
   G2_CONFIG_PATH_B64="$(node -e 'process.stdout.write(Buffer.from(process.env.G2_CLIENT_CONFIG || "").toString("base64"))')"
-  ssh appback@192.168.33.60 "VERSION=$VERSION ALLOW_STALE_RUNNING=${ALLOW_STALE_RUNNING:-0} ACTIVATE_JEV=${ACTIVATE_JEV:-0} ACTIVATE_MAC=${ACTIVATE_MAC:-0} DEACTIVATE_DOT=${DEACTIVATE_DOT:-0} HOST_ROOTS_B64=$HOST_ROOTS_B64 G2_CONFIG_PATH_B64=$G2_CONFIG_PATH_B64 bash -s" <<'REMOTE'
+  G2_SPEECH_MODEL_B64="$(node -e 'process.stdout.write(Buffer.from(process.env.G2_SPEECH_MODEL || "").toString("base64"))')"
+  ssh appback@192.168.33.60 "VERSION=$VERSION ALLOW_STALE_RUNNING=${ALLOW_STALE_RUNNING:-0} ACTIVATE_JEV=${ACTIVATE_JEV:-0} ACTIVATE_MAC=${ACTIVATE_MAC:-0} DEACTIVATE_DOT=${DEACTIVATE_DOT:-0} HOST_ROOTS_B64=$HOST_ROOTS_B64 G2_CONFIG_PATH_B64=$G2_CONFIG_PATH_B64 G2_SPEECH_MODEL_B64=$G2_SPEECH_MODEL_B64 bash -s" <<'REMOTE'
 set -euo pipefail
 export PATH="$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export DATA_DIR="$HOME/.remoteagent"
@@ -263,6 +264,11 @@ node --input-type=module <<'NODE'
 import fs from 'node:fs';
 import {execFileSync} from 'node:child_process';
 const d=process.env.DATA_DIR;
+if(process.env.G2_SPEECH_MODEL_B64){
+ const file=Buffer.from(process.env.G2_SPEECH_MODEL_B64,'base64').toString('utf8');
+ if(!file.startsWith('/')||/[\r\n\0]/.test(file)||!fs.statSync(file).isFile())throw Error('G2_SPEECH_MODEL must be an existing absolute file on Mac60');
+ fs.accessSync('/opt/homebrew/bin/whisper-cli',fs.constants.X_OK);
+}
 if(process.env.ACTIVATE_MAC==='1'){
  const binary=process.env.HOME+'/.local/bin/peekaboo';
  fs.accessSync(binary,fs.constants.X_OK);
@@ -353,6 +359,17 @@ import fs from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 const home=process.env.HOME,d=process.env.DATA_DIR,root=process.env.ROOT;
+if(process.env.G2_SPEECH_MODEL_B64){
+ const model=Buffer.from(process.env.G2_SPEECH_MODEL_B64,'base64').toString('utf8');
+ const {G2SpeechService}=await import(root+'/dist/services/g2-speech-service.js');
+ await new G2SpeechService('/opt/homebrew/bin/whisper-cli',model).ready();
+ const file=d+'/.env';let text=fs.readFileSync(file,'utf8');
+ for(const [key,value] of [['G2_WHISPER_BIN','/opt/homebrew/bin/whisper-cli'],['G2_WHISPER_MODEL',JSON.stringify(model)]]){
+  const pattern=new RegExp('^'+key+'=.*$','m');text=pattern.test(text)?text.replace(pattern,()=>key+'='+value):text+'\n'+key+'='+value+'\n';
+ }
+ fs.writeFileSync(file,text,{mode:0o600});
+ console.log('Local G2 speech recognition configured; no external speech key or browser microphone.');
+}
 if(process.env.DEACTIVATE_DOT==='1'){
  if(process.env.ACTIVATE_MAC==='1'||process.env.HOST_ROOTS_B64)throw Error('Dot deactivation cannot enable dot host/Mac tools');
  const dotenv=await import(root+'/node_modules/dotenv/lib/main.js');

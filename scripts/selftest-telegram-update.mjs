@@ -278,11 +278,15 @@ const bridge = new BridgeService(
   "workspace-write",
 );
 const botManagement = new BotManagementService(dataDir, undefined, undefined);
+const g2PairDecisions=[];
 const bot = createBot("000000:test-token", bridge, botManagement, {
   id: 999001,
   is_bot: true,
   first_name: "RemoteAgent Test",
   username: "remoteagent_test_bot",
+}, undefined, undefined, {
+  async preview(code){if(code!=='ABCD-EFGH')throw Error('INVALID_DEVICE_CODE');return {clientId:'remoteagent-g2-even',targetLabels:['S010']};},
+  async decide(code,approve,actor){g2PairDecisions.push({code,approve,actor});},
 });
 
 const injectedBot = bot;
@@ -598,6 +602,13 @@ for (const label of ["GitHub", "Codex", "Claude", "Jev / OpenRouter"]) {
   }
 }
 if (findInlineButton(loginMenu, "Dot")) throw new Error('Disabled dot must not appear in the login menu');
+const beforeG2Pairing=await bridge.status('999001','111222333');
+await send('/start g2_ABCD-EFGH');
+const g2PairMenu=await waitForTelegramCall(call=>call.text.includes('G2 기기 연결 요청'));
+await click(findInlineButton(g2PairMenu,'연결 승인').callback_data);
+await waitForTelegramCall(call=>call.text.includes('G2 연결을 승인했습니다'));
+if(JSON.stringify(g2PairDecisions)!==JSON.stringify([{code:'ABCD-EFGH',approve:true,actor:'telegram:111'}]))throw Error('G2 pairing lost its owner binding');
+if((await bridge.status('999001','111222333'))?.session.sessionId!==beforeG2Pairing?.session.sessionId)throw Error('G2 pairing must not create, reset or switch the Telegram Codex session');
 await click(findInlineButton(loginMenu, 'Jev / OpenRouter').callback_data);
 await waitForTelegramCall(call => call.text.includes('openrouter.ai/settings/keys'));
 const syntheticKey = 'sk-or-v1-synthetic-telegram-test';

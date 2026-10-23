@@ -156,6 +156,7 @@ type QueuedWorkLoopEntry = {
 };
 
 type InlineAction =
+  | { kind: "g2.pair"; code: string; approve: boolean }
   | { kind: "dot.login" }
   | { kind: "dot.start" }
   | { kind: "peer.check"; alias: string }
@@ -320,7 +321,7 @@ class AutoContinueController {
   }
 }
 
-export function createBot(token: string, bridge: BridgeService, botManagement: BotManagementService, botInfo: UserFromGetMe, dot?: DotBridgeService, g2Login?: () => { code: string; expiresAt: string }): Bot {
+export function createBot(token: string, bridge: BridgeService, botManagement: BotManagementService, botInfo: UserFromGetMe, dot?: DotBridgeService, g2Login?: () => { code: string; expiresAt: string }, g2Pairing?: import("./services/dot-owner-auth-service.js").G2PairingControl): Bot {
   const bot = new Bot(token, { botInfo });
   const inlineActions = new InlineActionRegistry();
   const peers = new PeerService(config.dataDir, String(botInfo.id));
@@ -695,6 +696,19 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
     const chatId = String(ctx.chat.id);
     const { args, rest } = parseCommand(ctx.message?.text, 1);
     const first = args[0]?.trim();
+
+    if (first?.startsWith("g2_") && !rest?.trim()) {
+      await ensureOwnerControlAccess(ctx);
+      if (ctx.chat.type !== "private" || !g2Pairing) { await reply(ctx, "이 채팅에서 G2 연결 승인을 사용할 수 없습니다."); return; }
+      const code = first.slice(3);
+      try {
+        const approval = await g2Pairing.preview(code);
+        await reply(ctx, `G2 기기 연결 요청\n연결 코드: ${code}\n허용 대상: ${approval.targetLabels.join(", ")}\n\n본인이 앱에서 시작한 연결이며 코드가 일치할 때만 승인하세요. 승인 후 앱으로 돌아가면 자동 연결됩니다.`, keyboardOptions([
+          [actionButton(ctx, "연결 승인", { kind: "g2.pair", code, approve: true }), actionButton(ctx, "거절", { kind: "g2.pair", code, approve: false })],
+        ]));
+      } catch { await reply(ctx, "연결 요청이 만료됐거나 이미 처리됐습니다. 앱에서 새 연결을 시작하세요."); }
+      return;
+    }
 
     if (rest?.trim()) {
       await reply(ctx, "Usage: `/start [codex|claude|dot]`", {
@@ -1720,6 +1734,15 @@ ${bridge.formatStatus(mapping)}`);
       }
       if (action.kind === "login.start") {
         await startLogin(ctx, action.target, action.force);
+        return;
+      }
+      if (action.kind === "g2.pair") {
+        await ensureOwnerControlAccess(ctx);
+        if (!g2Pairing || ctx.chat?.type !== "private" || !ctx.from) { await reply(ctx, "G2 연결 승인을 사용할 수 없습니다."); return; }
+        try {
+          await g2Pairing.decide(action.code, action.approve, `telegram:${ctx.from.id}`);
+          await reply(ctx, action.approve ? "G2 연결을 승인했습니다. 앱으로 돌아가세요. 기존 Codex 세션은 변경하지 않았습니다." : "G2 연결을 거절했습니다.");
+        } catch { await reply(ctx, "승인하지 못했습니다. 만료됐거나 이미 처리된 요청인지 앱에서 확인하세요."); }
         return;
       }
       if (action.kind === "dot.login") { await showDotLogin(ctx); return; }

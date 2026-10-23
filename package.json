@@ -20,7 +20,7 @@
     "selftest:dot-login": "npm run build && node --test scripts/selftest-dot-login.mjs",
     "mac:install": "node scripts/install-mac-control.mjs",
     "selftest:dot-auth": "npm run build && node --test scripts/selftest-dot-owner-auth.mjs",
-    "selftest:g2": "npm run build && node --test scripts/selftest-g2.mjs",
+    "selftest:g2": "npm run build && node --test scripts/selftest-g2.mjs scripts/selftest-g2-speech.mjs",
     "selftest:g2-browser": "npm run build && node scripts/selftest-g2-browser.mjs",
     "selftest:dot-browser": "npm run build && node scripts/selftest-dot-browser.mjs",
     "selftest:session-dispatch": "npm run build && node scripts/selftest-session-dispatch.mjs",

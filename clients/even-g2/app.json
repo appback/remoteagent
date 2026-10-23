@@ -1,0 +1,25 @@
+{
+  "package_id": "com.daone.gtwobasic",
+  "edition": "202601",
+  "name": "이븐",
+  "version": "0.5.0",
+  "min_sdk_version": "0.0.16",
+  "entrypoint": "index.html",
+  "supported_languages": [
+    "ko"
+  ],
+  "permissions": [
+    {
+      "name": "g2-microphone",
+      "desc": "안경 마이크로 음성 지시를 입력합니다. 녹음은 사용자가 시작하고 종료합니다."
+    },
+    {
+      "name": "network",
+      "desc": "RemoteAgent 로그인 승인과 요청 및 결과 조회에 사용합니다.",
+      "whitelist": [
+        "https://remoteagent-dot60.appback.app",
+        "https://t.me"
+      ]
+    }
+  ]
+}

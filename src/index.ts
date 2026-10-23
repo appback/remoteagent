@@ -19,6 +19,8 @@ import { readG2Clients, type G2Client } from "./services/g2-config.js";
 import { G2RequestService } from "./services/g2-request-service.js";
 import { G2ApiService } from "./services/g2-api-service.js";
 import { G2ServerService } from "./services/g2-server-service.js";
+import { G2SpeechService } from "./services/g2-speech-service.js";
+import type { G2PairingControl } from "./services/dot-owner-auth-service.js";
 import { acquireProcessLock, releaseProcessLock } from "./services/runtime-lock.js";
 import { DotHostService } from "./services/dot-host-service.js";
 import type { DotMacService } from "./services/dot-mac-service.js";
@@ -114,6 +116,7 @@ async function main(): Promise<void> {
 
   let dot: DotBridgeService | undefined;
   let g2Login: (() => { code: string; expiresAt: string }) | undefined;
+  let g2Pairing: G2PairingControl | undefined;
   if (!config.dotEnabled && process.env.G2_API_ENABLED === "true") {
     const resource = process.env.G2_PUBLIC_URL?.trim();
     const owner = config.telegramOwnerId?.trim();
@@ -122,11 +125,25 @@ async function main(): Promise<void> {
     const auth = new (await import("./services/dot-owner-auth-service.js")).DotOwnerAuthService(config.dataDir, resource, `telegram:${owner}`, clients, false);
     const requests = new G2RequestService(config.dataDir, auth.owner, bridge);
     await requests.restore();
-    const api = new G2ApiService(requests, resource, clients, auth.authenticateG2.bind(auth));
+    let speech: G2SpeechService | undefined;
+    if (process.env.G2_WHISPER_BIN && process.env.G2_WHISPER_MODEL) {
+      try {
+        speech = new G2SpeechService(process.env.G2_WHISPER_BIN, process.env.G2_WHISPER_MODEL);
+        await speech.ready();
+      } catch { speech = undefined; console.error("G2 speech unavailable: check the configured local decoder and model. Telegram and text requests remain available."); }
+    }
+    const api = new G2ApiService(requests, resource, clients, auth.authenticateG2.bind(auth), speech);
     const port = Number(process.env.G2_HTTP_PORT ?? "3796");
     if (!Number.isInteger(port) || port < 1024 || port > 65535) throw Error("Invalid G2_HTTP_PORT");
     await new G2ServerService(auth.handle.bind(auth), api.handle.bind(api)).start(port);
     g2Login = () => auth.issueLoginCode();
+    g2Pairing = {
+      async preview(code) {
+        const approval = await auth.previewG2Device(code), inventory = await requests.inventory();
+        return { clientId: approval.clientId, targetLabels: approval.targetIds.map(id => inventory.find(t => t.targetId === id)?.label ?? "대상 없음") };
+      },
+      decide: auth.decideG2Device.bind(auth),
+    };
     console.log(`G2 API listening on 127.0.0.1:${port}; dot is disabled.`);
   }
   if (config.dotEnabled) {
@@ -209,7 +226,7 @@ async function main(): Promise<void> {
   const botInfos = await Promise.all(config.telegramBotTokens.map((token, index) =>
     resolveBotInfo(token, index, config.telegramBotUsernames[index])
   ));
-  const bots = config.telegramBotTokens.map((token, index) => createBot(token, bridge, botManagement, botInfos[index]!, dot, g2Login));
+  const bots = config.telegramBotTokens.map((token, index) => createBot(token, bridge, botManagement, botInfos[index]!, dot, g2Login, g2Pairing));
 
   if (!config.telegramCommandMenuEnabled) {
     console.log("Telegram command menu registration is disabled.");

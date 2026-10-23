@@ -1,11 +1,13 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { G2_SCOPE, g2OriginAllowed, type G2Client, type G2Principal } from "./g2-config.js";
 import type { G2RequestService } from "./g2-request-service.js";
+import { G2_PCM_MAX_BYTES, type G2SpeechService } from "./g2-speech-service.js";
 
 export class G2ApiService {
   private windows = new Map<string, { since: number; reads: number; writes: number }>();
   constructor(private readonly requests: G2RequestService, private readonly resource: string,
-    private readonly clients: G2Client[], private readonly authenticate: (header: string | undefined) => Promise<G2Principal | undefined>) {}
+    private readonly clients: G2Client[], private readonly authenticate: (header: string | undefined) => Promise<G2Principal | undefined>,
+    private readonly speech?: G2SpeechService) {}
 
   async handle(req: IncomingMessage, res: ServerResponse): Promise<boolean> {
     const url = new URL(req.url ?? "/", this.resource);
@@ -44,6 +46,26 @@ export class G2ApiService {
       this.json(res, 429, { error: "RATE_LIMITED" }); return true;
     }
     try {
+      if (req.method === "GET" && url.pathname === "/api/v1/capabilities") {
+        this.json(res, 200, { audio: { available: Boolean(this.speech), format: "s16le", sampleRate: 16000, channels: 1, maxSeconds: 60 } }); return true;
+      }
+      if (req.method === "POST" && url.pathname === "/api/v1/audio/transcriptions") {
+        const targetId = url.searchParams.get("targetId");
+        if (!(await this.requests.targets(principal)).some(t => t.targetId === targetId && t.type === "session")) throw Error("TARGET_FORBIDDEN");
+        if (!this.speech) throw Error("SPEECH_UNAVAILABLE");
+        if (req.headers["content-type"]?.split(";")[0] !== "audio/pcm") throw Error("PCM_REQUIRED");
+        const chunks: Buffer[] = []; let size = 0;
+        for await (const chunk of req) {
+          size += chunk.length;
+          if (size > G2_PCM_MAX_BYTES) throw Error("REQUEST_TOO_LARGE");
+          chunks.push(Buffer.from(chunk));
+        }
+        const controller = new AbortController();
+        const cancel = () => controller.abort(); res.once("close", cancel);
+        try { this.json(res, 200, await this.speech.transcribe(Buffer.concat(chunks), controller.signal)); }
+        finally { res.off("close", cancel); }
+        return true;
+      }
       if (req.method === "GET" && url.pathname === "/api/v1/targets") {
         this.json(res, 200, { targets: await this.requests.targets(principal) }); return true;
       }
@@ -72,8 +94,8 @@ export class G2ApiService {
       const status = code === "UNAUTHORIZED" ? 401 : code === "TARGET_FORBIDDEN" ? 403
         : ["TARGET_NOT_FOUND", "REQUEST_NOT_FOUND"].includes(code) ? 404 : code === "CURSOR_EXPIRED" ? 410
         : ["REQUEST_ID_CONFLICT", "TARGET_BUSY", "TARGET_UNAVAILABLE", "DOT_NOT_SUBSCRIBED"].includes(code) ? 409
-        : ["REQUEST_CAPACITY", "G2_STORAGE_FAILED"].includes(code) ? 503 : code === "REQUEST_TOO_LARGE" ? 413
-        : code === "JSON_REQUIRED" ? 415 : 400;
+        : ["REQUEST_CAPACITY", "G2_STORAGE_FAILED", "SPEECH_UNAVAILABLE", "SPEECH_BUSY"].includes(code) ? 503 : code === "REQUEST_TOO_LARGE" ? 413
+        : ["JSON_REQUIRED", "PCM_REQUIRED"].includes(code) ? 415 : code === "SPEECH_FAILED" ? 502 : 400;
       this.json(res, status, { error: code }); return true;
     }
   }

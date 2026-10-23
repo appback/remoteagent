@@ -8,6 +8,10 @@ import { G2_SCOPE, g2OriginAllowed, type G2Client, type G2Principal } from "./g2
 
 const SCOPE = "remoteagent:dot";
 const LOGIN_TTL = 300_000;
+export type G2PairingControl = {
+  preview(code: string): Promise<{ clientId: string; targetLabels: string[] }>;
+  decide(code: string, approve: boolean, actor: string): Promise<void>;
+};
 type Row = { payload: AdapterPayload; expires: number };
 
 // OAuth tokens, grants and signing keys survive restarts independently of LLM sessions.
@@ -77,6 +81,7 @@ export class DotOwnerAuthService {
   private readonly forms = new Map<string, { csrf: string; expires: number; attempts: number }>();
   private readonly origin: string;
   private requestWindow = { start: Date.now(), count: 0 };
+  private readonly pairingLocks = new Set<string>();
   constructor(dataDir: string, readonly resource: string, readonly owner: string, private readonly g2Clients: G2Client[] = [], private readonly dotEnabled = true) {
     const url = new URL(resource);
     if (url.protocol !== "https:" || url.pathname !== "/" || url.search || url.hash || url.username || url.password || !owner) throw Error("DOT_AUTH_INVALID_ORIGIN");
@@ -102,7 +107,7 @@ export class DotOwnerAuthService {
         redirect_uris: ["https://chatgpt.com/connector_platform_oauth_redirect"], response_types: ["code" as const], grant_types: ["authorization_code", "refresh_token"] }] : []),
         ...g2Clients.map(client => ({ client_id: client.clientId, client_name: "RemoteAgent G2", token_endpoint_auth_method: "none" as const,
           redirect_uris: client.redirectUris, response_types: client.deviceFlow ? [] : ["code"] as const,
-          grant_types: client.deviceFlow ? ["urn:ietf:params:oauth:grant-type:device_code"] as const : ["authorization_code"] as const, scope: G2_SCOPE }))],
+          grant_types: client.deviceFlow ? ["urn:ietf:params:oauth:grant-type:device_code", "refresh_token"] as const : ["authorization_code"] as const, scope: G2_SCOPE }))],
       scopes: ["openid", ...(dotEnabled ? ["offline_access", SCOPE] : []), ...(g2Clients.length ? [G2_SCOPE] : [])],
       clientBasedCORS: (_ctx, origin, client) => g2Clients.some(c => c.clientId === client.clientId && g2OriginAllowed(c, origin)),
       claims: { openid: ["sub"] },
@@ -151,6 +156,38 @@ export class DotOwnerAuthService {
     const expires = Date.now() + LOGIN_TTL;
     this.codes.set(digest(code).toString("hex"), { expires });
     return { code, expiresAt: new Date(expires).toISOString() };
+  }
+  private async g2Device(code: string) {
+    if (!/^[A-Z0-9-]{6,24}$/.test(code)) throw Error("INVALID_DEVICE_CODE");
+    const device = await this.provider.DeviceCode.findByUserCode(code.replace(/-/g, ""));
+    const client = this.g2Clients.find(c => c.deviceFlow && c.clientId === device?.clientId);
+    const resources = device?.params?.resource;
+    const resource = Array.isArray(resources) && resources.length === 1 ? resources[0] : resources;
+    if (!device || !client || device.isExpired || device.consumed || device.accountId || device.error || device.inFlight
+      || device.params?.scope !== G2_SCOPE || resource !== this.resource + "/api/v1") throw Error("INVALID_DEVICE_CODE");
+    return { device, client };
+  }
+  async previewG2Device(code: string) {
+    const { client } = await this.g2Device(code);
+    return { clientId: client.clientId, targetIds: [...client.targetIds] };
+  }
+  async decideG2Device(code: string, approve: boolean, actor: string) {
+    if (actor !== this.owner) throw Error("UNAUTHORIZED");
+    const key = code.replace(/-/g, "");
+    if (this.pairingLocks.has(key)) throw Error("PAIRING_BUSY");
+    this.pairingLocks.add(key);
+    try {
+      const { device, client } = await this.g2Device(code);
+      if (!approve) { Object.assign(device, { error: "access_denied", errorDescription: "Owner declined device pairing" }); await device.save(); return; }
+      const grant = new this.provider.Grant({ accountId: this.owner, clientId: client.clientId });
+      grant.addOIDCScope(G2_SCOPE); grant.addResourceScope(this.resource + "/api/v1", G2_SCOPE);
+      const grantId = await grant.save();
+      try {
+        Object.assign(device, { accountId: this.owner, authTime: Math.floor(Date.now() / 1000),
+          grantId, scope: G2_SCOPE, resource: this.resource + "/api/v1" });
+        await device.save();
+      } catch (error) { await grant.destroy(); throw error; }
+    } finally { this.pairingLocks.delete(key); }
   }
   async authenticate(authorization: string | undefined): Promise<DotPrincipal | undefined> {
     if (!this.dotEnabled) return;
