@@ -1,5 +1,9 @@
 # Dot Telegram Bridge
 
+Direct G2 clients use the optional authenticated [G2 Request API](G2_API.md),
+not the unauthenticated local UI. Its grants and `g2.message.created` subscriptions
+are separate from the existing ChatGPT/Telegram flow and disabled by default.
+
 ## Release 0.29.0 Record
 
 Published and deployed to Mac60 on 2026-10-23 from release commit 38e926b.
@@ -66,8 +70,27 @@ Implementation checklist:
 - [x] Local protocol, failure, restart and routing tests.
 - [x] Real dot subscription and Telegram round trip on Mac 60 (2026-10-22).
 
-The first version handles text only. Attachments are explicitly rejected on a
-dot-bound chat, rather than forwarding inaccessible local file paths to dot.
+Telegram photos, documents, voice/audio and video attachments use the existing
+Telegram downloader and artifact storage. The caption and attachment metadata
+belong to the same durable dot request. `dot_read_request` lists opaque attachment
+IDs; `dot_read_attachment` retrieves their contents using the existing owner OAuth
+authorization. No Telegram token, download URL or local upload path is exposed.
+Small UTF-8 text files include a text preview; other files return exact base64
+chunks (192 KiB each, `nextOffset`/`eof`). Image mode returns native MCP image
+content for PNG/JPEG/GIF/WebP up to 4 MiB. Larger images use bytes mode.
+Each file is limited to 20 MiB; existing artifact cleanup still owns retention.
+Missing/changed files fail explicitly, and attachment IDs from another request
+or owner are rejected. Contents are untrusted task data, not harness policy.
+These changes require publishing/deployment and MCP tool refresh before use.
+
+Attachment validation (2026-10-23, local; not an operational dot round trip):
+TypeScript build and 58 combined bridge/OAuth/host/Mac/login tests passed.
+The Telegram injection test passed actual message-handler/download integration
+with a synthetic curl transport, caption preservation, duplicate-update request
+deduplication and reading the downloaded file. MCP HTTP tests verified native
+image content, UTF-8 text and byte-exact chunk reconstruction. Restart persistence,
+wrong owner/request, symlink escape, changed/deleted files and canceled requests
+were also checked. No production service was restarted for these tests.
 
 ## Direct Safari And Mac Desktop Control
 

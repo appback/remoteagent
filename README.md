@@ -23,6 +23,9 @@ It has three layers:
 
 The runtime machine is the source of truth. Telegram is the client.
 
+An optional [direct G2 API](docs/G2_API.md) shares the dot HTTPS listener with
+separate OAuth grants and request results; it is disabled until operator approval.
+
 An optional [dot text bridge](docs/DOT_BRIDGE.md) connects Telegram to an existing
 OpenAI dot through authenticated MCP Events. It is disabled by default and is
 separate from local Codex/Claude providers. Local protocol and Telegram injection

@@ -43,6 +43,83 @@ async function fixture(t, postOverride) {
 }
 async function settle() { for (let i = 0; i < 10; i++) await new Promise(resolve => setImmediate(resolve)); }
 
+test('Telegram attachments survive restart, preserve bytes and stay request/owner bound', async t => {
+  const f = await fixture(t); await f.subscribe();
+  const uploads = path.join(f.dir, 'uploads', 'telegram', 'bot-a', '123');
+  await fs.mkdir(uploads, {recursive: true});
+  const file = path.join(uploads, 'instruction.txt');
+  const text = '첨부 문서입니다.\n'.repeat(25000);
+  await fs.writeFile(file, text);
+  const id = await f.bridge.enqueue('bot-a', '123', 'file-1', '문서를 검토해', [{path: file, name: 'instruction.txt', mimeType: 'text/plain'}]);
+  await settle();
+  const restarted = new DotBridgeService(f.dir, owner, f.post);
+  const request = restarted.read(owner, id);
+  assert.equal(request.text, '문서를 검토해');
+  assert.equal(request.attachments.length, 1);
+  assert.equal(JSON.stringify(request).includes(uploads), false);
+  const attachmentId = request.attachments[0].attachmentId;
+  const chunks = []; let offset = 0;
+  for (;;) {
+    const part = restarted.readAttachment(owner, id, attachmentId, offset);
+    const bytes = Buffer.from(part.data, 'base64');
+    assert.ok(bytes.length <= 192 * 1024);
+    chunks.push(bytes); offset = part.nextOffset;
+    if (part.eof) break;
+  }
+  assert.equal(Buffer.concat(chunks).toString('utf8'), text);
+  assert.throws(() => restarted.readAttachment('other-owner', id, attachmentId));
+  const other = await f.enqueue('other');
+  assert.throws(() => f.bridge.readAttachment(owner, other, attachmentId), /DOT_ATTACHMENT_NOT_FOUND/);
+  assert.throws(() => restarted.readAttachment(owner, id, attachmentId, -1), /DOT_ATTACHMENT_OFFSET/);
+  await fs.writeFile(file, 'changed');
+  assert.throws(() => restarted.readAttachment(owner, id, attachmentId), /DOT_ATTACHMENT_CHANGED/);
+});
+
+test('attachments reject outside paths and symlink escapes; missing/canceled files fail safely', async t => {
+  const f = await fixture(t); await f.subscribe();
+  const uploads = path.join(f.dir, 'uploads', 'telegram');
+  await fs.mkdir(uploads, {recursive: true});
+  const outside = path.join(f.dir, 'private.txt'); await fs.writeFile(outside, 'private');
+  const link = path.join(uploads, 'link'); await fs.symlink(outside, link);
+  for (const file of [outside, link]) {
+    await assert.rejects(f.bridge.enqueue('bot-a', '123', file, 'read', [{path: file, name: 'test'}]), /DOT_ATTACHMENT_NOT_ALLOWED/);
+  }
+  const file = path.join(uploads, 'valid.txt'); await fs.writeFile(file, 'hello');
+  const id = await f.bridge.enqueue('bot-a', '123', 'valid', 'read', [{path: file, name: 'valid.txt'}]);
+  const aid = f.bridge.read(owner, id).attachments[0].attachmentId;
+  assert.equal(f.bridge.readAttachment(owner, id, aid).text, 'hello');
+  await fs.rm(file);
+  assert.throws(() => f.bridge.readAttachment(owner, id, aid), /DOT_ATTACHMENT_UNAVAILABLE/);
+  await f.bridge.cancel('bot-a', '123');
+  assert.throws(() => f.bridge.readAttachment(owner, id, aid), /DOT_REQUEST_CLOSED/);
+});
+
+test('MCP exposes actual image content, text and bytes with authenticated attachment retrieval', async t => {
+  const f = await fixture(t); await f.subscribe();
+  const uploads = path.join(f.dir, 'uploads', 'telegram'); await fs.mkdir(uploads, {recursive: true});
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
+  const image = path.join(uploads, 'image.png'); await fs.writeFile(image, png);
+  const text = path.join(uploads, 'note.txt'); await fs.writeFile(text, '첨부 텍스트');
+  const id = await f.bridge.enqueue('bot-a', '123', 'image', 'look', [{path: image, name: 'image.png'}, {path: text, name: 'note.txt'}]);
+  const server = new DotMcpService(f.bridge, '127.0.0.1', 0, {resource, issuer}, async auth => auth === 'Bearer access' ? {subject: owner, expiresAt: Date.now() + 3600000} : undefined);
+  await server.start(); t.after(() => server.close());
+  const rpc = async (args, auth = 'Bearer access') => {
+    const response = await fetch('http://127.0.0.1:' + server.address().port + '/mcp', {method: 'POST',
+      headers: {'content-type': 'application/json', authorization: auth},
+      body: JSON.stringify({jsonrpc: '2.0', id: 1, method: 'tools/call', params: {name: 'dot_read_attachment', arguments: args}})});
+    return {status: response.status, body: await response.json()};
+  };
+  const [a, b] = f.bridge.read(owner, id).attachments;
+  const result = await rpc({requestId: id, attachmentId: a.attachmentId, mode: 'image'});
+  assert.equal(result.body.result.content[0].type, 'image');
+  assert.equal(result.body.result.content[0].data, png.toString('base64'));
+  const note = await rpc({requestId: id, attachmentId: b.attachmentId});
+  assert.equal(note.body.result.structuredContent.text, '첨부 텍스트');
+  assert.equal((await rpc({requestId: id, attachmentId: a.attachmentId}, '')).status, 401);
+  assert.match((await rpc({requestId: id, attachmentId: b.attachmentId, mode: 'image'})).body.error.message, /DOT_IMAGE_FORMAT/);
+  assert.match((await rpc({requestId: id, attachmentId: a.attachmentId, path: '/etc/passwd'})).body.error.message, /INVALID_TOOL_ARGUMENTS/);
+});
+
 test('webhook signatures cover exact bytes, event ID and timestamp', () => {
   const body = JSON.stringify({text: 'test'});
   const headers = dotWebhookHeaders(secret, 'subscription', 'event', body, 100);
@@ -325,7 +402,7 @@ test('MCP HTTP discovery, OAuth challenge, tools and signed event/report round t
   assert.equal((await rpc('server/discover')).body.result.supportedVersions[0], '2026-07-28');
   assert.equal((await rpc('initialize')).body.result.protocolVersion, '2026-07-28');
   assert.equal((await rpc('events/list')).body.result.events[0].name, 'telegram.message.created');
-  assert.equal((await rpc('tools/list')).body.result.tools.length, 3);
+  assert.equal((await rpc('tools/list')).body.result.tools.length, 4);
   const sub = (await rpc('events/subscribe', f.params)).body.result;
   assert.ok(sub.id);
   assert.ok(Date.parse(sub.refreshBefore) <= expiresAt - 60000, 'subscription refresh must precede OAuth expiry');

@@ -4,12 +4,17 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { dotWebhookHeaders, type DotWebhookPost } from "./dot-webhook.js";
 
 const EVENT = "telegram.message.created";
+const G2_EVENT = "g2.message.created";
 const CAPACITY = 500;
 type Channel = { id: string; botId: string; chatId: string; owner: string; enabled?: boolean };
-type Subscription = { id: string; owner: string; channelId: string; url: string; secret: string; expires: number; authorization?: string;
+type Subscription = { id: string; owner: string; channelId: string; eventName?: string; url: string; secret: string; expires: number; authorization?: string;
   previousSecret?: string; previousSecretExpires?: number };
 type Report = { id: string; fingerprint: string; kind: "progress" | "result"; status: "sending" | "sent" | "unknown" };
+export type DotAttachmentInput = { path: string; name: string; mimeType?: string };
+type Attachment = DotAttachmentInput & { id: string; size: number; modified: number };
 type Message = { id: string; channelId: string; updateId: string; text: string; createdAt: string;
+  origin?: "g2";
+  attachments?: Attachment[];
   subscriptionId: string; status: "pending" | "sending" | "accepted" | "failed" | "canceled" | "completed";
   attempts: number; nextAttempt: number; reports: Report[]; issue?: string };
 type State = { version: 1; channels: Channel[]; subscriptions: Subscription[]; messages: Message[] };
@@ -18,6 +23,7 @@ type Reporter = (chatId: string, text: string) => Promise<void>;
 export class DotBridgeService {
   private state: State;
   private readonly file: string;
+  private readonly uploadRoot: string;
   private reporters = new Map<string, Reporter>();
   private tail: Promise<unknown> = Promise.resolve();
   private pumping = false;
@@ -26,6 +32,7 @@ export class DotBridgeService {
   private paused = false;
   private loginCodeIssuer?: () => { code: string; expiresAt: string };
   private cancelHostRequest?: (requestId: string) => void;
+  private externalReporter?: (requestId: string, reportId: string, kind: "progress" | "result", text: string, outcome: string) => void;
 
   constructor(dataDir: string, readonly owner: string, private readonly post: DotWebhookPost,
     private readonly now: () => number = Date.now,
@@ -34,6 +41,7 @@ export class DotBridgeService {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     fs.chmodSync(dir, 0o700);
     this.file = path.join(dir, "bridge.json");
+    this.uploadRoot = path.resolve(dataDir, "uploads", "telegram");
     this.state = fs.existsSync(this.file) ? JSON.parse(fs.readFileSync(this.file, "utf8")) as State
       : { version: 1, channels: [], subscriptions: [], messages: [] };
     if (this.state.version !== 1) throw Error("UNSUPPORTED_DOT_STATE");
@@ -47,6 +55,41 @@ export class DotBridgeService {
   register(botId: string, reporter: Reporter): void { this.reporters.set(botId, reporter); }
   setLoginCodeIssuer(issuer: () => { code: string; expiresAt: string }): void { this.loginCodeIssuer = issuer; }
   setHostCancellation(cancel: (requestId: string) => void): void { this.cancelHostRequest = cancel; }
+  setExternalReporter(reporter: NonNullable<DotBridgeService["externalReporter"]>): void { this.externalReporter = reporter; }
+  clearExternalReporter(): void { this.externalReporter = undefined; }
+  externalChannels(owner: string) {
+    return this.state.channels.filter(c => c.owner === owner).map(c => ({ channelId: c.id,
+      available: !this.paused && !this.storageFailed && Boolean(this.activeSubscription(c.id, G2_EVENT)) }));
+  }
+  async enqueueExternal(owner: string, channelId: string, requestId: string, text: string): Promise<void> {
+    await this.exclusive(() => {
+      if (owner !== this.owner || this.paused) throw Error("DOT_CONFIGURATION_UNAVAILABLE");
+      if (!this.state.channels.some(c => c.id === channelId && c.owner === owner)) throw Error("DOT_NOT_BOUND");
+      const old = this.state.messages.find(m => m.id === requestId);
+      if (old) {
+        if (old.origin !== "g2" || old.channelId !== channelId || old.text !== text) throw Error("REQUEST_ID_CONFLICT");
+        return;
+      }
+      const subscription = this.activeSubscription(channelId, G2_EVENT);
+      if (!subscription) throw Error("DOT_NOT_SUBSCRIBED");
+      this.prune();
+      if (this.state.messages.length >= CAPACITY) throw Error("DOT_QUEUE_FULL");
+      this.state.messages.push({ id: requestId, origin: "g2", channelId, updateId: requestId, text,
+        createdAt: new Date(this.now()).toISOString(), subscriptionId: subscription.id,
+        status: "pending", attempts: 0, nextAttempt: 0, reports: [] });
+      this.save();
+    });
+    void this.pump().catch(() => console.error("G2 dot delivery failed; inspect request status."));
+  }
+  async cancelExternal(owner: string, requestId: string): Promise<void> {
+    await this.exclusive(() => {
+      const message = this.state.messages.find(m => m.id === requestId && m.origin === "g2");
+      if (!message) return;
+      this.authorizeMessage(owner, requestId);
+      if (["completed", "canceled", "failed"].includes(message.status)) return;
+      this.cancelHostRequest?.(requestId); message.status = "canceled"; this.save();
+    });
+  }
   issueLoginCode() { return this.loginCodeIssuer?.(); }
   pause(): void { this.paused = true; this.close(); }
   start(): void {
@@ -94,7 +137,7 @@ export class DotBridgeService {
       if (!channel) return;
       channel.enabled = false;
       for (const message of this.state.messages) {
-        if (message.channelId === channel.id && !["completed", "canceled"].includes(message.status)) {
+        if (message.channelId === channel.id && message.origin !== "g2" && !["completed", "canceled"].includes(message.status)) {
           this.cancelHostRequest?.(message.id); message.status = "canceled";
         }
       }
@@ -132,13 +175,13 @@ export class DotBridgeService {
     const channel = this.channelForChat(botId, chatId);
     if (!channel) return "Dot routing: off. Existing Codex/Claude routing is unchanged.\n/dot connect";
     const subscription = this.activeSubscription(channel.id);
-    const messages = this.state.messages.filter(m => m.channelId === channel.id);
+    const messages = this.state.messages.filter(m => m.channelId === channel.id && m.origin !== "g2");
     const last = messages.at(-1);
     return [`Dot channel: ${channel.id}`, `Subscription: ${subscription ? "verified" : "not connected or expired"}`,
       `Routing: ${channel.enabled === false ? "not started; /start dot" : "active"}`,
       `Awaiting result: ${messages.filter(m => ["pending", "sending", "accepted"].includes(m.status)).length}`,
       last ? `Latest request: ${last.id}; ${last.status}${last.issue ? `; ${last.issue}` : ""}` : "No requests yet.",
-      "Text only. /dot off restores local provider routing."].join("\n");
+      "Text and Telegram attachments. /dot off restores local provider routing."].join("\n");
   }
 
   async cancel(botId: string, chatId: string): Promise<number> {
@@ -146,7 +189,7 @@ export class DotBridgeService {
       const channel = this.channelForChat(botId, chatId);
       let count = 0;
       for (const message of this.state.messages) {
-        if (message.channelId === channel?.id && !["completed", "canceled"].includes(message.status)) {
+        if (message.channelId === channel?.id && message.origin !== "g2" && !["completed", "canceled"].includes(message.status)) {
           this.cancelHostRequest?.(message.id); message.status = "canceled"; count++;
         }
       }
@@ -154,7 +197,7 @@ export class DotBridgeService {
     });
   }
 
-  async enqueue(botId: string, chatId: string, updateId: string, text: string): Promise<string> {
+  async enqueue(botId: string, chatId: string, updateId: string, text: string, attachments: DotAttachmentInput[] = []): Promise<string> {
     const id = await this.exclusive(() => {
       if (this.paused) throw Error("DOT_CONFIGURATION_UNAVAILABLE: restore configuration or /dot off; request not forwarded to a local provider.");
       const channel = this.channelForChat(botId, chatId);
@@ -165,11 +208,19 @@ export class DotBridgeService {
       const subscription = this.activeSubscription(channel.id);
       if (!subscription) throw Error("DOT_NOT_SUBSCRIBED: connect this channel from your dot first; message not queued.");
       if (!text.trim() || Buffer.byteLength(text) > 128 * 1024) throw Error("DOT_TEXT_LIMIT: maximum 128 KiB.");
+      if (attachments.length > 10) throw Error("DOT_ATTACHMENT_LIMIT");
+      const savedAttachments = attachments.map(file => {
+        const actual = this.resolveUpload(file.path);
+        const stat = fs.statSync(actual);
+        if (!stat.isFile() || stat.size > 20 * 1024 * 1024) throw Error("DOT_ATTACHMENT_LIMIT");
+        return { id: randomUUID(), path: actual, name: path.basename(file.name), mimeType: file.mimeType,
+          size: stat.size, modified: stat.mtimeMs };
+      });
       this.prune();
       if (this.state.messages.length >= CAPACITY) throw Error("DOT_QUEUE_FULL");
       const message: Message = { id: randomUUID(), channelId: channel.id, updateId, text,
         createdAt: new Date(this.now()).toISOString(), subscriptionId: subscription.id,
-        status: "pending", attempts: 0, nextAttempt: 0, reports: [] };
+        status: "pending", attempts: 0, nextAttempt: 0, reports: [], attachments: savedAttachments };
       this.state.messages.push(message); this.save(); return message.id;
     });
     void this.pump().catch(() => console.error("Dot delivery failed; request retained in /dot status."));
@@ -179,12 +230,12 @@ export class DotBridgeService {
   async subscribe(owner: string, params: Record<string, unknown>, authorization?: string) {
     return this.exclusive(async () => {
       if (this.paused) throw Error("DOT_CONFIGURATION_UNAVAILABLE");
-      const { channel, delivery } = this.subscriptionInput(owner, params);
+      const { channel, delivery, eventName } = this.subscriptionInput(owner, params);
       if (typeof delivery.secret !== "string") throw Error("INVALID_SIGNING_SECRET");
       dotWebhookHeaders(delivery.secret, "verification", "verification", "{}");
-      const identity = JSON.stringify([owner, channel.id, EVENT, delivery.url]);
+      const identity = JSON.stringify([owner, channel.id, eventName, delivery.url]);
       const id = createHash("sha256").update(identity).digest("hex");
-      const existing = this.activeSubscription(channel.id);
+      const existing = this.activeSubscription(channel.id, eventName);
       if (existing && existing.id !== id) throw Error("DOT_CHANNEL_ALREADY_SUBSCRIBED: unsubscribe the previous dot first.");
       // Refresh only after the previous subscription expires would lose events: cap TTL and preserve identity.
       const requested = params.ttlMs === undefined || params.ttlMs === null ? 86400000 : params.ttlMs;
@@ -207,8 +258,9 @@ export class DotBridgeService {
           throw Error("CALLBACK_VERIFICATION_FAILED");
         }
       }
-      this.state.subscriptions = this.state.subscriptions.filter(s => s.channelId !== channel.id);
+      this.state.subscriptions = this.state.subscriptions.filter(s => s.channelId !== channel.id || (s.eventName ?? EVENT) !== eventName);
       this.state.subscriptions.push({ id, owner, channelId: channel.id, url: delivery.url as string,
+        eventName,
         secret: delivery.secret, expires, authorization,
         previousSecret: existing && existing.secret !== delivery.secret ? existing.secret : existing?.previousSecret,
         previousSecretExpires: existing && existing.secret !== delivery.secret ? this.now() + 300000 : existing?.previousSecretExpires });
@@ -218,8 +270,8 @@ export class DotBridgeService {
 
   async unsubscribe(owner: string, params: Record<string, unknown>): Promise<Record<string, never>> {
     return this.exclusive(() => {
-      const { channel, delivery } = this.subscriptionInput(owner, params);
-      const removed = this.state.subscriptions.filter(s => s.owner === owner && s.channelId === channel.id && s.url === delivery.url);
+      const { channel, delivery, eventName } = this.subscriptionInput(owner, params);
+      const removed = this.state.subscriptions.filter(s => s.owner === owner && s.channelId === channel.id && s.url === delivery.url && (s.eventName ?? EVENT) === eventName);
       this.state.subscriptions = this.state.subscriptions.filter(s => !removed.includes(s));
       for (const message of this.state.messages) if (removed.some(s => s.id === message.subscriptionId)
         && !["completed", "canceled"].includes(message.status)) message.status = "canceled";
@@ -230,24 +282,77 @@ export class DotBridgeService {
   read(owner: string, requestId: string) {
     const message = this.authorizeMessage(owner, requestId);
     return { requestId: message.id, channelId: message.channelId, text: message.text,
-      createdAt: message.createdAt, status: message.status };
+      origin: message.origin ?? "telegram",
+      createdAt: message.createdAt, status: message.status,
+      attachments: (message.attachments ?? []).map(({ id, name, mimeType, size }) => ({ attachmentId: id, name, mimeType, size })) };
+  }
+
+  private resolveUpload(file: string): string {
+    const root = fs.realpathSync(this.uploadRoot);
+    const actual = fs.realpathSync(file);
+    const relative = path.relative(root, actual);
+    if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
+      throw Error("DOT_ATTACHMENT_NOT_ALLOWED");
+    return actual;
+  }
+
+  readAttachment(owner: string, requestId: string, attachmentId: string, offset = 0) {
+    const message = this.authorizeMessage(owner, requestId);
+    if (["canceled", "failed"].includes(message.status)) throw Error("DOT_REQUEST_CLOSED");
+    const file = message.attachments?.find(item => item.id === attachmentId);
+    if (!file) throw Error("DOT_ATTACHMENT_NOT_FOUND");
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > file.size) throw Error("DOT_ATTACHMENT_OFFSET");
+    try {
+      const actual = this.resolveUpload(file.path);
+      const fd = fs.openSync(actual, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+      try {
+        const stat = fs.fstatSync(fd);
+        if (!stat.isFile() || stat.size !== file.size || stat.mtimeMs !== file.modified) throw Error("DOT_ATTACHMENT_CHANGED");
+        // Return bounded chunks; never expose a Telegram token, URL or local file path.
+        const bytes = Buffer.alloc(Math.min(192 * 1024, file.size - offset));
+        const length = fs.readSync(fd, bytes, 0, bytes.length, offset);
+        const chunk = bytes.subarray(0, length);
+        const nextOffset = offset + length;
+        let text: string | undefined;
+        if (offset === 0 && nextOffset === file.size
+          && (/^(text\/|application\/json$)/.test(file.mimeType ?? "") || /\.(txt|md|csv|json|log|ya?ml)$/i.test(file.name))) {
+          try { text = new TextDecoder("utf-8", { fatal: true }).decode(chunk); }
+          catch { /* A mislabeled binary file remains available as exact bytes. */ }
+        }
+        return { attachmentId, name: file.name, mimeType: file.mimeType, size: file.size, offset, nextOffset,
+          eof: nextOffset === file.size, encoding: "base64", data: chunk.toString("base64"),
+          ...(text !== undefined ? { text } : {}) };
+      } finally { fs.closeSync(fd); }
+    } catch (error) {
+      if (error instanceof Error && /^DOT_[A-Z_]+$/.test(error.message)) throw error;
+      throw Error("DOT_ATTACHMENT_UNAVAILABLE");
+    }
   }
 
   async report(owner: string, args: Record<string, unknown>) {
     return this.exclusive(async () => {
       if (this.paused) throw Error("DOT_CONFIGURATION_UNAVAILABLE");
-      if (Object.keys(args).some(key => !["requestId", "reportId", "kind", "text"].includes(key))) throw Error("INVALID_REPORT");
+      if (Object.keys(args).some(key => !["requestId", "reportId", "kind", "text", "outcome"].includes(key))) throw Error("INVALID_REPORT");
       const message = this.authorizeMessage(owner, String(args.requestId ?? ""));
       if (typeof args.reportId !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(args.reportId)
         || !["progress", "result"].includes(String(args.kind)) || typeof args.text !== "string"
         || !args.text.trim() || args.text.length > 3000) throw Error("INVALID_REPORT: text limit is 3000 characters.");
-      const fingerprint = createHash("sha256").update(JSON.stringify([args.kind, args.text])).digest("hex");
+      if (args.outcome !== undefined && !["succeeded", "failed", "unknown"].includes(String(args.outcome))) throw Error("INVALID_REPORT");
+      const outcome = typeof args.outcome === "string" ? args.outcome : "unknown";
+      const fingerprint = createHash("sha256").update(JSON.stringify(args.outcome === undefined ? [args.kind, args.text] : [args.kind, args.text, outcome])).digest("hex");
       const old = message.reports.find(r => r.id === args.reportId);
       if (old) {
         if (old.fingerprint !== fingerprint) throw Error("REPORT_ID_CONFLICT");
         return { status: old.status, requestId: message.id };
       }
       if (["canceled", "completed"].includes(message.status)) throw Error("DOT_REQUEST_CLOSED");
+      if (message.origin === "g2") {
+        if (!this.externalReporter) throw Error("G2_REPORTER_UNAVAILABLE");
+        this.externalReporter(message.id, args.reportId, args.kind as "progress" | "result", args.text, outcome);
+        message.reports.push({ id: args.reportId, fingerprint, kind: args.kind as Report["kind"], status: "sent" });
+        if (args.kind === "result") message.status = "completed";
+        this.save(); return { status: "sent", requestId: message.id, destination: "g2" };
+      }
       if (message.reports.some(r => r.status === "unknown")) throw Error("DOT_DELIVERY_UNKNOWN: check Telegram before sending another report.");
       if (message.reports.length >= 20) throw Error("DOT_REPORT_LIMIT");
       const channel = this.state.channels.find(c => c.id === message.channelId)!;
@@ -276,12 +381,16 @@ export class DotBridgeService {
         const task = await this.exclusive(() => {
           const message = this.state.messages.find(m => m.status === "pending" && m.nextAttempt <= this.now());
           if (!message) return;
-          const subscription = this.activeSubscription(message.channelId);
+          if (message.origin === "g2" && !this.externalReporter) {
+            message.status = "failed"; message.issue = "G2 API disabled"; this.save(); return;
+          }
+          const eventName = message.origin === "g2" ? G2_EVENT : EVENT;
+          const subscription = this.activeSubscription(message.channelId, eventName);
           if (!subscription || subscription.id !== message.subscriptionId || message.attempts >= 3) {
             message.status = "failed"; message.issue = "Subscription expired/replaced or delivery limit reached"; this.save(); return;
           }
           message.status = "sending"; message.attempts++; this.save();
-          const event = { eventId: message.id, name: EVENT, timestamp: message.createdAt,
+          const event = { eventId: message.id, name: eventName, timestamp: message.createdAt,
             data: { channelId: message.channelId, requestId: message.id, text: message.text.slice(0, 1000) }, cursor: null };
           return { messageId: message.id, subscription: structuredClone(subscription), body: JSON.stringify(event) };
         });
@@ -298,7 +407,7 @@ export class DotBridgeService {
             continue;
           }
           const stillActive = await this.exclusive(() => this.state.messages.some(m => m.id === task.messageId && m.status === "sending")
-            && this.activeSubscription(task.subscription.channelId)?.id === task.subscription.id);
+            && this.activeSubscription(task.subscription.channelId, task.subscription.eventName ?? EVENT)?.id === task.subscription.id);
           if (!stillActive) continue;
           const result = await this.post(task.subscription.url, task.subscription.secret, task.subscription.id, task.messageId, task.body,
             (task.subscription.previousSecretExpires ?? 0) > this.now() ? task.subscription.previousSecret : undefined);
@@ -324,18 +433,19 @@ export class DotBridgeService {
   private authorizeMessage(owner: string, requestId: string): Message {
     const message = this.state.messages.find(m => m.id === requestId);
     if (!message || !this.state.channels.some(c => c.id === message.channelId && c.owner === owner)) throw Error("DOT_REQUEST_NOT_FOUND");
+    if (message.origin === "g2" && !this.externalReporter) throw Error("G2_DISABLED");
     return message;
   }
   private subscriptionInput(owner: string, params: Record<string, unknown>) {
     const args = params.arguments as Record<string, unknown> | undefined;
     const delivery = params.delivery as Record<string, unknown> | undefined;
     const channel = this.state.channels.find(c => c.id === args?.channelId && c.owner === owner);
-    if (params.name !== EVENT || !channel || Object.keys(args ?? {}).some(k => k !== "channelId")
+    if (![EVENT, G2_EVENT].includes(String(params.name)) || !channel || Object.keys(args ?? {}).some(k => k !== "channelId")
       || delivery?.mode !== "webhook" || typeof delivery.url !== "string") throw Error("INVALID_SUBSCRIPTION");
-    return { channel, delivery };
+    return { channel, delivery, eventName: params.name as string };
   }
   private channelForChat(botId: string, chatId: string) { return this.state.channels.find(c => c.botId === botId && c.chatId === chatId); }
-  private activeSubscription(channelId: string) { return this.state.subscriptions.find(s => s.channelId === channelId && s.expires > this.now()); }
+  private activeSubscription(channelId: string, eventName = EVENT) { return this.state.subscriptions.find(s => s.channelId === channelId && (s.eventName ?? EVENT) === eventName && s.expires > this.now()); }
   private prune() {
     this.state.subscriptions = this.state.subscriptions.filter(s => s.expires > this.now());
     this.state.messages = this.state.messages.filter(m => !["completed", "canceled", "failed"].includes(m.status)
@@ -362,3 +472,6 @@ export const DOT_EVENT_DEFINITION = {
   payloadSchema: { type: "object", properties: { channelId: { type: "string" }, requestId: { type: "string" }, text: { type: "string" } },
     required: ["channelId", "requestId", "text"], additionalProperties: false },
 };
+
+export const G2_DOT_EVENT_DEFINITION = { ...DOT_EVENT_DEFINITION, name: G2_EVENT,
+  description: "A direct G2 user request for this dot channel. Read it with dot_read_request; report through dot_report to its saved G2 request, not Telegram." };

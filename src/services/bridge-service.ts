@@ -298,6 +298,29 @@ export class BridgeService {
     return this.store.listSessions(botId);
   }
 
+  isSessionBusy(sessionId: string): boolean { return this.sessionLocks.has(sessionId); }
+
+  async routeExternalMessage(sessionId: string, provider: Provider, message: string, signal: AbortSignal,
+    onStarted: () => void, onProgress: ProviderProgressHandler): Promise<ProviderResponse[]> {
+    if (this.sessionLocks.has(sessionId)) throw Error("TARGET_BUSY");
+    const session = await this.store.getSession(sessionId);
+    if (!session) throw Error("TARGET_NOT_FOUND");
+    if (session.mode !== provider) throw Error("TARGET_CHANGED");
+    this.ensureConfigured(provider);
+    if (this.sessionLocks.has(sessionId)) throw Error("TARGET_BUSY");
+    return this.withSessionLock(sessionId, async () => {
+      signal.throwIfAborted();
+      // The session lock is held until the adapter settles, so cancellation cannot
+      // stop a later Telegram execution on this session.
+      const cancel = () => { stopSpawnedExecution(sessionId); };
+      signal.addEventListener("abort", cancel, { once: true });
+      try {
+        onStarted();
+        return await this.routeSession(session, message, "g2", undefined, undefined, onProgress, signal);
+      } finally { signal.removeEventListener("abort", cancel); }
+    });
+  }
+
   async listActiveSessionIds(botId?: string): Promise<Set<string>> {
     return this.store.listActiveSessionIds(botId);
   }
@@ -606,7 +629,7 @@ export class BridgeService {
     }
   }
 
-  private isProviderAvailable(provider: Provider): boolean {
+  isProviderAvailable(provider: Provider): boolean {
     return this.isProviderInstalled(provider) && Boolean(this.adapters[provider]);
   }
 
@@ -642,6 +665,7 @@ export class BridgeService {
     botId?: string,
     chatId?: string,
     onProgress?: ProviderProgressHandler,
+    signal?: AbortSignal,
   ): Promise<ProviderResponse[]> {
     const responses: ProviderResponse[] = [];
     const providers = this.resolveProviders(session.mode);
@@ -679,7 +703,9 @@ export class BridgeService {
         await onProgress?.(progressResponse);
       };
 
-      const sendWithModel = (model: string): Promise<ProviderResponse> => this.adapters[provider]!.send({
+      const sendWithModel = (model: string): Promise<ProviderResponse> => {
+        signal?.throwIfAborted();
+        return this.adapters[provider]!.send({
         reasoningEffort: provider === "codex" && model === "gpt-6-astra" ? reasoningEffort : undefined,
         botId,
         chatId: chatId ?? requestSource,
@@ -691,7 +717,8 @@ export class BridgeService {
         model,
         sandboxMode: providerSession.sandboxMode,
         onProgress: onProgress ? (output) => forwardProgress(output, model) : undefined,
-      });
+        });
+      };
       const reportHarnessNotice = async (output: string, model: string): Promise<void> => {
         try {
           await forwardProgress(output, model);

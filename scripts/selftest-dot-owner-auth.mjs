@@ -96,7 +96,7 @@ test('full real-library PKCE exchange, authenticated tools, refresh and restart 
   const restarted=new DotOwnerAuthService(f.dir,resource,owner);
   assert.equal((await restarted.authenticate('Bearer '+tokens.access_token))?.subject,owner);
   const tools=await f.request('/mcp',{method:'POST',headers:{authorization:'Bearer '+tokens.access_token,'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/list'})});
-  assert.equal(tools.status,200);assert.equal((await tools.json()).result.tools.length,3);
+  assert.equal(tools.status,200);assert.equal((await tools.json()).result.tools.length,4);
   const refresh=await f.request('/oauth/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'refresh_token',client_id:'remoteagent-dot',resource,refresh_token:tokens.refresh_token})});
   assert.equal(refresh.status,200,await refresh.clone().text());assert.ok((await refresh.json()).access_token);
   const grant=await f.auth.provider.Grant.find(saved.grantId);await grant.destroy();

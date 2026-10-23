@@ -27,8 +27,14 @@ text=""
 chat_id=""
 reply_markup=""
 document_path=""
+output_path=""
+output_next="false"
 for arg in "$@"; do
+  if [[ "$output_next" == "true" ]]; then output_path="$arg"; output_next="false"; fi
   case "$arg" in
+    -o) output_next="true" ;;
+    https://api.telegram.org/bot*/getFile) method="getFile" ;;
+    https://api.telegram.org/file/bot*/*) method="download" ;;
     https://api.telegram.org/bot*/sendMessage) method="sendMessage" ;;
     https://api.telegram.org/bot*/sendChatAction) method="sendChatAction" ;;
     https://api.telegram.org/bot*/editMessageText) method="editMessageText" ;;
@@ -50,6 +56,12 @@ if [[ "$method" == "sendMessage" && -n "\${TELEGRAM_SELFTEST_RATE_LIMIT_FILE:-}"
   exit 0
 fi
 case "$method" in
+  getFile)
+    printf '{"ok":true,"result":{"file_path":"documents/test.txt"}}'
+    ;;
+  download)
+    printf 'downloaded dot attachment' > "$output_path"
+    ;;
   sendMessage|editMessageText)
     printf '{"ok":true,"result":{"message_id":1001}}'
     ;;
@@ -1183,9 +1195,17 @@ const dotReply = await waitForTelegramCall(call => call.text.includes('Dot integ
 if (dotReply.chat_id !== '111222333') throw Error('Dot response used the wrong chat');
 const fileUpdate = update('');
 delete fileUpdate.message.text;
-fileUpdate.message.document = {file_id: 'not-downloaded', file_name: 'test.txt'};
+fileUpdate.message.document = {file_id: 'test-file', file_name: 'test.txt', mime_type: 'text/plain'};
+fileUpdate.message.caption = '검토해 주세요';
 await dotBot.handleUpdates([fileUpdate]);
-await waitForTelegramCall(call => call.text.includes('This dot bridge currently supports text only'));
+for (let i = 0; i < 30 && dotEvents.length < 2; i++) await new Promise(resolve => setTimeout(resolve, 5));
+const attachmentRequest = dotBridge.read('dot-owner', dotEvents[1].eventId);
+if (attachmentRequest.text !== '검토해 주세요' || attachmentRequest.attachments.length !== 1) throw Error('Dot lost the attachment or caption');
+if (dotBridge.readAttachment('dot-owner', attachmentRequest.requestId, attachmentRequest.attachments[0].attachmentId).text !== 'downloaded dot attachment') {
+  throw Error('Dot attachment contents were not downloaded and made readable');
+}
+await dotBot.handleUpdates([fileUpdate]);
+if (dotEvents.length !== 2) throw Error('Duplicate attachment update created another dot request');
 await dotSend('dot request to cancel');
 await dotSend('/stop');
 await dotSend('/start codex');

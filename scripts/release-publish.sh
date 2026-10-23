@@ -77,9 +77,11 @@ node --test scripts/selftest-dot-host.mjs
 node --test scripts/selftest-dot-mac.mjs
 node --test scripts/selftest-dot-login.mjs
 node --test scripts/selftest-dot-owner-auth.mjs
+node --test scripts/selftest-g2.mjs
 node --test scripts/selftest-dot-setup.mjs
 if [[ -n "${PLAYWRIGHT_PACKAGE:-}" ]]; then
   node scripts/selftest-dot-browser.mjs
+  node scripts/selftest-g2-browser.mjs
   node scripts/selftest-dot-login-browser.mjs
 else
   echo "Optional browser gate not configured; set PLAYWRIGHT_PACKAGE and PLAYWRIGHT_EXECUTABLE to run it."

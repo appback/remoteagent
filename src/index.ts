@@ -15,6 +15,9 @@ import { BotManagementService } from "./services/bot-management-service.js";
 import { LocalUiService } from "./services/local-ui-service.js";
 import { DotBridgeService } from "./services/dot-bridge-service.js";
 import { DotMcpService, createDotAuthenticator } from "./services/dot-mcp-service.js";
+import { readG2Clients, type G2Client } from "./services/g2-config.js";
+import { G2RequestService } from "./services/g2-request-service.js";
+import { G2ApiService } from "./services/g2-api-service.js";
 import { DotHostService } from "./services/dot-host-service.js";
 import type { DotMacService } from "./services/dot-mac-service.js";
 import { createDotWebhookPost } from "./services/dot-webhook.js";
@@ -119,7 +122,14 @@ async function main(): Promise<void> {
       const owner = config.telegramOwnerId?.trim();
       if (managed && !/^\d+$/.test(owner ?? "")) throw Error("Missing DOT_TELEGRAM_OWNER");
       const resource = required("DOT_PUBLIC_URL");
-      const auth = managed ? new (await import("./services/dot-owner-auth-service.js")).DotOwnerAuthService(config.dataDir, resource, `telegram:${owner}`) : undefined;
+      let g2Clients: G2Client[] = [];
+      if (process.env.G2_API_ENABLED === "true") {
+        try {
+          if (!managed) throw Error("G2_MANAGED_OAUTH_REQUIRED");
+          g2Clients = readG2Clients(process.env.G2_OAUTH_CONFIG_FILE);
+        } catch { console.error("G2 API disabled: confirm the operator-approved G2 OAuth configuration. Existing dot/Telegram routing is unchanged."); }
+      }
+      const auth = managed ? new (await import("./services/dot-owner-auth-service.js")).DotOwnerAuthService(config.dataDir, resource, `telegram:${owner}`, g2Clients) : undefined;
       const oauth = auth ? { resource, issuer: auth.issuer, subject: auth.owner } : {
         resource, issuer: required("DOT_OAUTH_ISSUER"),
         introspectionUrl: required("DOT_OAUTH_INTROSPECTION_URL"), clientId: required("DOT_OAUTH_CLIENT_ID"),
@@ -131,6 +141,17 @@ async function main(): Promise<void> {
         createDotWebhookPost(hosts ? hosts.split(",") : managed ? undefined : required("DOT_CALLBACK_HOSTS").split(",")), Date.now,
         async header => (await authenticate(header))?.subject);
       if (auth) candidate.setLoginCodeIssuer(() => auth.issueLoginCode());
+      let g2Api: G2ApiService | undefined;
+      if (auth && g2Clients.length) {
+        try {
+          const requests = new G2RequestService(config.dataDir, oauth.subject, bridge, candidate);
+          await requests.restore();
+          g2Api = new G2ApiService(requests, resource, g2Clients, auth.authenticateG2.bind(auth));
+        } catch {
+          candidate.clearExternalReporter();
+          console.error("G2 API disabled: request storage/recovery failed. Existing Telegram/dot routing remains available.");
+        }
+      }
       let host: DotHostService | undefined;
       if (process.env.DOT_HOST_ENABLED === "true") {
         try { host = new DotHostService(config.dataDir, JSON.parse(process.env.DOT_HOST_ROOTS ?? "[]") as string[]); }
@@ -149,7 +170,7 @@ async function main(): Promise<void> {
         host?.cancelRequest(requestId);
         mac?.cancelRequest(requestId);
       });
-      const mcp = new DotMcpService(candidate, "127.0.0.1", config.dotPort, oauth, authenticate, auth?.handle.bind(auth), host, mac);
+      const mcp = new DotMcpService(candidate, "127.0.0.1", config.dotPort, oauth, authenticate, auth?.handle.bind(auth), host, mac, g2Api?.handle.bind(g2Api));
       try { await mcp.start(); } catch (error) { host?.close(); await mac?.close(); throw error; }
       candidate.start();
       dot = candidate;

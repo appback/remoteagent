@@ -1775,10 +1775,21 @@ ${bridge.formatStatus(mapping)}`);
 
     if (dot?.isBound(dotBotId, chatId) && !(text?.startsWith("/"))) {
       await ensureOwnerControlAccess(ctx);
-      if (!text || photo || document || voice || audio) {
-        await reply(ctx, "This dot bridge currently supports text only. Send the file through dot's own interface; local Telegram upload paths are not accessible to dot."); return;
+      const media = photo ?? document ?? voice ?? audio ?? ctx.message.video ?? ctx.message.animation ?? ctx.message.video_note;
+      if (media) {
+        const name = photo ? "telegram-photo.jpg" : "file_name" in media && media.file_name
+          ? media.file_name : voice ? "telegram-voice.ogg" : "telegram-attachment";
+        const mimeType = photo ? "image/jpeg" : "mime_type" in media ? media.mime_type : undefined;
+        const downloaded = await downloadTelegramFile(token, botId, chatId, media.file_id, name);
+        await memoryService.recordArtifact({ botId, chatId, kind: "dot attachment",
+          filePath: downloaded.path, fileName: name, mimeType });
+        await dot.enqueue(dotBotId, chatId, String(ctx.update.update_id),
+          ctx.message.caption?.trim() || "첨부파일을 확인해 주세요.", [{ path: downloaded.path, name, mimeType }]);
+      } else if (text) {
+        await dot.enqueue(dotBotId, chatId, String(ctx.update.update_id), text);
+      } else {
+        await reply(ctx, "지원하지 않는 메시지 형식입니다. 텍스트 또는 파일로 보내 주세요.");
       }
-      await dot.enqueue(dotBotId, chatId, String(ctx.update.update_id), text);
       return;
     }
 
