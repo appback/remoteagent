@@ -56,7 +56,24 @@ restarting is not a substitute for physical audio validation.
 
 Actual G2 microphone quality, background behavior, external Telegram deep-link
 handling and host storage persistence across physical app upgrades remain device
-checks. No claim of physical-device success or production activation is made.
+checks. These checks do not claim physical-device success.
+
+## Deployment, 2026-10-23 KST
+
+RemoteAgent 0.32.0 is published on npm and installed on Mac60 using the canonical
+release script, with local whisper.cpp enabled. G2 v0.5.0 is registered as a
+Private build of `com.daone.gtwobasic`; it has not been promoted to beta/public.
+S010 and existing state, secrets, allowed target and OAuth identity were preserved.
+See RELEASING.md for exact commands, artifact hash and rollback backup.
+
+On the physical device, update the Private app to v0.5.0. Existing credentials
+are restored when the Even host retains them. If first pairing is needed, open
+the app's Telegram approval link and use Approve in `@mac_mini_even_bot`, then
+return to the app. No copying an approval code or browser form is needed.
+Use the G2 long-press/release gesture or recording button, review the recognized
+draft, and press Send. The instruction is sent only to S010; results return to
+the app and glasses. Physical recording, pairing and upgrade persistence still
+require this device check.
 
 ## Prepare Speech on Mac60
 

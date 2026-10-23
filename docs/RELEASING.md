@@ -2,6 +2,48 @@
 
 This runbook is command-first. Use the scripts below as the release interface.
 
+### Verified 0.32.0 Mac60 And G2 0.5.0 Release
+
+On 2026-10-23 KST, release commit `0a7b69f` was published using the existing
+`~/.config/remoteagent/npm-token.env` credential and `npm run release:publish`.
+All release gates passed, including the G2 app's 58 unit and 9 Chromium tests.
+Registry verification completed on check 16: both the exact version and latest
+were 0.32.0. Published package SHA-1: `6038fb597e19593fa215e7e4bfd9f958abcf84bd`.
+
+The exact production deployment command was:
+
+```bash
+G2_SPEECH_MODEL=/Users/appback/.cache/remoteagent-speech/ggml-small.bin \
+  npm run release:deploy -- 0.32.0 60
+```
+
+The script installed npm 0.32.0 and enabled local whisper.cpp recognition.
+Backup: `/Users/appback/.remoteagent/backups/npm-0.32.0-20261023T224713`.
+State was byte-for-byte unchanged; S010's Codex thread, secrets, G2 client
+allowlist/target key and OAuth identity were preserved. Public metadata returned
+200, protected APIs 401 without authentication, and retired MCP remained 404.
+An isolated authenticated PCM endpoint test with the installed decoder passed;
+its session adapter and Korean audio sample were synthetic, not physical G2.
+
+Build the separately distributed app from the maintained source:
+
+```bash
+cd clients/even-g2
+npm ci
+npm run pack
+sha256sum g2-basic.ehpk
+```
+
+G2 0.5.0 artifact: 46,848 bytes; SHA-256
+`b1d35b65df23a1212821e274a12e35611536daab59437aa6108f8699449c4351`.
+The same artifact was staged at
+`/Users/appback/.remoteagent/g2/releases/0.5.0/g2-basic.ehpk`.
+The CLI had no valid login; the existing signed-in Safari session was used at
+`https://hub.evenrealities.com/hub/com.daone.gtwobasic`: Upload a build, select
+the artifact, enter the changelog, Add build. The resulting Private builds list
+showed v0.5.0 / Private, retaining v0.4.0. No beta/public promotion was performed.
+Private catalog registration does not mean a physical G2 has installed the update.
+
 ### Retire Dot on Mac60 and Keep S010 G2
 
 After publishing the independent G2 server (0.31.2 or later), run:
