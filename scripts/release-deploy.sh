@@ -359,6 +359,7 @@ if(process.env.DEACTIVATE_DOT==='1'){
  if(env.G2_API_ENABLED!=='true')throw Error('Expected existing G2 configuration before separating dot');
  const origin=env.G2_PUBLIC_URL||env.DOT_PUBLIC_URL;
  if(!origin||new URL(origin).protocol!=='https:')throw Error('Existing G2 HTTPS origin is required');
+ text=text.split('\n').filter(line=>!/^DOT_[A-Z0-9_]+=/.test(line)).join('\n');
  for(const [key,value] of [['G2_PUBLIC_URL',JSON.stringify(origin)],['G2_HTTP_PORT',env.G2_HTTP_PORT||env.DOT_PORT||'3796'],['DOT_ENABLED','false'],['DOT_HOST_ENABLED','false'],['DOT_MAC_ENABLED','false']]){
   const pattern=new RegExp('^'+key+'=.*$','m');text=pattern.test(text)?text.replace(pattern,()=>key+'='+value):text+'\n'+key+'='+value+'\n';
  }
