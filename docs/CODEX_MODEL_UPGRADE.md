@@ -7,6 +7,33 @@ Codex sessions, forwards reasoning effort on exec/resume and includes the effort
 in report headers. Existing reasoning settings and the usage-limit fallback
 policy are retained. Claude sessions are unchanged.
 
+## Verified Deployment, 2026-10-23 KST
+
+Release commit `2c288ec` was published as npm 0.32.1 with the canonical release
+script. All release gates passed, including Codex stream/reasoning, usage fallback,
+offline migration lock, Telegram injection and G2 browser regressions. Registry
+verification completed on check 25 without republishing or changing credentials.
+
+| Server | RemoteAgent | Codex CLI | Migrated Codex sessions |
+| --- | --- | --- | --- |
+| 192.168.33.30 | 0.32.1 | 0.164.0 | 20 |
+| 192.168.33.40 | 0.32.1 | 0.164.0 | 11 |
+| 192.168.33.50 | 0.32.1 | 0.164.0 | 2 |
+| 192.168.33.60 | 0.32.1 | 0.164.0 | 11 |
+| 192.168.33.110 | 0.32.1 | 0.164.0 | 3 |
+
+All 47 sessions now store `gpt-6.1-sol`. On every host, a comparison against the
+private pre-migration backup confirmed the model was the only state change.
+Temporary fallback state was backed up if present and cleared. An isolated
+read-only CLI request to `gpt-6.1-sol` with medium reasoning returned exactly
+`MODEL_OK` with exit code 0 on all five hosts. This used separate disposable
+probe workspaces, not the user's existing Codex threads.
+
+SSH to `192.168.33.20` and `.26` returned No route to host; no update was applied
+there. These addresses must not be described as successfully upgraded.
+
+## Repeatable Commands
+
 Publish and deploy the npm package through RELEASING.md first:
 
 ```bash
