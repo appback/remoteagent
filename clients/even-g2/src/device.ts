@@ -43,7 +43,7 @@ export class G2Device implements Device {
       this.subscriptions.push(bridge.onEvenHubEvent(event => {
         if (generation !== this.generation) return;
         if (event.audioEvent?.source === AudioInputSource.Glasses && this.recording) this.pcm?.(event.audioEvent.audioPcm.slice());
-        const ev = event.sysEvent ?? event.textEvent;
+        const ev = event.sysEvent ?? event.textEvent ?? event.listEvent;
         if (!ev) return;
         if (ev.eventType === OsEventTypeList.LONG_PRESS_EVENT) { onGesture('record-start'); return; }
         if (ev.eventType === OsEventTypeList.LONG_PRESS_RELEASE_EVENT) { onGesture('record-stop'); return; }

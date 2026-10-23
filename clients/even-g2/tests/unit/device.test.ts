@@ -39,7 +39,8 @@ describe('G2 adapter with mocked bridge (not hardware)', () => {
     const device=new G2Device(),gesture=vi.fn();await device.connect(gesture);
     const event=fake.bridge.onEvenHubEvent.mock.calls[0][0];
     event({sysEvent:{eventType:9}});event({sysEvent:{eventType:10}});
-    expect(gesture.mock.calls.map(([value])=>value)).toEqual(['record-start','record-stop']);
+    event({listEvent:{containerID:1,eventType:9}});event({listEvent:{containerID:1,eventType:10}});
+    expect(gesture.mock.calls.map(([value])=>value)).toEqual(['record-start','record-stop','record-start','record-stop']);
   });
   it('does not claim connected for a disconnected device or a ring',async()=>{
     fake.bridge.getDeviceInfo.mockResolvedValue({model:'ring1',status:{connectType:'connected'}});

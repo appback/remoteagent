@@ -25,6 +25,36 @@
 - Results return through G2 REST and glasses display, not Telegram. Telegram
   remains an independent route and is not evidence that G2 audio works.
 
+## Input Regression Fix, 2026-10-24 KST
+
+G2 app 0.5.1 is a client-only candidate; the installed server 0.32.1 already has
+the required APIs. It does not require a RemoteAgent restart or session change.
+
+Four new Chromium reproductions failed on 0.5.0: typed Send after a speech API
+failure, pairing/text use without glasses, a target initially busy then idle,
+and holding/releasing the app Record button. These were code defects, not proof
+that the user's physical microphone or authentication state had been diagnosed.
+
+The fixes separate speech capability discovery from text target discovery and
+remove the glasses prerequisite for server pairing. Send refreshes target state
+instead of staying disabled after a busy response. Pointer hold/release, cancel
+and keyboard/tap operation now control actual SDK recording. Long-press events
+from list containers are also routed. Cancel/background during microphone startup
+discards the pending capture. Unknown submission acknowledgements permit only
+the same text/request ID retry. Specific request notices are not overwritten
+with a generic error. Disabled controls show the missing prerequisite.
+
+Validation: 58 unit and 16 Chromium tests passed, including the four failed-before
+reproductions, lost-acknowledgement same-ID retry, no-pairing explanation, pointer
+cancel, SDK audio events, no-audio rejection, refresh restoration and responsive
+320/390/1280 px screenshots. The browser uses the real SDK with a synthetic host,
+not physical G2. Physical microphone audio reception and gesture behavior remain
+unverified. The user reported glasses connected, S010 selected and no visible
+error; that does not establish server authentication or audio frame reception.
+
+Private app upload is pending approval. No server restart was performed while
+Mac60 had active work.
+
 ## Work Status
 
 1. SDK and existing implementation audit: complete.

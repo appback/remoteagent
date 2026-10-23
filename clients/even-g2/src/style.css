@@ -17,7 +17,7 @@ button:disabled { cursor: default; color: #75816f; background: #edf0ea; border-c
 button:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 3px solid #80ab79; outline-offset: 3px; }
 .primary { background: #285b37; border-color: #285b37; color: #fff; font-weight: 600; }
 .voice { padding-top: 25px; }
-.record { display: block; width: 100%; min-height: 76px; font-size: 21px; margin: 17px 0 12px; }
+.record { display: block; width: 100%; min-height: 76px; font-size: 21px; margin: 17px 0 12px; touch-action: none; user-select: none; -webkit-user-select: none; }
 .recording { background: #a33041; border-color: #a33041; }
 #voiceStatus { min-height: 40px; font-size: 14px; line-height: 1.5; margin: 0; }
 .hint { font-size: 12px; color: #65705f; margin: 5px 0 0; line-height: 1.7; }

@@ -1,6 +1,6 @@
 # Even G2 / S010
 
-Version 0.5.0. This directory is the maintained source; the existing Mac copy
+Version 0.5.1. This directory is the maintained source; the existing Mac copy
 is not overwritten during development. The package ID remains
 `com.daone.gtwobasic` to preserve Even app storage when updating.
 
@@ -11,11 +11,19 @@ is not overwritten during development. The package ID remains
    the configured owner can approve. No browser form or copied approval code.
 2. Return to the app. Future launches restore the rotating refresh token using
    the Even SDK host-app storage; the access token stays in memory.
-3. Hold the G2 temple/ring input to record, then release, or use the Record/Stop
-   button. Recording uses only the glasses microphone through the official SDK.
+3. Hold the G2 temple/ring input or the app's Record button to record, then
+   release. A short tap starts recording and a second tap stops it. Recording
+   uses only the glasses microphone through the official SDK.
 4. Review/edit the recognized text and select Send. Recording or transcribing
    never executes an instruction automatically. The only target is S010.
 5. Responses appear in the app and on the glasses; swipe or use page buttons.
+
+Server pairing and typed-text submission do not require connected glasses or a
+working speech-capabilities endpoint. Recording still requires both glasses and
+speech recognition. A disabled Send button explains its reason below the button.
+Each Send refreshes S010 availability; a busy session is reported without losing
+the draft. An unknown submission outcome can be retried with identical text and
+the same request ID, never a new automatic execution.
 
 The SDK supplies 16 kHz signed 16-bit LE mono PCM, not speech-to-text. The
 authenticated RemoteAgent endpoint decodes it with local whisper.cpp on Mac60.

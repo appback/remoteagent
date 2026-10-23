@@ -3,20 +3,20 @@ import {readFile} from 'node:fs/promises';
 import {resolve} from 'node:path';
 const resource='https://remoteagent-dot60.appback.app';
 
-async function harness(page:Page,options:{noAudio?:boolean;decoderFails?:boolean;unpaired?:boolean}={}) {
+async function harness(page:Page,options:{noAudio?:boolean;decoderFails?:boolean;unpaired?:boolean;noGlasses?:boolean;capabilitiesFail?:boolean;targetBusy?:boolean;lostAcknowledgement?:boolean}={}) {
   await page.route('**/*',route=>route.abort('blockedbyclient'));
   await page.route('https://g2-client.test/**',async route=>{
     const pathname=new URL(route.request().url()).pathname;
     const name=pathname.startsWith('/assets/')||pathname==='/even.ico'?pathname.slice(1):'index.html';
     await route.fulfill({body:await readFile(resolve('dist',name)),contentType:name.endsWith('.js')?'application/javascript':name.endsWith('.css')?'text/css':name.endsWith('.ico')?'image/x-icon':'text/html'});
   });
-  const stats={startup:0,microphone:0,transcriptions:0,submissions:0,refreshes:0,devices:0,token:'synthetic-refresh-token-in-native-storage',displays:[] as string[]};
+  const stats={startup:0,microphone:0,transcriptions:0,submissions:0,refreshes:0,devices:0,token:'synthetic-refresh-token-in-native-storage',displays:[] as string[],requestIds:[] as string[]};
   let clientRequestId='';
   if(options.unpaired)stats.token='';
   await page.exposeFunction('__native',async(message:string)=>{
     const value=JSON.parse(message);
     if(value.method==='getLocalStorage')return stats.token;
-    if(value.method==='getGlassesInfo')return {model:'g2',sn:'synthetic-glasses',status:{sn:'synthetic-glasses',connectType:'connected'}};
+    if(value.method==='getGlassesInfo')return {model:'g2',sn:'synthetic-glasses',status:{sn:'synthetic-glasses',connectType:options.noGlasses?'disconnected':'connected'}};
     if(value.method==='setLocalStorage'){stats.token=value.data.value;return true;}
     if(value.method==='createStartUpPageContainer'){stats.startup++;return 0;}
     if(value.method==='audioControl')stats.microphone++;
@@ -38,8 +38,8 @@ async function harness(page:Page,options:{noAudio?:boolean;decoderFails?:boolean
       return route.fulfill({headers,json:{access_token:'synthetic-access-token',refresh_token:'synthetic-refresh-token-'+stats.refreshes,token_type:'Bearer',scope:'remoteagent:g2',expires_in:3600}});
     }
     if(url.pathname==='/oauth/token/revocation')return route.fulfill({headers,json:{}});
-    if(url.pathname==='/api/v1/targets')return route.fulfill({headers,json:{targets:[{targetId:'tgt_s010',type:'session',provider:'codex',label:'S010',available:true,cancelMode:'execution'}]}});
-    if(url.pathname==='/api/v1/capabilities')return route.fulfill({headers,json:{audio:{available:true,sampleRate:16000,format:'s16le'}}});
+    if(url.pathname==='/api/v1/targets')return route.fulfill({headers,json:{targets:[{targetId:'tgt_s010',type:'session',provider:'codex',label:'S010',available:!options.targetBusy,cancelMode:'execution'}]}});
+    if(url.pathname==='/api/v1/capabilities')return route.fulfill({headers,status:options.capabilitiesFail?503:200,json:options.capabilitiesFail?{error:'SPEECH_UNAVAILABLE'}:{audio:{available:true,sampleRate:16000,format:'s16le'}}});
     if(url.pathname==='/api/v1/audio/transcriptions'){
       stats.transcriptions++;
       expect(request.headers()['content-type']).toBe('audio/pcm');
@@ -48,14 +48,18 @@ async function harness(page:Page,options:{noAudio?:boolean;decoderFails?:boolean
     }
     if(url.pathname==='/api/v1/requests'){
       stats.submissions++;const body=request.postDataJSON();clientRequestId=body.clientRequestId;expect(body.targetId).toBe('tgt_s010');
+      stats.requestIds.push(body.clientRequestId);
+      if(options.lostAcknowledgement&&stats.submissions===1)return route.abort('connectionreset');
       return route.fulfill({headers,status:202,json:{requestId:'req_browser',clientRequestId:body.clientRequestId,targetId:body.targetId,status:'accepted',lastSeq:1}});
     }
     if(url.pathname.endsWith('/events'))return route.fulfill({headers,json:{requestId:'req_browser',events:[{seq:2,type:'result',text:'회의 일정을 확인했습니다.',outcome:'succeeded'}],nextCursor:2,hasMore:false,status:'completed'}});
     if(url.pathname==='/api/v1/requests/req_browser')return route.fulfill({headers,json:{requestId:'req_browser',clientRequestId,targetId:'tgt_s010',status:'completed',lastSeq:2,result:{text:'회의 일정을 확인했습니다.',outcome:'succeeded',truncated:false}}});
     return route.fulfill({headers,status:404,json:{error:'NOT_FOUND'}});
   });
-  await page.goto('/');await expect(page.locator('#connect')).toHaveText('연결됨');
-  if(!options.unpaired)await expect(page.locator('#connectionState')).toHaveText('사용 준비됨');
+  await page.goto('/');
+  await expect(page.locator('#connect')).toHaveText(options.noGlasses?'다시 연결':'연결됨');
+  if(!options.unpaired)await expect(page.locator('#login')).toBeHidden();
+  if(!options.unpaired&&!options.noGlasses&&!options.capabilitiesFail)await expect(page.locator('#connectionState')).toHaveText('사용 준비됨');
   async function frames(){
     if(options.noAudio)return;
     await page.evaluate(()=>(window as any)._listenEvenAppMessage({type:'listen_even_app_data',method:'evenHubEvent',data:{type:'audioEvent',jsonData:{source:'glasses',audioPcm:Array(6400).fill(2)}}}));
@@ -69,6 +73,55 @@ test('connected button is disabled; repeated checks reuse the SDK session and re
   expect(f.stats.startup).toBe(1);expect(f.stats.devices).toBe(0);
   expect(await page.evaluate(()=>JSON.stringify({...localStorage,...sessionStorage}))).not.toContain('synthetic-access-token');
   await page.reload();await expect(page.locator('#connectionState')).toHaveText('사용 준비됨');expect(f.stats.devices).toBe(0);expect(f.stats.refreshes).toBe(2);
+});
+test('typed text can be sent when speech capabilities fail',async({page})=>{
+  const f=await harness(page,{capabilitiesFail:true});
+  await page.locator('#draft').fill('음성 없이 직접 작성한 지시');
+  await expect(page.locator('#send')).toBeEnabled();await page.locator('#send').click();
+  await expect(page.locator('#workState')).toHaveText('답변 도착');expect(f.stats.submissions).toBe(1);
+  expect(f.stats.microphone).toBe(0);
+});
+test('pairing and typed text do not require connected glasses',async({page})=>{
+  const f=await harness(page,{noGlasses:true,unpaired:true});
+  await expect(page.locator('#login')).toBeEnabled();await page.locator('#login').click();
+  await expect(page.locator('#login')).toBeHidden();await page.locator('#draft').fill('안경 연결과 별개인 텍스트 지시');
+  await expect(page.locator('#send')).toBeEnabled();await page.locator('#send').click();
+  await expect(page.locator('#workState')).toHaveText('답변 도착');expect(f.stats.submissions).toBe(1);
+  await expect(page.locator('#record')).toBeDisabled();
+});
+test('busy target is explained and a later send refreshes availability',async({page})=>{
+  const options={targetBusy:true};const f=await harness(page,options);
+  await page.locator('#draft').fill('작업이 끝나면 보낼 지시');await expect(page.locator('#send')).toBeEnabled();
+  await page.locator('#send').click();await expect(page.locator('#notice')).toContainText('S010');expect(f.stats.submissions).toBe(0);
+  options.targetBusy=false;await page.locator('#send').click();
+  await expect(page.locator('#workState')).toHaveText('답변 도착');expect(f.stats.submissions).toBe(1);
+});
+test('holding the app record button captures audio and releasing starts transcription',async({page})=>{
+  const f=await harness(page);const box=(await page.locator('#record').boundingBox())!;
+  await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down();
+  await expect(page.locator('#voiceStatus')).toContainText('듣고 있습니다');await f.frames();
+  await page.waitForTimeout(350);await page.mouse.up();
+  await expect(page.locator('#draft')).toHaveValue('오늘 회의 일정을 확인해 주세요.');
+  expect(f.stats.transcriptions).toBe(1);expect(f.stats.microphone).toBe(2);expect(f.stats.submissions).toBe(0);
+});
+test('lost submission acknowledgement allows the same text and request ID to be retried',async({page})=>{
+  const f=await harness(page,{lostAcknowledgement:true});await page.locator('#draft').fill('중복 실행 없이 재시도할 지시');
+  await page.locator('#send').click();await expect(page.locator('#notice')).toContainText('접수 여부 불명');
+  await expect(page.locator('#send')).toBeEnabled();await page.locator('#send').click();
+  await expect(page.locator('#workState')).toHaveText('답변 도착');expect(f.stats.requestIds).toHaveLength(2);
+  expect(f.stats.requestIds[0]).toBe(f.stats.requestIds[1]);
+});
+test('unpaired device explains why typed Send is disabled instead of silently blocking',async({page})=>{
+  await harness(page,{unpaired:true});await page.locator('#draft').fill('직접 작성한 지시');
+  await expect(page.locator('#send')).toBeDisabled();await expect(page.locator('#sendStatus')).toContainText('서버 연결을 승인');
+  await expect(page.locator('#voiceStatus')).toContainText('서버 연결은 별개');
+});
+test('canceling a pointer hold discards captured audio without sending or transcription',async({page})=>{
+  const f=await harness(page);const box=(await page.locator('#record').boundingBox())!;
+  await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down();
+  await expect(page.locator('#voiceStatus')).toContainText('듣고 있습니다');await f.frames();
+  await page.locator('#record').dispatchEvent('pointercancel',{pointerId:1});await page.mouse.up();
+  await expect(page.locator('#voiceStatus')).toContainText('안경 마이크');expect(f.stats.transcriptions).toBe(0);expect(f.stats.submissions).toBe(0);
 });
 test('real SDK audio event becomes editable text and is not executed before Send',async({page})=>{
   const f=await harness(page);await page.locator('#record').click();await expect(page.locator('#voiceStatus')).toContainText('듣고 있습니다');
