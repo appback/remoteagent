@@ -11,9 +11,11 @@ import {DotBridgeService} from '../dist/services/dot-bridge-service.js';
 import {DotMcpService} from '../dist/services/dot-mcp-service.js';
 import {G2RequestService} from '../dist/services/g2-request-service.js';
 import {G2ApiService} from '../dist/services/g2-api-service.js';
+import {G2ServerService} from '../dist/services/g2-server-service.js';
 
 const {chromium}=await import(process.env.PLAYWRIGHT_PACKAGE||'playwright');
 const deviceFlow=process.env.G2_DEVICE_FLOW_TEST==='1';
+const standalone=process.env.G2_STANDALONE_TEST==='1';
 const dir=fs.mkdtempSync(path.join(os.tmpdir(),'g2-browser-'));
 const keyFile=path.join(dir,'key.pem'),certFile=path.join(dir,'cert.pem');
 execFileSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-days','1','-subj','/CN=127.0.0.1','-addext','subjectAltName=IP:127.0.0.1','-keyout',keyFile,'-out',certFile],{stdio:'ignore'});
@@ -34,13 +36,14 @@ const dot=new DotBridgeService(dir,owner,async()=>{throw Error('No external webh
 const sessions={async listSessions(){return [{sessionId:'browser-session',publicId:'S001',mode:'codex',codex:{cwd:dir,pairedAt:new Date().toISOString()}}];},
   isSessionBusy(){return false;},isProviderAvailable(){return true;},
   async routeExternalMessage(_id,_provider,_text,_signal,started,progress){started();await progress({output:'browser progress'});return [{output:'browser final'}];}};
-const requests=new G2RequestService(dir,owner,sessions,dot);await requests.restore();
+const requests=new G2RequestService(dir,owner,sessions,standalone?undefined:dot);await requests.restore();
 const targets=await requests.inventory();
 const client={clientId,origins:deviceFlow?[]:[origin],redirectUris:deviceFlow?[]:[redirect],targetIds:targets.map(target=>target.targetId),deviceFlow,loopbackOrigin:deviceFlow};
-const auth=new DotOwnerAuthService(dir,resource,owner,[client]);
+const auth=new DotOwnerAuthService(dir,resource,owner,[client],!standalone);
 const api=new G2ApiService(requests,resource,[client],auth.authenticateG2.bind(auth));
-const mcp=new DotMcpService(dot,'127.0.0.1',0,{resource,issuer:auth.issuer},auth.authenticate.bind(auth),auth.handle.bind(auth),undefined,undefined,api.handle.bind(api));
-await mcp.start();backendPort=mcp.address().port;
+const mcp=standalone ? new G2ServerService(auth.handle.bind(auth),api.handle.bind(api))
+  : new DotMcpService(dot,'127.0.0.1',0,{resource,issuer:auth.issuer},auth.authenticate.bind(auth),auth.handle.bind(auth),undefined,undefined,api.handle.bind(api));
+await mcp.start(0);backendPort=mcp.address().port;
 let browser;
 try {
   browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_EXECUTABLE?{executablePath:process.env.PLAYWRIGHT_EXECUTABLE}:{})});
