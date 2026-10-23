@@ -18,6 +18,7 @@ import { DotMcpService, createDotAuthenticator } from "./services/dot-mcp-servic
 import { readG2Clients, type G2Client } from "./services/g2-config.js";
 import { G2RequestService } from "./services/g2-request-service.js";
 import { G2ApiService } from "./services/g2-api-service.js";
+import { G2ServerService } from "./services/g2-server-service.js";
 import { acquireProcessLock, releaseProcessLock } from "./services/runtime-lock.js";
 import { DotHostService } from "./services/dot-host-service.js";
 import type { DotMacService } from "./services/dot-mac-service.js";
@@ -112,6 +113,22 @@ async function main(): Promise<void> {
   }
 
   let dot: DotBridgeService | undefined;
+  let g2Login: (() => { code: string; expiresAt: string }) | undefined;
+  if (!config.dotEnabled && process.env.G2_API_ENABLED === "true") {
+    const resource = process.env.G2_PUBLIC_URL?.trim();
+    const owner = config.telegramOwnerId?.trim();
+    if (!resource || !/^\d+$/.test(owner ?? "")) throw Error("G2_PUBLIC_URL and TELEGRAM_OWNER_ID are required");
+    const clients = readG2Clients(process.env.G2_OAUTH_CONFIG_FILE);
+    const auth = new (await import("./services/dot-owner-auth-service.js")).DotOwnerAuthService(config.dataDir, resource, `telegram:${owner}`, clients, false);
+    const requests = new G2RequestService(config.dataDir, auth.owner, bridge);
+    await requests.restore();
+    const api = new G2ApiService(requests, resource, clients, auth.authenticateG2.bind(auth));
+    const port = Number(process.env.G2_HTTP_PORT ?? "3796");
+    if (!Number.isInteger(port) || port < 1024 || port > 65535) throw Error("Invalid G2_HTTP_PORT");
+    await new G2ServerService(auth.handle.bind(auth), api.handle.bind(api)).start(port);
+    g2Login = () => auth.issueLoginCode();
+    console.log(`G2 API listening on 127.0.0.1:${port}; dot is disabled.`);
+  }
   if (config.dotEnabled) {
     try {
       const required = (name: string): string => {
@@ -173,6 +190,7 @@ async function main(): Promise<void> {
       });
       const mcp = new DotMcpService(candidate, "127.0.0.1", config.dotPort, oauth, authenticate, auth?.handle.bind(auth), host, mac, g2Api?.handle.bind(g2Api));
       try { await mcp.start(); } catch (error) { host?.close(); await mac?.close(); throw error; }
+      if (g2Api && auth) g2Login = () => auth.issueLoginCode();
       candidate.start();
       dot = candidate;
       console.log(`Dot MCP bridge listening on 127.0.0.1:${config.dotPort}; real dot linking must be verified separately.`);
@@ -181,7 +199,7 @@ async function main(): Promise<void> {
         error instanceof Error && error.message.startsWith("Missing DOT_") ? error.message : "Check Dot OAuth/port configuration.");
     }
   }
-  if (!dot && fs.existsSync(path.join(config.dataDir, "dot", "bridge.json"))) {
+  if (config.dotEnabled && !dot && fs.existsSync(path.join(config.dataDir, "dot", "bridge.json"))) {
     // Keep explicit dot chat bindings paused on configuration failure, never silently route them to Codex.
     dot = new DotBridgeService(config.dataDir, process.env.DOT_OAUTH_SUBJECT?.trim() ?? "",
       async () => { throw Error("DOT_CONFIGURATION_UNAVAILABLE"); });
@@ -191,7 +209,7 @@ async function main(): Promise<void> {
   const botInfos = await Promise.all(config.telegramBotTokens.map((token, index) =>
     resolveBotInfo(token, index, config.telegramBotUsernames[index])
   ));
-  const bots = config.telegramBotTokens.map((token, index) => createBot(token, bridge, botManagement, botInfos[index]!, dot));
+  const bots = config.telegramBotTokens.map((token, index) => createBot(token, bridge, botManagement, botInfos[index]!, dot, g2Login));
 
   if (!config.telegramCommandMenuEnabled) {
     console.log("Telegram command menu registration is disabled.");

@@ -2,6 +2,22 @@
 
 This runbook is command-first. Use the scripts below as the release interface.
 
+### Retire Dot on Mac60 and Keep S010 G2
+
+After publishing the independent G2 server (0.31.2 or later), run:
+
+```bash
+DEACTIVATE_DOT=1 npm run release:deploy -- 0.31.2 60
+```
+
+This uses the regular idle check, backup, exact npm install and rollback flow.
+It sets `DOT_ENABLED=false`, disables dot host/Mac tools, and copies the existing
+HTTPS origin and listener port into independent G2 settings. It preserves the
+G2 client allowlist, target key, OAuth identity, secrets and all LLM sessions.
+Deployment verifies G2 resource metadata (200), unauthenticated targets (401)
+and the retired MCP endpoint (404). Keep the existing HTTPS tunnel: it now serves
+G2, not dot. Subsequent ordinary updates preserve these settings.
+
 ### Verified 0.31.1 Mac60 Recovery
 
 The 2026-10-23 S010 activation incident was recovered using npm, not the staged

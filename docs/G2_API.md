@@ -1,5 +1,24 @@
 # Direct G2 Request API
 
+## Mac60: G2 Without Dot
+
+Dot is retired on Mac60. G2 connects directly to the local S010 Codex session.
+The existing HTTPS hostname is retained for client compatibility; its name does
+not enable dot. `/mcp` returns 404, ChatGPT OAuth clients are disabled, and neither
+dot delivery nor dot host/Mac tools are started. Telegram and Codex/Claude remain.
+
+G2-only configuration uses `DOT_ENABLED=false`, `G2_API_ENABLED=true`,
+`G2_PUBLIC_URL=https://remoteagent-dot60.appback.app`, `G2_HTTP_PORT=3796` and the
+existing `G2_OAUTH_CONFIG_FILE`. The S010 target key and client allowlist stay
+unchanged. G2 owner approval is `/login g2`, never `/login dot`.
+
+The shared OAuth identity remains in `dot/auth` to preserve issuer, signing keys
+and existing G2 grants. This is retained authorization storage, not a running dot
+integration. Removing that directory would invalidate G2 authentication.
+
+The following sections include the historical dot-enabled API contract. They do
+not re-enable dot on Mac60.
+
 Contract version: 1. Package 0.31.1 is deployed on Mac60 as of 2026-10-23, including
 device-code clients for packaged Even WebViews and the existing PKCE contract.
 The approved `remoteagent-g2-even` client is enabled for S010 only. Other clients

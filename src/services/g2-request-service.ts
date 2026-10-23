@@ -27,7 +27,7 @@ export class G2RequestService {
   private storageFailed = false;
 
   constructor(dataDir: string, private readonly owner: string, private readonly sessions: Sessions,
-    private readonly dot: DotBridgeService, private readonly now: () => number = Date.now) {
+    private readonly dot?: DotBridgeService, private readonly now: () => number = Date.now) {
     this.dir = path.join(dataDir, "g2", "requests");
     fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 });
     const keyFile = path.join(dataDir, "g2", "target-key");
@@ -40,7 +40,7 @@ export class G2RequestService {
       this.rows.set(row.requestId, row);
     }
     this.prune();
-    this.dot.setExternalReporter((...args) => this.dotReport(...args));
+    this.dot?.setExternalReporter((...args) => this.dotReport(...args));
   }
 
   async restore(): Promise<void> {
@@ -48,7 +48,7 @@ export class G2RequestService {
       if (terminal(row.status)) continue;
       row.status = "interrupted"; row.error = "RUNTIME_RESTARTED";
       this.event(row, "interrupted", { error: row.error });
-      if (row.target.type === "dot_channel") await this.dot.cancelExternal(this.owner, row.requestId);
+      if (row.target.type === "dot_channel") await this.dot?.cancelExternal(this.owner, row.requestId);
     }
   }
 
@@ -61,7 +61,7 @@ export class G2RequestService {
     return [...sessions.map(session => ({ targetId: this.id("session", session.sessionId, session.mode), type: "session" as const,
       reference: session.sessionId, provider: session.mode, label: session.publicId,
       available: Boolean(session[session.mode]) && this.sessions.isProviderAvailable(session.mode) && !this.sessions.isSessionBusy(session.sessionId), cancelMode: "execution" as const })),
-    ...this.dot.externalChannels(this.owner).map(channel => ({ targetId: this.id("dot_channel", channel.channelId, "dot"),
+    ...(this.dot?.externalChannels(this.owner) ?? []).map(channel => ({ targetId: this.id("dot_channel", channel.channelId, "dot"),
       reference: channel.channelId, type: "dot_channel" as const, provider: "dot" as const, label: "dot " + channel.channelId,
       available: channel.available, cancelMode: "delivery_only" as const }))];
   }
@@ -123,7 +123,7 @@ export class G2RequestService {
       row.cancel = { scope: row.target.cancelMode, confirmed: false, executionStopped: false };
       this.event(row, "cancel_requested");
       if (row.target.type === "dot_channel") {
-        await this.dot.cancelExternal(this.owner, row.requestId);
+        await this.dot?.cancelExternal(this.owner, row.requestId);
         row.status = "canceled"; row.cancel.confirmed = true;
         this.event(row, "canceled");
       } else { this.controllers.get(requestId)?.abort(); }
@@ -135,6 +135,7 @@ export class G2RequestService {
     try {
       if (terminal(row.status) || row.status === "cancel_requested") { this.finishCancellation(row); return; }
       if (row.target.type === "dot_channel") {
+        if (!this.dot) throw Error("TARGET_UNAVAILABLE");
         await this.dot.enqueueExternal(this.owner, row.target.reference, row.requestId, row.text);
       } else {
         const responses = await this.sessions.routeExternalMessage(row.target.reference, row.target.provider as "codex" | "claude", row.text,
@@ -180,6 +181,7 @@ export class G2RequestService {
   private reconcile(row: Row) {
     if (row.target.type !== "dot_channel" || terminal(row.status) || row.status === "cancel_requested") return;
     let status: string;
+    if (!this.dot) return;
     try { status = this.dot.read(this.owner, row.requestId).status; } catch { return; }
     if (status === "failed" || status === "canceled") {
       row.status = status; row.error = status === "failed" ? "DOT_DELIVERY_FAILED" : "DOT_CHANNEL_CANCELED";

@@ -37,7 +37,12 @@ export const TELEGRAM_COMMAND_MENU = [
 
 export async function setTelegramCommandMenu(token: string): Promise<void> {
   await callTelegramCommandApi(token, "setMyCommands", {
-    commands: TELEGRAM_COMMAND_MENU,
+    commands: TELEGRAM_COMMAND_MENU.filter(item => process.env.DOT_ENABLED === "true" || item.command !== "dot").map(item => {
+      if (process.env.DOT_ENABLED === "true") return item;
+      if (item.command === "start") return { ...item, description: "Start Codex or Claude" };
+      if (item.command === "login") return { ...item, description: "GitHub, Codex, Claude, G2 or Jev authentication" };
+      return item;
+    }),
   });
 }
 

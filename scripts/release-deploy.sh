@@ -249,7 +249,7 @@ deploy_60() {
   local HOST_ROOTS_B64 G2_CONFIG_PATH_B64
   HOST_ROOTS_B64="$(node -e 'process.stdout.write(Buffer.from(process.env.DOT_HOST_ROOTS || "").toString("base64"))')"
   G2_CONFIG_PATH_B64="$(node -e 'process.stdout.write(Buffer.from(process.env.G2_CLIENT_CONFIG || "").toString("base64"))')"
-  ssh appback@192.168.33.60 "VERSION=$VERSION ALLOW_STALE_RUNNING=${ALLOW_STALE_RUNNING:-0} ACTIVATE_JEV=${ACTIVATE_JEV:-0} ACTIVATE_MAC=${ACTIVATE_MAC:-0} HOST_ROOTS_B64=$HOST_ROOTS_B64 G2_CONFIG_PATH_B64=$G2_CONFIG_PATH_B64 bash -s" <<'REMOTE'
+  ssh appback@192.168.33.60 "VERSION=$VERSION ALLOW_STALE_RUNNING=${ALLOW_STALE_RUNNING:-0} ACTIVATE_JEV=${ACTIVATE_JEV:-0} ACTIVATE_MAC=${ACTIVATE_MAC:-0} DEACTIVATE_DOT=${DEACTIVATE_DOT:-0} HOST_ROOTS_B64=$HOST_ROOTS_B64 G2_CONFIG_PATH_B64=$G2_CONFIG_PATH_B64 bash -s" <<'REMOTE'
 set -euo pipefail
 export PATH="$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export DATA_DIR="$HOME/.remoteagent"
@@ -349,6 +349,19 @@ import fs from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 const home=process.env.HOME,d=process.env.DATA_DIR,root=process.env.ROOT;
+if(process.env.DEACTIVATE_DOT==='1'){
+ if(process.env.ACTIVATE_MAC==='1'||process.env.HOST_ROOTS_B64)throw Error('Dot deactivation cannot enable dot host/Mac tools');
+ const dotenv=await import(root+'/node_modules/dotenv/lib/main.js');
+ const file=d+'/.env';let text=fs.readFileSync(file,'utf8');const env=dotenv.parse(text);
+ if(env.G2_API_ENABLED!=='true')throw Error('Expected existing G2 configuration before separating dot');
+ const origin=env.G2_PUBLIC_URL||env.DOT_PUBLIC_URL;
+ if(!origin||new URL(origin).protocol!=='https:')throw Error('Existing G2 HTTPS origin is required');
+ for(const [key,value] of [['G2_PUBLIC_URL',JSON.stringify(origin)],['G2_HTTP_PORT',env.G2_HTTP_PORT||env.DOT_PORT||'3796'],['DOT_ENABLED','false'],['DOT_HOST_ENABLED','false'],['DOT_MAC_ENABLED','false']]){
+  const pattern=new RegExp('^'+key+'=.*$','m');text=pattern.test(text)?text.replace(pattern,()=>key+'='+value):text+'\n'+key+'='+value+'\n';
+ }
+ fs.writeFileSync(file,text,{mode:0o600});
+ console.log('Dot bridge and host/Mac tools disabled; independent G2 retains its approved clients and HTTPS origin.');
+}
 if(process.env.G2_CONFIG_PATH_B64){
  const source=Buffer.from(process.env.G2_CONFIG_PATH_B64,'base64').toString('utf8');
  if(createHash('sha256').update(fs.readFileSync(source)).digest('hex')!==process.env.G2_CONFIG_HASH)throw Error('Approved G2 configuration changed during deployment');
@@ -422,13 +435,15 @@ const root=process.env.ROOT,d=process.env.DATA_DIR;
 const dotenv=await import(root+'/node_modules/dotenv/lib/main.js');
 const env=dotenv.parse(fs.readFileSync(d+'/.env'));
 if(env.G2_API_ENABLED==='true'){
+ const origin=env.G2_PUBLIC_URL||env.DOT_PUBLIC_URL;
  let verified=false;
  for(let i=0;i<3;i++){
   try{
-   const metadata=await fetch(env.DOT_PUBLIC_URL+'/.well-known/oauth-protected-resource/api/v1',{signal:AbortSignal.timeout(10000)});
-   if(!metadata.ok||(await metadata.json()).resource!==env.DOT_PUBLIC_URL+'/api/v1')throw Error('G2 metadata unavailable');
-   const response=await fetch(env.DOT_PUBLIC_URL+'/api/v1/targets',{signal:AbortSignal.timeout(10000)});
+   const metadata=await fetch(origin+'/.well-known/oauth-protected-resource/api/v1',{signal:AbortSignal.timeout(10000)});
+   if(!metadata.ok||(await metadata.json()).resource!==origin+'/api/v1')throw Error('G2 metadata unavailable');
+   const response=await fetch(origin+'/api/v1/targets',{signal:AbortSignal.timeout(10000)});
    if(response.status!==401)throw Error('G2 public authentication boundary invalid');
+   if(env.DOT_ENABLED==='false'&&(await fetch(origin+'/mcp',{signal:AbortSignal.timeout(10000)})).status!==404)throw Error('Retired dot endpoint is still exposed');
    verified=true;break;
   }catch{if(i<2)await new Promise(r=>setTimeout(r,5000));}
  }

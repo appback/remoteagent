@@ -77,7 +77,7 @@ export class DotOwnerAuthService {
   private readonly forms = new Map<string, { csrf: string; expires: number; attempts: number }>();
   private readonly origin: string;
   private requestWindow = { start: Date.now(), count: 0 };
-  constructor(dataDir: string, readonly resource: string, readonly owner: string, private readonly g2Clients: G2Client[] = []) {
+  constructor(dataDir: string, readonly resource: string, readonly owner: string, private readonly g2Clients: G2Client[] = [], private readonly dotEnabled = true) {
     const url = new URL(resource);
     if (url.protocol !== "https:" || url.pathname !== "/" || url.search || url.hash || url.username || url.password || !owner) throw Error("DOT_AUTH_INVALID_ORIGIN");
     this.origin = url.origin;
@@ -98,12 +98,12 @@ export class DotOwnerAuthService {
       adapter: name => store.adapter(name),
       jwks: identity.jwks,
       cookies: { keys: identity.cookies, long: { sameSite: "lax" }, short: { sameSite: "lax" } },
-      clients: [{ client_id: "remoteagent-dot", client_name: "RemoteAgent for ChatGPT", token_endpoint_auth_method: "none",
-        redirect_uris: ["https://chatgpt.com/connector_platform_oauth_redirect"], response_types: ["code"], grant_types: ["authorization_code", "refresh_token"] },
+      clients: [...(dotEnabled ? [{ client_id: "remoteagent-dot", client_name: "RemoteAgent for ChatGPT", token_endpoint_auth_method: "none" as const,
+        redirect_uris: ["https://chatgpt.com/connector_platform_oauth_redirect"], response_types: ["code" as const], grant_types: ["authorization_code", "refresh_token"] }] : []),
         ...g2Clients.map(client => ({ client_id: client.clientId, client_name: "RemoteAgent G2", token_endpoint_auth_method: "none" as const,
           redirect_uris: client.redirectUris, response_types: client.deviceFlow ? [] : ["code"] as const,
           grant_types: client.deviceFlow ? ["urn:ietf:params:oauth:grant-type:device_code"] as const : ["authorization_code"] as const, scope: G2_SCOPE }))],
-      scopes: ["openid", "offline_access", SCOPE, ...(g2Clients.length ? [G2_SCOPE] : [])],
+      scopes: ["openid", ...(dotEnabled ? ["offline_access", SCOPE] : []), ...(g2Clients.length ? [G2_SCOPE] : [])],
       clientBasedCORS: (_ctx, origin, client) => g2Clients.some(c => c.clientId === client.clientId && g2OriginAllowed(c, origin)),
       claims: { openid: ["sub"] },
       responseTypes: ["code"],
@@ -120,14 +120,14 @@ export class DotOwnerAuthService {
           },
           successSource: async ctx => { ctx.body = '<!doctype html><html lang="ko"><meta charset="utf-8"><h1>연결 승인 완료</h1><p>G2 앱으로 돌아가세요.</p></html>'; },
         },
-        clientIdMetadataDocument: { enabled: true, ack: "draft-02",
+        clientIdMetadataDocument: { enabled: dotEnabled, ack: "draft-02",
           allowFetch: (_ctx, id) => isChatGptClient(id),
           allowClient: (_ctx, client) => isChatGptClient(client.clientId) && Boolean(client.redirectUris?.length) && client.redirectUris!.every(validRedirect) },
         resourceIndicators: { enabled: true, defaultResource: () => resource, useGrantedResource: () => true,
           getResourceServerInfo: (_ctx, indicator) => {
             if (indicator === `${resource}/api/v1` && g2Clients.length)
               return { scope: G2_SCOPE, audience: indicator, accessTokenFormat: "opaque", accessTokenTTL: 3600 };
-            if (indicator !== resource) throw new errors.InvalidTarget();
+            if (!dotEnabled || indicator !== resource) throw new errors.InvalidTarget();
             return { scope: SCOPE, audience: resource, accessTokenFormat: "opaque", accessTokenTTL: 3600 };
           } },
         revocation: { enabled: true },
@@ -153,6 +153,7 @@ export class DotOwnerAuthService {
     return { code, expiresAt: new Date(expires).toISOString() };
   }
   async authenticate(authorization: string | undefined): Promise<DotPrincipal | undefined> {
+    if (!this.dotEnabled) return;
     const value = /^Bearer ([^\s]+)$/i.exec(authorization ?? "")?.[1];
     if (!value || value.length > 8192) return;
     try {
@@ -204,7 +205,7 @@ export class DotOwnerAuthService {
   private async interact(req: IncomingMessage, res: ServerResponse, uid: string) {
     const details = await this.provider.interactionDetails(req, res).catch(() => undefined);
     const g2Client = this.g2Clients.find(client => client.clientId === details?.params.client_id);
-    if (!details || details.uid !== uid || (!isChatGptClient(details.params.client_id) && !g2Client)) { res.writeHead(400).end("Invalid or expired login"); return; }
+    if (!details || details.uid !== uid || (!(this.dotEnabled && isChatGptClient(details.params.client_id)) && !g2Client)) { res.writeHead(400).end("Invalid or expired login"); return; }
     const requestedScopes = String(details.params.scope ?? "").split(" ");
     const expectedResource = g2Client ? `${this.resource}/api/v1` : this.resource;
     if ((g2Client && details.params.resource !== expectedResource) || (details.params.resource && details.params.resource !== expectedResource)
@@ -215,7 +216,7 @@ export class DotOwnerAuthService {
       if (this.forms.size >= 32 && !this.forms.has(uid)) { res.writeHead(429).end("Try again later"); return; }
       const csrf = randomBytes(24).toString("base64url");
       this.forms.set(uid, { csrf, expires: Date.now() + LOGIN_TTL, attempts: 0 });
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }).end(`<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>RemoteAgent 연결 승인</title><h1>RemoteAgent 연결 승인</h1><p>${g2Client ? "G2 앱에 관리자가 허용한 대상의 작업 요청과 결과 조회를 허용합니다. Mac 전체 제어 및 dot MCP 권한은 부여하지 않습니다." : "ChatGPT에 이 서버의 Telegram 지시 읽기와 응답 전송을 허용합니다."}</p><p>본인이 연결을 시작한 경우에만 Telegram의 /login dot에서 받은 5분 유효 코드를 입력하세요. 다른 사람이 요청한 코드를 전달하지 마세요.</p><form method="post"><input type="hidden" name="csrf" value="${csrf}"><label>승인 코드 <input name="code" autocomplete="off" required maxlength="80"></label><button type="submit">연결 허용</button></form></html>`);
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }).end(`<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>RemoteAgent 연결 승인</title><h1>RemoteAgent 연결 승인</h1><p>${g2Client ? "G2 앱에 관리자가 허용한 세션의 작업 요청과 결과 조회를 허용합니다." : "ChatGPT에 이 서버의 Telegram 지시 읽기와 응답 전송을 허용합니다."}</p><p>본인이 연결을 시작한 경우에만 Telegram의 /login ${g2Client ? "g2" : "dot"}에서 받은 5분 유효 코드를 입력하세요. 다른 사람이 요청한 코드를 전달하지 마세요.</p><form method="post"><input type="hidden" name="csrf" value="${csrf}"><label>승인 코드 <input name="code" autocomplete="off" required maxlength="80"></label><button type="submit">연결 허용</button></form></html>`);
       return;
     }
     if (req.method !== "POST") { res.writeHead(405).end(); return; }
@@ -227,7 +228,7 @@ export class DotOwnerAuthService {
     const input = new URLSearchParams(body);
     const key = digest(input.get("code") ?? "").toString("hex");
     const credential = this.codes.get(key);
-    if (!equal(input.get("csrf") ?? "", form.csrf) || !credential || credential.expires <= Date.now()) { res.writeHead(403).end("Invalid or expired approval code. Run /login dot again."); return; }
+    if (!equal(input.get("csrf") ?? "", form.csrf) || !credential || credential.expires <= Date.now()) { res.writeHead(403).end(g2Client ? "Invalid or expired approval code. Run /login g2 again." : "Invalid or expired approval code. Run /login dot again."); return; }
     this.codes.delete(key);
     this.forms.delete(uid);
     const clientId = String(details.params.client_id);

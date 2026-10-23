@@ -320,7 +320,7 @@ class AutoContinueController {
   }
 }
 
-export function createBot(token: string, bridge: BridgeService, botManagement: BotManagementService, botInfo: UserFromGetMe, dot?: DotBridgeService): Bot {
+export function createBot(token: string, bridge: BridgeService, botManagement: BotManagementService, botInfo: UserFromGetMe, dot?: DotBridgeService, g2Login?: () => { code: string; expiresAt: string }): Bot {
   const bot = new Bot(token, { botInfo });
   const inlineActions = new InlineActionRegistry();
   const peers = new PeerService(config.dataDir, String(botInfo.id));
@@ -732,7 +732,8 @@ ${bridge.formatStatus(mapping)}`);
   });
 
   bot.command("help", async (ctx) => {
-    await reply(ctx, HELP_TEXT);
+    const help = dot ? HELP_TEXT : HELP_TEXT.split("\n").filter(line => !line.startsWith("/login dot") && !line.startsWith("/dot ")).join("\n").replace("[codex|claude|dot]", "[codex|claude]");
+    await reply(ctx, help + (g2Login ? "\n/login g2 - approve your G2 connection" : ""));
   });
 
   const replySessionList = async (ctx: Context, requestedShowAll?: boolean): Promise<void> => {
@@ -1576,6 +1577,14 @@ ${bridge.formatStatus(mapping)}`);
       return;
     }
     if (provider === "jev") { await reply(ctx, JEV_LOGIN_HELP); return; }
+    if (provider === "g2") {
+      if (rest?.trim()) { await reply(ctx, "Usage: /login g2"); return; }
+      if (ctx.chat.type !== "private") { await reply(ctx, "G2 연결 승인은 개인 대화에서 요청하세요."); return; }
+      if (!g2Login) { await reply(ctx, "G2 연결이 활성화되지 않았습니다."); return; }
+      const approval = g2Login();
+      await reply(ctx, `G2 연결 승인 코드: ${approval.code}\n5분 안에 본인이 연 G2 승인 화면에 입력하세요.`);
+      return;
+    }
     if (provider === "dot") {
       if (rest?.trim()) { await reply(ctx, "Usage: /login dot"); return; }
       await showDotLogin(ctx); return;
@@ -1586,7 +1595,7 @@ ${bridge.formatStatus(mapping)}`);
         [actionButton(ctx, "GitHub", { kind: "login.start", target: "github" })],
         [actionButton(ctx, "Codex", { kind: "login.start", target: "codex" })],
         [actionButton(ctx, "Claude", { kind: "login.start", target: "claude" })],
-        [actionButton(ctx, "Dot", { kind: "dot.login" })],
+        ...(dot ? [[actionButton(ctx, "Dot", { kind: "dot.login" as const })]] : []),
       ]));
       return;
     }

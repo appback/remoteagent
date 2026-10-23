@@ -9,6 +9,7 @@ import {DotBridgeService} from '../dist/services/dot-bridge-service.js';
 import {DotMcpService} from '../dist/services/dot-mcp-service.js';
 import {G2RequestService} from '../dist/services/g2-request-service.js';
 import {G2ApiService} from '../dist/services/g2-api-service.js';
+import {G2ServerService} from '../dist/services/g2-server-service.js';
 import {readG2Clients,g2OriginAllowed} from '../dist/services/g2-config.js';
 import {FileStore} from '../dist/store/file-store.js';
 import {BridgeService} from '../dist/services/bridge-service.js';
@@ -19,7 +20,7 @@ const resource = 'https://bridge.example.test', owner = 'telegram:123', origin =
 const redirect = origin + '/oauth/callback', clientId = 'remoteagent-g2-test';
 const settle = async () => { for(let i=0;i<12;i++) await new Promise(r=>setImmediate(r)); };
 
-async function fixture(t) {
+async function fixture(t, standalone=false) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'remoteagent-g2-'));
   const deliveries=[], telegram=[];
   const dot = new DotBridgeService(dir, owner, async (...args) => {
@@ -45,13 +46,14 @@ async function fixture(t) {
       } finally {busy=false;}
     },
   };
-  const service=new G2RequestService(dir,owner,sessions,dot);await service.restore();
+  const service=new G2RequestService(dir,owner,sessions,standalone?undefined:dot);await service.restore();
   const inventory=await service.inventory(), session=inventory.find(t=>t.type==='session'), channel=inventory.find(t=>t.type==='dot_channel');
   const client={clientId,origins:[origin],redirectUris:[redirect],targetIds:inventory.map(t=>t.targetId)};
-  const auth=new DotOwnerAuthService(dir,resource,owner,[client]);
+  const auth=new DotOwnerAuthService(dir,resource,owner,[client],!standalone);
   const api=new G2ApiService(service,resource,[client],auth.authenticateG2.bind(auth));
-  const mcp=new DotMcpService(dot,'127.0.0.1',0,{resource,issuer:auth.issuer},auth.authenticate.bind(auth),auth.handle.bind(auth),undefined,undefined,api.handle.bind(api));
-  await mcp.start();
+  const mcp=standalone ? new G2ServerService(auth.handle.bind(auth),api.handle.bind(api))
+    : new DotMcpService(dot,'127.0.0.1',0,{resource,issuer:auth.issuer},auth.authenticate.bind(auth),auth.handle.bind(auth),undefined,undefined,api.handle.bind(api));
+  await mcp.start(0);
   t.after(async()=>{release?.();await settle();dot.close();await mcp.close();fs.rmSync(dir,{recursive:true,force:true});});
   const cookies=new Map();
   async function request(url,options={}) {
@@ -91,6 +93,24 @@ async function fixture(t) {
   return {dir,dot,service,sessions,client,auth,api,mcp,request,login,principal,session,channel,sub,deliveries,telegram,channelId,input,
     calls:()=>calls, release:()=>release?.(), busy:value=>{busy=value;}};
 }
+
+test('standalone G2 runs sessions without dot clients, MCP, channels or host tools',async t=>{
+  const f=await fixture(t,true);
+  assert.equal((await f.request('/mcp',{method:'POST',body:'{}'})).status,404);
+  assert.equal((await f.request('/.well-known/oauth-protected-resource')).status,404);
+  assert.equal(await f.auth.provider.Client.find('remoteagent-dot'),undefined);
+  assert.equal((await f.request('/api/v1/targets')).status,401);
+  const login=await f.login();assert.equal(login.response.status,200,JSON.stringify(login.tokens));
+  const bearer='Bearer '+login.tokens.access_token;
+  const targets=await f.request('/api/v1/targets',{headers:{authorization:bearer,origin}});
+  assert.deepEqual((await targets.json()).targets.map(t=>t.label),['S007']);
+  assert.equal(await f.auth.authenticate(bearer),undefined);
+  const submitted=await f.service.submit(await f.auth.authenticateG2(bearer),f.input());
+  await settle();assert.equal(f.calls(),1);f.release();await settle();
+  assert.equal(f.service.get(f.principal,submitted.requestId).status,'completed');
+  assert.equal(f.telegram.length,0);
+  assert.equal((await f.request('/mcp',{method:'POST',headers:{authorization:bearer},body:'{}'})).status,404);
+});
 
 test('G2 real-library OAuth PKCE, CORS, resource isolation and revocation',async t=>{
   const f=await fixture(t),login=await f.login();
