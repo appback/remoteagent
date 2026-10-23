@@ -19,6 +19,34 @@ integration. Removing that directory would invalidate G2 authentication.
 The following sections include the historical dot-enabled API contract. They do
 not re-enable dot on Mac60.
 
+### Verified Mac60 Retirement, 2026-10-23
+
+Package 0.31.2 was published through `release:publish` (registry processing
+completed on check 24) and installed with:
+
+```bash
+DEACTIVATE_DOT=1 npm run release:deploy -- 0.31.2 60
+```
+
+Runtime PID 92272 is launchd-managed. `/mcp` and `/api/sessions` return 404;
+G2 resource metadata returns 200 and unauthenticated targets return 401.
+The approved client's only target remains S010 / Codex. Before/after SHA-256
+checks match for `state.json`, the Secret Store, G2 client configuration, target
+key and shared OAuth identity. Normal Telegram bot command menus were refreshed
+without dot. One previously configured token (bot ID 8621402694) is Unauthorized;
+it could not receive a menu update and was not retried continuously or removed
+from the unrelated session configuration.
+
+Release validation passed 84 protocol/runtime tests, browser OAuth/device-flow
+checks, Telegram injection, session dispatch and upload gates. Both PKCE and
+device-code flows also passed in a real browser against the independent G2
+listener. These use synthetic local fixtures, not physical G2 hardware.
+
+Backup: `/Users/appback/.remoteagent/backups/npm-0.31.2-20261023T202556`.
+Deployment rollback preserves an npm-installable copy of the actual installed
+artifact, including unpublished prereleases, without running development build
+hooks. No source tree is copied into the active runtime.
+
 Contract version: 1. Package 0.31.1 is deployed on Mac60 as of 2026-10-23, including
 device-code clients for packaged Even WebViews and the existing PKCE contract.
 The approved `remoteagent-g2-even` client is enabled for S010 only. Other clients
