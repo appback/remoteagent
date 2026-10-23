@@ -1,9 +1,9 @@
 # Direct G2 Request API
 
-Contract version: 1. Package 0.31.0 adds explicit device-code clients for packaged
-Even WebViews; the PKCE contract remains supported. Package 0.30.0 was installed on Mac60
-on 2026-10-23. G2 API activation and OAuth grants still require a separate owner
-confirmation; the deployed runtime keeps G2 disabled. Installing this code does
+Contract version: 1. Package 0.31.1 is deployed on Mac60 as of 2026-10-23, including
+device-code clients for packaged Even WebViews and the existing PKCE contract.
+The approved `remoteagent-g2-even` client is enabled for S010 only. Other clients
+or target grants still require owner confirmation. Installing this code does
 not register a G2 client, change a tunnel, enable the API or restart a server.
 
 G2 sends text directly to RemoteAgent over HTTPS. Codex/Claude run on that
@@ -63,7 +63,7 @@ Tokens have a one-hour lifetime; the API rejects them during their last minute.
 G2 tokens cannot authorize dot MCP, host shell tools or Mac control tools. The
 existing ChatGPT token cannot authorize the G2 API.
 
-The initial supported client is a browser-based G2 plugin. Its HTTPS origin and
+An HTTPS browser-based G2 plugin uses an operator-approved origin and
 exact callback URL are operator-approved configuration, not wildcard or dynamic
 registration. Example pending confirmation: `https://g2.example.app` and
 `https://g2.example.app/oauth/callback`. This example domain is not provisioned.
@@ -312,9 +312,10 @@ Errors use `{"error":"FIXED_IDENTIFIER"}`. Common HTTP mappings:
 
 ## Operator activation after confirmation
 
-Before activation, confirm the actual G2 HTTPS origin/callback, the exact session
-and dot target allowlist, the G2 dot subscription, and a safe restart window.
-No production values have been added by the development work.
+Before activation, confirm the client flow, any required HTTPS origin/callback,
+the exact target allowlist, any required G2 dot subscription, and a safe restart
+window. The S010-only device client was separately activated during the 0.31.1
+recovery. Codex/Claude-only clients do not require a G2 dot subscription.
 
 1. After approval, initialize/read stable IDs without instantiating any live
    provider or mutating Telegram/dot state:
@@ -377,6 +378,34 @@ cursor resume; an explicit G2 dot request and result; request-specific cancel;
 ordinary Telegram messages. Verify the G2 task produces no unsolicited Telegram
 message. Production OAuth, real G2 hardware/browser behavior and cloud dot
 subscription acceptance require that separate activation test.
+
+### Mac60 recovery and activation record
+
+On 2026-10-23 the custom `0.30.1-g2.1` file-swap job failed because its launchd
+unload did not stop the live unmanaged process. The rollback started repeated
+duplicate attempts and their shell runner overwrote `remoteagent.pid` before
+acquiring the lock. The failed activation job/plist were disabled and archived.
+
+Runtime ownership/startup fixes and reviewed G2 device-flow support were released
+as npm 0.31.0. A missing protected G2 ingress route was then fixed on the existing
+tunnel and in the setup script; npm 0.31.1 adds a routing regression test and a
+public G2 authentication probe before accepting deployment. Final release commit:
+83b4746; tarball SHA-1: f6513ceeda3176c8c3cc847f5148e30c94bb3bc1.
+
+Final runtime: 0.31.1, PID 85564, one launchd-owned process. Repeated
+`remoteagent-start` calls preserve that PID. All 14 session IDs, shared secrets,
+OAuth identity, target key and non-G2 environment settings were preserved.
+Only `remoteagent-g2-even` / S010 is configured. External `/api/v1/targets`
+returns 401 without authentication; `/api/sessions` remains 404. Public device
+authorization metadata is present, and the existing authenticated dot connector
+still works. Backup: `/Users/appback/.remoteagent/backups/npm-0.31.1-20261023T193516`.
+
+The release passed 83 protocol/runtime/setup tests and real Chromium PKCE/device
+flows, plus existing Telegram/dispatch/upload regressions. Four runtime ownership
+tests also passed on the installed Mac package. Actual G2 hardware login still
+requires the owner's approval; no production owner approval or token was fabricated.
+The old status file now records `phase=activated`, `deploymentMethod=npm`, version
+0.31.1 and `hardwareLogin=pending_owner_action`.
 
 ### Local verification record
 

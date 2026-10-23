@@ -2,6 +2,22 @@
 
 This runbook is command-first. Use the scripts below as the release interface.
 
+### Verified 0.31.1 Mac60 Recovery
+
+The 2026-10-23 S010 activation incident was recovered using npm, not the staged
+`activate.mjs` directory swap. Release c7731ed / 0.31.0 fixed lock/PID publication,
+LaunchAgent-aware start/stop and explicitly approved G2 device clients. Release
+83b4746 / 0.31.1 fixed protected G2 tunnel paths and added a public authentication
+probe to deployment. Both went through `npm run release:publish`; registry
+processing completed on checks 12 and 13 respectively, with no duplicate upload.
+
+The approved S010 client was applied with the command in section 5. The final
+update used `npm run release:deploy -- 0.31.1 60`, preserving that configuration.
+Final PID 85564 is launchd-owned; repeated start calls do not create another
+process. Backup, preserved-data checks and hardware-login limitations are recorded
+in G2_API.md's Mac60 recovery record. Its old automatic activation job is archived,
+not re-enabled by the npm deployment.
+
 ### Verified 0.30.0 Mac60 Release
 
 On 2026-10-23, release commit e27e00c was published with the existing
