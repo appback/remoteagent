@@ -1,5 +1,32 @@
 # Dot Telegram Bridge
 
+## Release 0.29.0 Record
+
+Published and deployed to Mac60 on 2026-10-23 from release commit 38e926b.
+npm latest=0.29.0, tarball SHA-1=8b0d46b9e653651b3340ca1094c19ce2e3edbf4f.
+The canonical publisher passed its isolated snapshot checks (including 55 combined
+bridge/host/OAuth/Mac/login tests, browser OAuth/login-form gates and Telegram
+regressions). Registry visibility was confirmed on processing attempt 13; the
+package was not republished while pending.
+
+Deployment command:
+
+```bash
+ACTIVATE_MAC=1 npm run release:deploy -- 0.29.0 60
+```
+
+The installed npm package passed a real GUI screen-capture probe and native input
+permission checks before DOT_MAC_* was enabled. LaunchAgent restarted only
+RemoteAgent. All 13 existing session IDs and Secret Store contents were preserved;
+Cloudflare tunnel processes were not restarted. Backup:
+/Users/appback/.remoteagent/backups/npm-0.29.0-20261023T104027.
+
+Post-update existing ChatGPT connector dot_host_info succeeded against the real
+Mac, proving saved OAuth/host access survived. Protected MCP rejected unauthenticated
+requests with 401. New tool discovery may require the ChatGPT RemoteAgent 60
+connection's Refresh tools action; the deployment does not claim that a cached
+cloud dot conversation has already invoked the new Mac/AutoFill tools.
+
 ## Readiness and setup ownership
 
 The bridge now includes a managed OAuth authorization server using
