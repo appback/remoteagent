@@ -246,10 +246,9 @@ REMOTE
 }
 
 deploy_60() {
-  local HOST_ROOTS_B64 WEBATON_CONFIG_B64
+  local HOST_ROOTS_B64
   HOST_ROOTS_B64="$(node -e 'process.stdout.write(Buffer.from(process.env.DOT_HOST_ROOTS || "").toString("base64"))')"
-  WEBATON_CONFIG_B64="$(node -e 'if(process.env.DOT_WEBATON_TOKEN_FILE)process.stdout.write(Buffer.from(JSON.stringify({url:process.env.DOT_WEBATON_URL||"http://127.0.0.1:4380",tokenFile:process.env.DOT_WEBATON_TOKEN_FILE})).toString("base64"))')"
-  ssh appback@192.168.33.60 "VERSION=$VERSION ALLOW_STALE_RUNNING=${ALLOW_STALE_RUNNING:-0} ACTIVATE_JEV=${ACTIVATE_JEV:-0} HOST_ROOTS_B64=$HOST_ROOTS_B64 WEBATON_CONFIG_B64=$WEBATON_CONFIG_B64 bash -s" <<'REMOTE'
+  ssh appback@192.168.33.60 "VERSION=$VERSION ALLOW_STALE_RUNNING=${ALLOW_STALE_RUNNING:-0} ACTIVATE_JEV=${ACTIVATE_JEV:-0} ACTIVATE_MAC=${ACTIVATE_MAC:-0} HOST_ROOTS_B64=$HOST_ROOTS_B64 bash -s" <<'REMOTE'
 set -euo pipefail
 export PATH="$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export DATA_DIR="$HOME/.remoteagent"
@@ -262,14 +261,11 @@ node --input-type=module <<'NODE'
 import fs from 'node:fs';
 import {execFileSync} from 'node:child_process';
 const d=process.env.DATA_DIR;
-if(process.env.WEBATON_CONFIG_B64){
- const c=JSON.parse(Buffer.from(process.env.WEBATON_CONFIG_B64,'base64').toString('utf8')),u=new URL(c.url);
- const st=fs.statSync(c.tokenFile);
- if(u.protocol!=='http:'||u.hostname!=='127.0.0.1'||u.pathname!=='/'||u.search||u.hash||u.username||u.password
-  ||!c.tokenFile.startsWith('/')||/[\r\n\0']/.test(c.tokenFile)||!st.isFile()||(st.mode&0o077)!==0||st.uid!==process.getuid())throw Error('Invalid private Webaton configuration');
- if(!/^[a-f0-9]{64}$/i.test(fs.readFileSync(c.tokenFile,'utf8').trim()))throw Error('Invalid Webaton agent token format');
- const health=await fetch(u.origin+'/health',{redirect:'error',signal:AbortSignal.timeout(3000)});
- if(!health.ok)throw Error('Webaton is unavailable; do not restart RemoteAgent');
+if(process.env.ACTIVATE_MAC==='1'){
+ const binary=process.env.HOME+'/.local/bin/peekaboo';
+ fs.accessSync(binary,fs.constants.X_OK);
+ const version=execFileSync(binary,['--version'],{encoding:'utf8',timeout:10000});
+ if(!version.startsWith('Peekaboo 4.9.6 '))throw Error('Install the tested Peekaboo 4.9.6 input backend before deployment');
 }
 if(process.env.HOST_ROOTS_B64){
  const roots=JSON.parse(Buffer.from(process.env.HOST_ROOTS_B64,'base64').toString('utf8'));
@@ -279,15 +275,20 @@ const dotPath=d+'/dot/bridge.json';
 if(fs.existsSync(dotPath)&&JSON.parse(fs.readFileSync(dotPath,'utf8')).messages.some(m=>['pending','sending','accepted'].includes(m.status)))throw Error('Dot requests are active; finish cloud work before deployment');
 const hostPath=d+'/dot/host-jobs.json';
 if(fs.existsSync(hostPath)&&JSON.parse(fs.readFileSync(hostPath,'utf8')).some(j=>j.status==='running'))throw Error('Dot host jobs are active; inspect before deployment');
-const webPath=d+'/dot/webaton.json';
-if(fs.existsSync(webPath)&&JSON.parse(fs.readFileSync(webPath,'utf8')).bindings.some(j=>!j.closed))throw Error('Dot Webaton jobs are active; inspect before deployment');
 const pid=Number(fs.readFileSync(d+'/remoteagent.pid','utf8').trim());
 const command=execFileSync('/bin/ps',['-p',String(pid),'-o','args='],{encoding:'utf8'});
 if(!command.includes(process.env.ROOT+'/dist/index.js'))throw Error('Runtime PID does not match the expected npm installation');
 const rows=execFileSync('/bin/ps',['-axo','pid,ppid,comm'],{encoding:'utf8'}).trim().split('\n').slice(1).map(l=>{const m=l.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/);return m&&{pid:+m[1],ppid:+m[2],comm:m[3]};}).filter(Boolean);
 if(!rows.some(r=>r.pid===pid))throw Error('Runtime PID is not live; inspect service before deployment');
 const ids=new Set([pid]);for(let i=0;i<rows.length;i++)for(const r of rows)if(ids.has(r.ppid))ids.add(r.pid);
-const work=rows.filter(r=>r.pid!==pid&&ids.has(r.pid)&&!/(^|\/)curl$/.test(r.comm));
+const macOps=d+'/dot/mac-operations.json';
+if(fs.existsSync(macOps)&&JSON.parse(fs.readFileSync(macOps,'utf8')).some(o=>o.status==='sending'))throw Error('Mac UI input is active; finish work before deployment');
+const isIdleMacTransport=r=>{
+ if(r.ppid!==pid||!r.comm.endsWith('/peekaboo'))return false;
+ const args=execFileSync('/bin/ps',['-p',String(r.pid),'-o','args='],{encoding:'utf8'}).trim();
+ return args.startsWith(process.env.HOME+'/.local/bin/peekaboo mcp serve')||args.startsWith(process.env.HOME+'/.local/lib/node_modules/@steipete/peekaboo/peekaboo mcp serve');
+};
+const work=rows.filter(r=>r.pid!==pid&&ids.has(r.pid)&&!/(^|\/)curl$/.test(r.comm)&&!isIdleMacTransport(r));
 if(work.length)throw Error('Runtime has non-transport children; finish work before deployment');
 const polling=JSON.parse(fs.readFileSync(d+'/bot-polling-state.json','utf8'));
 if(Object.values(polling.bots||{}).some(b=>b.runningSessionIds?.length)&&process.env.ALLOW_STALE_RUNNING!=='1')throw Error('Running state present. Inspect first; override only confirmed stale metadata with ALLOW_STALE_RUNNING=1');
@@ -331,16 +332,27 @@ node --input-type=module <<'NODE'
 import fs from 'node:fs';
 import {execFileSync} from 'node:child_process';
 const home=process.env.HOME,d=process.env.DATA_DIR,root=process.env.ROOT;
-if(process.env.WEBATON_CONFIG_B64){
- const c=JSON.parse(Buffer.from(process.env.WEBATON_CONFIG_B64,'base64').toString('utf8'));
- const {DotWebatonService}=await import(root+'/dist/services/dot-webaton-service.js');
- new DotWebatonService(d,c.url,c.tokenFile);
+if(process.env.ACTIVATE_MAC==='1'){
+ const {DotMacService}=await import(root+'/dist/services/dot-mac-service.js');
+ const {DotMacScreenService}=await import(root+'/dist/services/dot-mac-screen-service.js');
+ const os=await import('node:os'),path=await import('node:path');
+ const probeDir=fs.mkdtempSync(path.join(os.tmpdir(),'remoteagent-mac-deploy-'));
+ const binary=home+'/.local/bin/peekaboo',socket=home+'/Library/Application Support/Peekaboo/daemon.sock';
+ const probe=new DotMacService(probeDir,binary,socket,true,[],new DotMacScreenService());
+ try{
+  const tools=await probe.definitions();
+  for(const name of ['dot_mac_image','dot_mac_click','dot_mac_autofill','dot_mac_login'])if(!tools.some(t=>t.name===name))throw Error('Native Mac tool missing: '+name);
+  const image=await probe.call('dot_mac_image',{requestId:'deployment-probe'});
+  if(image.isError||!image.content.some(c=>c.type==='image'))throw Error('Native GUI capture failed');
+  const status=JSON.parse((await probe.call('dot_mac_status',{requestId:'deployment-probe'})).content[0].text);
+  if(!status.ready)throw Error('Native Mac backend permissions are not ready');
+ }finally{await probe.close();fs.rmSync(probeDir,{recursive:true,force:true});}
  const envFile=d+'/.env';let text=fs.readFileSync(envFile,'utf8');
- for(const [key,value] of [['DOT_WEBATON_ENABLED','true'],['DOT_WEBATON_URL',new URL(c.url).origin],['DOT_WEBATON_TOKEN_FILE',"'"+c.tokenFile+"'"]]){
-  const pattern=new RegExp('^'+key+'=.*$','m');
-  text=pattern.test(text)?text.replace(pattern,()=>key+'='+value):text+'\n'+key+'='+value+'\n';
+ for(const [key,value] of [['DOT_MAC_ENABLED','true'],['DOT_MAC_BINARY',binary],['DOT_MAC_BRIDGE_SOCKET',"'"+socket+"'"],['DOT_MAC_FOREGROUND','true'],['DOT_MAC_SCREEN_BACKEND','native']]){
+  const pattern=new RegExp('^'+key+'=.*$','m');text=pattern.test(text)?text.replace(pattern,()=>key+'='+value):text+'\n'+key+'='+value+'\n';
  }
- fs.writeFileSync(envFile,text,{mode:0o600});console.log('Dot Webaton adapter enabled; existing Webaton service unchanged.');
+ fs.writeFileSync(envFile,text,{mode:0o600});
+ console.log('Direct Mac tools enabled; real GUI capture and native input permissions verified.');
 }
 if(process.env.HOST_ROOTS_B64){
  const roots=JSON.parse(Buffer.from(process.env.HOST_ROOTS_B64,'base64').toString('utf8'));

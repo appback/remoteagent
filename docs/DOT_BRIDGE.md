@@ -42,93 +42,215 @@ Implementation checklist:
 The first version handles text only. Attachments are explicitly rejected on a
 dot-bound chat, rather than forwarding inaccessible local file paths to dot.
 
-## Existing Webaton Browser Tools
+## Direct Safari And Mac Desktop Control
 
-The optional Webaton adapter reuses an existing, authenticated loopback Webaton
-installation supporting `mode: external` and `/api/browser/:id/observe|action|finish|resume`.
-Dot selects browser actions itself; the adapter never starts a Gemini/Codex AI job.
-It does not install another browser engine or modify Webaton's existing service.
-An old Webaton release exposing only AI jobs is not sufficient.
+Dot controls this Mac directly; the Webaton adapter and its tools/configuration
+have been removed from RemoteAgent. A separate Webaton checkout, its data and its
+unrelated running services are not deleted by this change.
 
-```dotenv
-DOT_WEBATON_ENABLED=true
-DOT_WEBATON_URL=http://127.0.0.1:4380
-DOT_WEBATON_TOKEN_FILE=/absolute/path/to/webaton/.data/mcp-token
-```
+Capture uses the existing approved Node executable in the user's GUI session.
+A uniquely labelled, one-shot launchd job runs Apple's screencapture into a private
+temporary directory, resizes the result to at most 1500 pixels, and returns an MCP
+image block. The job and temporary files are removed afterward. No fixed shared
+screenshot file or additional capture-app window is required. The existing
+RemoteAgent Screen Access app is not modified or replaced.
 
-For Mac 60, the running Webaton checkout was verified at
-`/Users/appback/workspaces/remoteagent/me6bwtlg`, with its agent token at
-`/Users/appback/workspaces/remoteagent/me6bwtlg/.data/mcp-token`. Set
-`DOT_WEBATON_TOKEN_FILE` to that path when invoking the existing
-`npm run release:deploy -- <published-version> 60` command. The deploy script checks
-the private file and Webaton health before stopping RemoteAgent, backs up `.env`,
-and enables the adapter without restarting Webaton. `DOT_WEBATON_URL` defaults to
-the verified `http://127.0.0.1:4380`. Omit the token-file deploy option on later
-updates to preserve the existing setting.
+Input/app/window control uses the pinned native Peekaboo 4.9.6 engine through the
+official MCP SDK's private stdio transport. Dot reasons directly: no secondary
+agent, vision LLM, API key or Webaton service is involved.
 
-The token file must belong to the runtime OS user and have mode 600. Its contents
-are read locally for each call (so Webaton token rotation works), never copied
-into the public MCP response, another LLM or a browser URL. Only the fixed
-loopback API is used; the Webaton UI, credentials and debugging ports stay private.
-Missing configuration disables these tools without disabling the text/host bridge.
-
-Tools, all protected by existing owner OAuth and a Telegram request ID:
-
-- `dot_webaton_accounts`: saved account IDs, names and modes; no credentials.
-- `dot_webaton_begin`: create an external browser task with a unique operation ID.
-- `dot_webaton_job`: status and downloads for this request's job only.
-- `dot_webaton_observe`: structured page observation, not a desktop screenshot.
-- `dot_webaton_act`: one navigate/click/fill/download action, with an operation ID.
-- `dot_webaton_resume`: resume after the user authenticates in Webaton; no OTP argument.
-- `dot_webaton_finish`: close after observing the requested result.
-- `dot_webaton_cancel`: cancel this request's browser task without undoing prior actions.
-- `dot_webaton_forget`: free terminal job records after reviewing the results.
-
-Observe before choosing selectors. Authentication pages and sensitive fields stay
-protected by Webaton; do not ask users to send passwords or OTP through Telegram.
-Allowed site origins are those already registered in Webaton. Add accounts/sites
-through Webaton's onboarding, not through a general public HTTP proxy.
-
-Mutating operations record intent before delivery and deduplicate identical retry
-IDs. Network ambiguity or a restart never automatically repeats a click or job
-start. Inspect the browser/job and cancel if necessary. A canceled Telegram request
-cannot start new browser actions. `/stop` also requests cancellation of its mapped
-Webaton tasks; failures are logged rather than canceling unrelated jobs. Active
-browser tasks must be finished/canceled before `dot_report(kind: result)`.
-
-Adapter history is bounded to 128 bindings and 512 operations, with at most 32 KiB
-cached per mutation result; page observations are not retained. Forget reviewed
-terminal jobs to free records; never retry removed operation IDs. Webaton's own
-external-task timeout and browser locking remain unchanged. There is no additional
-polling scheduler or LLM in this adapter.
-
-Validation:
+Install the native input engine:
 
 ```bash
-npm run selftest:dot-webaton
-WEBATON_SERVER_MODULE=file:///absolute/path/to/webaton/src/server.js \
-  node scripts/selftest-dot-webaton-live.mjs
+node "$(npm root -g)/appback-remoteagent/scripts/install-mac-control.mjs"
 ```
 
-The live test creates a private temporary profile, synthetic account and local
-test site, uses real Chromium, and removes its own fixtures. It does not change
-the running Webaton service or use production accounts. Refresh the ChatGPT
-RemoteAgent MCP tool catalogue after deploying/enabling new tools. Existing dot
-conversations may need a fresh tool context; server deployment alone is not proof
-that the dot client can invoke the new tools. These tools control Webaton's
-Chromium, not Safari or the entire Mac desktop.
+Mac60 configuration:
 
-Validation record (2026-10-22): 48 combined dot/owner-OAuth/setup/host/Webaton
-tests and the Telegram injection regression passed. On Mac 60, the isolated live
-test passed real Chromium observation, fill, click, changed-heading verification,
-Chrome DevTools MCP navigation, download with file-content verification and final
-job status `completed`. It used the existing Webaton checkout at commit `9c3ccf8`
-on `feat/remoteagent-backend`. The already-running Webaton listener remained PID
-51764 on port 4380 and stayed healthy. This validates the adapter and executor;
-deployment, client tool refresh and a real dot-driven browser test are separate
-acceptance steps and are not claimed by the isolated test.
+```dotenv
+DOT_MAC_ENABLED=true
+DOT_MAC_BINARY=/Users/appback/.local/bin/peekaboo
+DOT_MAC_BRIDGE_SOCKET='/Users/appback/Library/Application Support/Peekaboo/daemon.sock'
+DOT_MAC_FOREGROUND=true
+DOT_MAC_SCREEN_BACKEND=native
+```
+
+Publish/deploy the committed release through the canonical npm scripts. To enable
+the tested direct Mac adapter on Mac60 during a release (version is an example):
+
+```bash
+npm run release:version -- minor
+# Commit and push the release files before release:publish.
+npm run release:publish
+ACTIVATE_MAC=1 npm run release:deploy -- 0.29.0 60
+```
+
+The deploy script preserves the current data directory and backs up configuration.
+It refuses active provider/dot/host/Mac input work, installs that exact npm version,
+then checks the new native tools, a real GUI screenshot and input permissions before
+enabling DOT_MAC_* and starting the runtime. Failure restores the previous package
+and configuration. ACTIVATE_MAC omitted preserves existing feature configuration.
+An idle owned Peekaboo MCP transport is not mistaken for active provider work.
+
+Use dot_mac_status, then dot_mac_image to verify capture. Peekaboo's separate
+Screen Recording flag does not describe Node's screen permission. Native readiness
+becomes true after a real Node capture and a successful native input permission
+check. If the actual capture fails, report the exact unavailable GUI/Node identity;
+do not ask for a new Peekaboo screen grant when Node capture already works.
+macOS consent is never granted or bypassed by the harness.
+
+Tools: dot_mac_status, dot_mac_image, dot_mac_app, dot_mac_window,
+dot_mac_click, dot_mac_type, dot_mac_press, dot_mac_scroll, dot_mac_forget.
+Native capture mode omits dot_mac_see because it would depend on a different
+screen permission. Use fresh desktop pixels and native window bounds; resized
+image pixels and display-point input coordinates are not interchangeable.
+
+All calls require owner OAuth and the originating Telegram request ID. Mutations
+also require operationId, with durable deduplication and a 256-receipt bound.
+A dispatched_unverified native receipt is delivery, not verified success; inspect
+the screen before the next action and never blindly resend input. Interruptions
+remain unknown and are never automatically replayed. /stop blocks further input;
+it does not undo clicks or quit other applications. Screenshots are not retained
+in operation history. The backend is opt-in and creates no periodic LLM work.
+
+Verification:
+
+```bash
+npm run selftest:dot-mac
+MAC_TEST_IMAGE_OUTPUT=/private/tmp/remoteagent-direct-proof.png \
+  node scripts/selftest-dot-mac-direct-live.mjs
+```
+
+2026-10-23 validation: 46 bridge/host/OAuth/native-Mac tests and the Telegram update
+regression passed. Ten native-Mac protocol tests use explicit fixtures, not real
+desktop evidence. Actual Mac60 verification: native GUI Node capture returned real desktop
+pixels without a new permission grant. In an isolated local Safari page, keyboard
+navigation changed the visible heading to KEYBOARD VERIFIED; an observed-coordinate
+mouse click changed it to CLICK VERIFIED. Both screenshots were visually inspected.
+Dispatch receipts alone were not accepted as this proof. Existing production
+RemoteAgent, the Cloudflare tunnel and unrelated applications were not restarted.
+The new adapter is not yet npm-published or enabled in production.
+
+Primary native engine contracts:
+- https://peekaboo.sh/MCP.html
+- https://peekaboo.sh/permissions.html
+
+### Representative Task Acceptance (2026-10-23, Mac60)
+
+These tasks exercised the compiled adapter on the actual Mac in an isolated
+directory, not a simulated desktop or the developer's Windows browser:
+
+| Task | Actual observed evidence | Result |
+| --- | --- | --- |
+| Read code | Installed dot-host-service.js read through DotHostService and opened visibly in TextEdit | Passed |
+| Preserve code | SHA-256 before/after: 0a2d366a7a78adabd80c69cdad6037c28320d0ada01def19708d3348773988b6 | Unchanged |
+| Browse and click | Safari example.com, click Learn more, observe iana.org Example Domains | Passed |
+| Cloudflare | Existing login, appback.app overview, DNS Records; 35/200 record usage and actual rows visible | Passed, read-only |
+| Product search | Google query Apple Magic Mouse USB-C Apple Korea, visible results, click Apple's white Mouse result | Passed |
+| Explain product | Apple page shows Magic Mouse USB-C, white Multi-Touch surface, KRW 99,000, rechargeable wireless use, gestures and USB-C cable | Passed |
+| Leave page open | Returned product page to top and left it as Safari's active tab; no cart/purchase action | Passed |
+| MCP HTTP | Unauthorized request rejected; owner-bound code read and actual screenshot returned as an MCP image; no Webaton tools | Passed |
+
+Proof screenshots are diagnostic files named ra-acceptance-*.png in the developer's
+Windows Temp directory, not committed or publicly uploaded. Cloudflare was
+inspected, not reconfigured or fully audited. The price is an observation of the
+test page, not a future price guarantee. Code and DNS/service settings were not
+changed by these task checks.
+
+Reproduce isolated MCP acceptance on the Mac after building:
+
+```bash
+node scripts/selftest-dot-mac-mcp-live.mjs
+```
+
+This test uses a local test-owner authenticator and isolated bridge, not production
+dot or Telegram. Owner OAuth has separate real-library regression coverage. The
+cloud dot client's discovery, invocation and Telegram round-trip for the new tools
+still require deployment and connection refresh; local acceptance is not proof of
+that production round-trip.
 
 ## Direct Host Execution Configuration
+
+### Login And Password Managers
+
+Reuse the existing signed-in browser session first, then 1Password or Safari's
+existing AutoFill UI. Dot can operate that UI with native screen/input tools; it
+does not export a vault, retrieve a manager's master password or copy entries into
+RemoteAgent. Manager unlock, Touch ID, passkey user-presence and OTP require the
+owner. An installed application is not proof of an unlocked/configured vault.
+Mac60 has Apple's Passwords app; no 1Password app/CLI was found during inspection.
+
+Tools:
+- dot_mac_autofill: use existing Apple Passwords directly. With action=safari,
+  observe the login page and pass coords for its visible login field/key icon in
+  native display points; Safari itself offers matching saved accounts. With
+  action=passwords, open the existing macOS Passwords app for owner management.
+  No password export, new credential store or JavaScript-from-Apple-Events setting
+  is required for this native AutoFill UI path. Do not use contact/card AutoFill.
+- dot_mac_login_status: manager presence and preferred UI workflow, no credentials.
+- dot_mac_login_profiles: explicitly registered fallback aliases/URLs/permission.
+- dot_mac_login: private fallback fill/optional submit by profileId, operationId
+  and submit boolean. No password/username tool arguments are accepted.
+
+When existing manager AutoFill cannot be used, an owner may register a fallback
+through the existing /secret command (replace placeholders privately):
+
+```text
+/secret set SITE_LOGIN_EXAMPLE {"url":"https://example.com/login","username":"ACCOUNT","password":"PASSWORD","allowAutoLogin":true}
+```
+
+The alias is example. Set allowAutoLogin=false to retain it without permitting
+automatic fill. Delete with /secret remove SITE_LOGIN_EXAMPLE. This is server-wide
+Secret Store data, not session workspace data. Do not put these values in prompts,
+git, command arguments or documents. An alternative local registration command is:
+
+```bash
+node "$(npm root -g)/appback-remoteagent/scripts/site-login.mjs" save example < /private/path/profile.json
+node "$(npm root -g)/appback-remoteagent/scripts/site-login.mjs" list
+```
+
+The private input file uses the same four JSON fields; protect it with mode 600
+and remove it after registration. The existing Secret Store is an OS-permission-
+protected JSON file (mode 600), NOT a new encrypted/1Password-equivalent vault.
+This change does not claim to protect it from the same OS account or root.
+
+Fallback requires the current Safari HTTPS origin AND path to match the saved
+login page. It fills only a single visible username/password pair within one
+same-origin POST form. Other origins, redirects, GET forms, ambiguous fields,
+iframes, unsupported split-step login pages and disabled profiles are refused.
+Safari Automation and JavaScript-from-Apple-Events permission must already allow
+the private injection; the harness never enables those settings or bypasses an
+OS prompt. Credentials travel to osascript via stdin, never argv, tool results or
+native stderr. Input events support reactive forms. submit defaults to false;
+true uses the form's requestSubmit. A submitted form is explicitly unverified
+authentication and requires observation. Durable operation receipts prevent
+duplicate login submission; unknown outcomes are never automatically replayed.
+
+Verification:
+
+```bash
+npm run selftest:dot-login
+PLAYWRIGHT_PACKAGE=/absolute/path/to/playwright/index.mjs \
+  PLAYWRIGHT_EXECUTABLE=/absolute/path/to/chromium \
+  node scripts/selftest-dot-login-browser.mjs
+```
+
+Browser verification uses synthetic credentials and intercepted HTTPS responses,
+not real user accounts or an unlocked 1Password vault. Production Safari login
+and manager account selection require an owner-provided saved login and available
+OS/browser authorization; do not claim those authenticated flows from fixture tests.
+Validation: 52 combined bridge/host/OAuth/native/login tests and the synthetic
+browser DOM fill/POST test passed. No real vault/password entry was opened.
+
+Native Apple Passwords update (2026-10-23): 55 combined tests passed. On actual
+Mac60, Safari's HTTPS GitHub login page displayed a saved matching account; invoking
+dot_mac_autofill at the observed key-icon target opened the native account chooser.
+The chooser, not a login result, was visually verified. No account was selected,
+password revealed/exported, credential copied into Secret Store or form submitted.
+The menu-based prototype was replaced by the observed field/key-icon path because
+Safari's AutoFill submenu state varies with focus and lazy accessibility menus.
+An unlocked vault or successful authenticated login is not inferred from the
+chooser. Actual macOS authentication requirements remain unchanged.
 
 Dot can execute commands and read/edit files directly through RemoteAgent without
 delegating to Codex or Claude. This is a separate, explicit owner opt-in; installing

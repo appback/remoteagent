@@ -16,7 +16,7 @@ import { LocalUiService } from "./services/local-ui-service.js";
 import { DotBridgeService } from "./services/dot-bridge-service.js";
 import { DotMcpService, createDotAuthenticator } from "./services/dot-mcp-service.js";
 import { DotHostService } from "./services/dot-host-service.js";
-import { DotWebatonService } from "./services/dot-webaton-service.js";
+import type { DotMacService } from "./services/dot-mac-service.js";
 import { createDotWebhookPost } from "./services/dot-webhook.js";
 import { AgentMemoryService } from "./services/agent-memory-service.js";
 import { WorkspaceCleanupService } from "./services/workspace-cleanup-service.js";
@@ -136,17 +136,21 @@ async function main(): Promise<void> {
         try { host = new DotHostService(config.dataDir, JSON.parse(process.env.DOT_HOST_ROOTS ?? "[]") as string[]); }
         catch { console.error("Dot host execution disabled: check DOT_HOST_ROOTS (existing absolute directories, JSON array)."); }
       }
-      let webaton: DotWebatonService | undefined;
-      if (process.env.DOT_WEBATON_ENABLED === "true") {
-        try { webaton = new DotWebatonService(config.dataDir, process.env.DOT_WEBATON_URL ?? "http://127.0.0.1:4380", required("DOT_WEBATON_TOKEN_FILE")); }
-        catch { console.error("Dot Webaton tools disabled: check the private token file and loopback URL configuration."); }
+      let mac: DotMacService | undefined;
+      if (process.env.DOT_MAC_ENABLED === "true" && process.platform === "darwin") {
+        try {
+          const screen = process.env.DOT_MAC_SCREEN_BACKEND === "native"
+            ? new (await import("./services/dot-mac-screen-service.js")).DotMacScreenService() : undefined;
+          mac = new (await import("./services/dot-mac-service.js")).DotMacService(config.dataDir, required("DOT_MAC_BINARY"), process.env.DOT_MAC_BRIDGE_SOCKET?.trim() || undefined, process.env.DOT_MAC_FOREGROUND === "true", [], screen);
+        }
+        catch { console.error("Dot Mac tools disabled: check Peekaboo binary and private operation storage."); }
       }
-      if (host || webaton) candidate.setHostCancellation(requestId => {
+      if (host || mac) candidate.setHostCancellation(requestId => {
         host?.cancelRequest(requestId);
-        void webaton?.cancelRequest(requestId).catch(() => console.error("Webaton cancellation not confirmed; inspect the browser job before further actions."));
+        mac?.cancelRequest(requestId);
       });
-      const mcp = new DotMcpService(candidate, "127.0.0.1", config.dotPort, oauth, authenticate, auth?.handle.bind(auth), host, webaton);
-      try { await mcp.start(); } catch (error) { host?.close(); throw error; }
+      const mcp = new DotMcpService(candidate, "127.0.0.1", config.dotPort, oauth, authenticate, auth?.handle.bind(auth), host, mac);
+      try { await mcp.start(); } catch (error) { host?.close(); await mac?.close(); throw error; }
       candidate.start();
       dot = candidate;
       console.log(`Dot MCP bridge listening on 127.0.0.1:${config.dotPort}; real dot linking must be verified separately.`);

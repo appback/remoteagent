@@ -74,11 +74,13 @@ npm run build
 npm run selftest:provider-install
 node --test scripts/selftest-dot.mjs
 node --test scripts/selftest-dot-host.mjs
-node --test scripts/selftest-dot-webaton.mjs
+node --test scripts/selftest-dot-mac.mjs
+node --test scripts/selftest-dot-login.mjs
 node --test scripts/selftest-dot-owner-auth.mjs
 node --test scripts/selftest-dot-setup.mjs
 if [[ -n "${PLAYWRIGHT_PACKAGE:-}" ]]; then
   node scripts/selftest-dot-browser.mjs
+  node scripts/selftest-dot-login-browser.mjs
 else
   echo "Optional browser gate not configured; set PLAYWRIGHT_PACKAGE and PLAYWRIGHT_EXECUTABLE to run it."
 fi
