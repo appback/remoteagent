@@ -1,7 +1,8 @@
 # Direct G2 Request API
 
-Contract version: 1, package version 0.30.0. Implemented locally on 2026-10-23; production activation and
-OAuth grants require a separate owner confirmation. Installing this code does
+Contract version: 1, package version 0.30.0. Published to npm and installed on Mac60
+on 2026-10-23. G2 API activation and OAuth grants still require a separate owner
+confirmation; the deployed runtime keeps G2 disabled. Installing this code does
 not register a G2 client, change a tunnel, enable the API or restart a server.
 
 G2 sends text directly to RemoteAgent over HTTPS. Codex/Claude run on that
@@ -350,5 +351,6 @@ subscription acceptance require that separate activation test.
 On 2026-10-23 TypeScript build/check and 77 combined G2/bridge/host/Mac/login/OAuth/
 setup tests passed. G2's real Chromium OAuth/API test, the existing dot browser
 OAuth and login DOM tests, Telegram update injection and session-dispatch
-regressions passed. Production grants, runtime configuration, tunnel routing,
-service restarts and deployment were not changed.
+regressions passed. Development tests did not change production. After separate
+deployment authorization, npm 0.30.0 was installed on Mac60 with the existing
+configuration unchanged; G2 grants and API activation remain pending confirmation.

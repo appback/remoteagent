@@ -2,6 +2,19 @@
 
 This runbook is command-first. Use the scripts below as the release interface.
 
+### Verified 0.30.0 Mac60 Release
+
+On 2026-10-23, release commit e27e00c was published with the existing
+`~/.config/remoteagent/npm-token.env` credential (npm identity `appbackhub`) through
+`npm run release:publish`, including configured Playwright browser gates.
+The registry accepted the upload and exposed both 0.30.0 and latest on check 29;
+no republish, token replacement or extra version bump was needed.
+`npm run release:deploy -- 0.30.0 60` then installed the exact npm version after
+the active dot request finished. No activation flags or G2 permission changes
+were applied. Session/secret/config/OAuth preservation and the existing authenticated
+connector were verified. Backup and detailed results are in DOT_BRIDGE.md's
+0.30.0 release record.
+
 ## 1. Bump Version
 
 Patch release:

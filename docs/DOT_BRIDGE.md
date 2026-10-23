@@ -4,6 +4,26 @@ Direct G2 clients use the optional authenticated [G2 Request API](G2_API.md),
 not the unauthenticated local UI. Its grants and `g2.message.created` subscriptions
 are separate from the existing ChatGPT/Telegram flow and disabled by default.
 
+## Release 0.30.0 Record
+
+Published and deployed to Mac60 on 2026-10-23 from release commit e27e00c.
+npm latest=0.30.0, tarball SHA-1=ae917ee8f97e0f380eeb18bf52315cffbee6bf7e.
+The canonical publisher passed all snapshot gates, including 77 combined tests,
+G2/dot browser OAuth, login DOM, Telegram injection, dispatch and upload tests.
+Registry processing completed on verification attempt 29; no second upload or
+credential change was made. Deployment waited for the active dot request's actual
+final report, then ran `npm run release:deploy -- 0.30.0 60` without activation flags.
+
+Runtime PID: 52884. Backup:
+`/Users/appback/.remoteagent/backups/npm-0.30.0-20261023T150827`.
+All 13 session IDs, Secret Store hash, .env hash and OAuth identity hash were
+unchanged. Both existing Cloudflare tunnel PIDs were preserved. HTTPS resource
+metadata returned successfully, unauthenticated MCP returned 401, and the existing
+authenticated ChatGPT connection's dot_host_info succeeded after restart.
+G2 remained unconfigured/disabled (`/api/v1/targets` returned 404); no G2 callback,
+target allowlist or OAuth grant was installed. Telegram attachments are shipped,
+but a cloud dot attachment round trip is not claimed by these deployment checks.
+
 ## Release 0.29.0 Record
 
 Published and deployed to Mac60 on 2026-10-23 from release commit 38e926b.
