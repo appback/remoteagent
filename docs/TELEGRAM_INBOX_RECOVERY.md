@@ -62,3 +62,23 @@ node --test scripts/selftest-runtime-lock.mjs scripts/selftest-polling-subscript
 새로 만들지 않는다. 기존 버전에서 이미 확인 처리 후 버린 Telegram 메시지는
 Bot API로 과거 이력을 다시 받을 수 없다. 남은 로그·원문 첨부·세션 기록에서
 회수한 범위를 밝히고, 잘린 로그를 완전한 원문으로 꾸미지 않는다.
+
+## 2026-10-26 21 적용 결과
+
+- 릴리스 f38c0c4, npm 0.32.2 게시와 latest 일치 확인.
+- npm artifact SHA-1: 181bc62f28cabe661d28ecbfe4288677dbc19ac8.
+- 릴리스의 전체 검증 게이트 및 수신함/질문 9개 단위 시험 통과.
+- Telegram 주입 통합 시험에 오래된 날짜의 입력과 수동 batch 영속 receipt 검사 추가·통과.
+- 정상 종료 코드 0의 별도 Windows 시험 작업이 13:49:16, 13:50:17에
+  반복 실행됨을 확인하고 시험 작업을 제거했다. 실제 WSL 강제 종료 시험은 아니다.
+- 정식 `npm run release:deploy -- 0.32.2 21`로 설치, 기존 state와
+  Secret Store 비교 통과. S001 thread와 workspace 유지.
+- 백업: /home/au212/.remoteagent/backups/npm-0.32.2-20261026T134721.
+- 설치본 롤백 archive는 npm prepare가 없는 직접 tar 방식으로 수정,
+  배포 도구 보완 커밋 6c24ad0. 다음 배포에도 저장소의 정식 스크립트를 사용한다.
+- S001의 기존 thread에 복구 기록을 전달하고 답변까지 수신했다. 완전한
+  텍스트 지시가 공용 문서에 반영됐고 기존 ZIP 해시 불변을 보고받았다.
+- 4시안 제작은 후속 미완료 작업이다. 잘린 직업별 원문과 첨부 2건은 미복구다.
+- 복구 결과를 기존 Telegram 채팅에 전송, API message_id 177 확인.
+- WSL 자체가 종료된 근본 원인은 미확정이다. 이번 변경은 종료 후 자동
+  재기동과 신규 수신 유실 방지이며 OS 장애 자체의 완치를 주장하지 않는다.
