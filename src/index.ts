@@ -6,7 +6,8 @@ import { execFile, spawnSync } from "node:child_process";
 import { promisify } from "node:util";
 import { CodexAdapter } from "./adapters/codex-adapter.js";
 import { ClaudeAdapter } from "./adapters/claude-adapter.js";
-import { createBot } from "./bot.js";
+import { createBot, notifyInboxRecovery } from "./bot.js";
+import type { Update } from "grammy/types";
 import { ShellAdapter } from "./adapters/shell-adapter.js";
 import { config } from "./config.js";
 import { FileStore } from "./store/file-store.js";
@@ -28,6 +29,7 @@ import { createDotWebhookPost } from "./services/dot-webhook.js";
 import { AgentMemoryService } from "./services/agent-memory-service.js";
 import { WorkspaceCleanupService } from "./services/workspace-cleanup-service.js";
 import { BotPollingStateService } from "./services/bot-polling-state-service.js";
+import { telegramInbox } from "./services/telegram-inbox.js";
 import type { BotPollingState } from "./services/bot-polling-state-service.js";
 import { ProviderRecoveryService } from "./services/provider-recovery-service.js";
 import { computePolicyPollIntervalMs, computeRecentMessageRanks } from "./services/polling-policy.js";
@@ -411,7 +413,15 @@ async function pollTelegramBot(
 ): Promise<void> {
   const botId = String(pollingBot.botInfo.id);
   try {
-    const payload = await telegramPollingLimiter.run(() => getUpdatesViaCurl(pollingBot.token, runtime.offset));
+    const inbox = telegramInbox(config.dataDir, botId);
+    const saved = await inbox.snapshot();
+    const payload = await telegramPollingLimiter.run(() => getUpdatesViaCurl(pollingBot.token, saved.offset));
+    await inbox.accept(payload.result);
+    const durable = await inbox.snapshot();
+    for (const entry of durable.entries.filter(e => e.status === "needs_review" && !e.notified)) {
+      await notifyInboxRecovery(pollingBot.token, entry);
+      await inbox.notified(entry.id);
+    }
     if (runtime.consecutiveFailures > 0) {
       console.warn(`Telegram polling recovered for @${pollingBot.botInfo.username} after ${runtime.consecutiveFailures} failure(s).`);
       await writeTelegramTransportStatus(pollingBot.botInfo.username, {
@@ -426,25 +436,33 @@ async function pollTelegramBot(
     }
 
     const now = Date.now();
-    const orderedUpdates = orderUpdatesForDispatch(payload.result);
+    const orderedUpdates = orderUpdatesForDispatch(durable.entries.filter(e => e.status === "pending" && e.update).map(e => e.update!));
+    const dispatch = async (update: TelegramUpdate): Promise<void> => {
+      await inbox.transition(update.update_id, "dispatching");
+      void pollingBot.handleUpdates([update]).then(async () => {
+        if (!inbox.consumeDeferral(update.update_id)) await inbox.transition(update.update_id, "done");
+      }).catch(async error => {
+        console.error(`Telegram update ${update.update_id} interrupted for @${pollingBot.botInfo.username}:`, error);
+        await inbox.transition(update.update_id, "needs_review", "수신 처리 중 오류가 발생했습니다.").catch(() => undefined);
+      });
+    };
     if (orderedUpdates.length > 0) {
       const stopUpdates = orderedUpdates.filter((update) => isStopCommandUpdate(update));
       if (stopUpdates.length > 0) {
         for (const update of stopUpdates) {
-          await pollingBot.handleUpdates([update]).catch((error) => {
-            console.error(`Telegram stop update ${update.update_id} handler failed for @${pollingBot.botInfo.username}:`, error);
-          });
+          await dispatch(update);
         }
 
         const skipped = orderedUpdates.length - stopUpdates.length;
         if (skipped > 0) {
+          for (const update of orderedUpdates.filter(update => !isStopCommandUpdate(update))) {
+            await inbox.transition(update.update_id, "needs_review", "/stop과 함께 수신되어 실행하지 않았습니다.");
+          }
           console.log(`Skipped ${skipped} queued update(s) for @${pollingBot.botInfo.username} because /stop was received in the same polling batch.`);
         }
       } else {
         for (const update of orderedUpdates) {
-          void pollingBot.handleUpdates([update]).catch((error) => {
-            console.error(`Telegram update ${update.update_id} handler failed for @${pollingBot.botInfo.username}:`, error);
-          });
+          await dispatch(update);
         }
       }
       runtime.offset = orderedUpdates[orderedUpdates.length - 1]!.update_id + 1;
@@ -513,12 +531,7 @@ function hasMessagePayload(update: TelegramUpdate): boolean {
   return Boolean(message && !message.from?.is_bot);
 }
 
-type TelegramUpdate = {
-  update_id: number;
-  message?: { text?: string; from?: { is_bot?: boolean } };
-  edited_message?: { text?: string; from?: { is_bot?: boolean } };
-  channel_post?: { text?: string; from?: { is_bot?: boolean } };
-};
+type TelegramUpdate = Update;
 
 function orderUpdatesForDispatch(updates: TelegramUpdate[]): TelegramUpdate[] {
   return [...updates].sort((left, right) => {

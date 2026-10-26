@@ -96,6 +96,7 @@ else
   echo "Optional browser gate not configured; set PLAYWRIGHT_PACKAGE and PLAYWRIGHT_EXECUTABLE to run it."
 fi
 node scripts/selftest-telegram-update.mjs
+node --test scripts/selftest-telegram-inbox.mjs scripts/selftest-telegram-questions.mjs
 node scripts/selftest-session-dispatch.mjs
 node scripts/selftest-codex-stream.mjs
 node scripts/selftest-model-fallback.mjs

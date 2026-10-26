@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: npm run release:deploy -- <version> <30|40|26|50|60|110|all>" >&2
+  echo "Usage: npm run release:deploy -- <version> <21|30|40|26|50|60|110|all>" >&2
   echo "Example: npm run release:deploy -- 0.15.5 all" >&2
 }
 
@@ -20,7 +20,7 @@ if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 
 case "$TARGET" in
-  30|40|26|50|60|110|all)
+  21|30|40|26|50|60|110|all)
     ;;
   *)
     usage
@@ -34,6 +34,50 @@ if [[ "$REGISTRY_VERSION" != "$VERSION" ]]; then
   echo "Registry version check failed for $PACKAGE_NAME@$VERSION" >&2
   exit 1
 fi
+
+deploy_21() {
+  export PATH="$HOME/.nvm/versions/node/v22.22.2/bin:$PATH"
+  export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+  export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+  systemctl --user show-environment >/dev/null
+  VERSION="$VERSION" node --input-type=module - <<'NODE'
+import fs from 'node:fs';
+const d=process.env.HOME+'/.remoteagent';
+const p=JSON.parse(fs.readFileSync(d+'/bot-polling-state.json','utf8'));
+if(Object.values(p.bots??{}).some(b=>b.runningSessionIds?.length))throw Error('Active provider work; deployment aborted');
+NODE
+  local backup="$HOME/.remoteagent/backups/npm-$VERSION-$(date +%Y%m%dT%H%M%S)"
+  mkdir -m 700 -p "$backup"
+  for file in .env state.json managed/secrets.json; do
+    if [[ -f "$HOME/.remoteagent/$file" ]]; then
+      mkdir -p "$backup/$(dirname "$file")"
+      cp -p "$HOME/.remoteagent/$file" "$backup/$file"
+    fi
+  done
+  local old_root
+  old_root="$(npm root -g)/appback-remoteagent"
+  (cd "$backup" && npm pack "$old_root" --ignore-scripts --silent)
+  local old_package
+  old_package="$(find "$backup" -maxdepth 1 -name '*.tgz' -print -quit)"
+  systemctl --user stop remoteagent
+  if ! npm install -g "appback-remoteagent@$VERSION"; then
+    npm install -g "$old_package" --ignore-scripts
+    systemctl --user start remoteagent
+    return 1
+  fi
+  remoteagent-install
+  systemctl --user start remoteagent
+  sleep 5
+  if ! systemctl --user is-active --quiet remoteagent; then
+    npm install -g "$old_package" --ignore-scripts
+    systemctl --user start remoteagent
+    return 1
+  fi
+  cmp "$backup/state.json" "$HOME/.remoteagent/state.json"
+  if [[ -f "$backup/managed/secrets.json" ]]; then cmp "$backup/managed/secrets.json" "$HOME/.remoteagent/managed/secrets.json"; fi
+  node -p 'require(process.env.HOME+"/.nvm/versions/node/v22.22.2/lib/node_modules/appback-remoteagent/package.json").version'
+  echo "Backup: $backup"
+}
 
 deploy_30() {
   ssh au2223@192.168.33.30 "VERSION=$VERSION bash -s" <<'REMOTE'
@@ -504,6 +548,9 @@ REMOTE
 }
 
 case "$TARGET" in
+  21)
+    deploy_21
+    ;;
   30)
     deploy_30
     ;;

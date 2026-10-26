@@ -23,6 +23,8 @@ import { PeerService, PEER_PREFIX } from "./services/peer-service.js";
 import { JevReviewGuard, JEV_REPORT_GUIDE, reviewRetryPrompt, reviewContinuePrompt, reviewUnavailableNotice } from "./services/jev-review.js";
 import { RemoteShellService } from "./services/remote-shell-service.js";
 import { AgentMemoryService } from "./services/agent-memory-service.js";
+import { parseAgentQuestion, telegramQuestions, type AgentQuestion } from "./services/telegram-questions.js";
+import { telegramInbox, type InboxEntry } from "./services/telegram-inbox.js";
 import { WorkspaceCleanupService } from "./services/workspace-cleanup-service.js";
 import { exportSecrets } from "./services/secret-transfer-service.js";
 import { deleteTelegramCommandMenu, setTelegramCommandMenu } from "./telegram-command-menu.js";
@@ -92,6 +94,7 @@ const REPORT_PROTOCOL_PROMPT = [
   "Use REPORT:progress only after you completed a real chunk of work and will continue automatically.",
   "Use REPORT:result only when the requested work for this turn is actually finished.",
   "Use REPORT:blocked only when you cannot continue without user input or an external fix.",
+  'For a user decision with choices, use REPORT:blocked and a single JSON line: TELEGRAM_QUESTION: {"question":"Your question","options":["Choice A","Choice B"]}. Use 2-5 options, each at most 80 characters. RemoteAgent adds an Other/free-text button. Do not use this for informational lists or ask again when the user already answered in free text.',
   "If you are waiting on sudo, login, permission changes, API keys, SSH access, or any manual user/admin step, you must use REPORT:blocked.",
   "Do not say 'I will continue' or 'I can continue after you do X' unless the first line is REPORT:blocked.",
   "After the first line, write only the user-facing report.",
@@ -133,8 +136,6 @@ const RECOGNIZED_COMMANDS = new Set([
   "login",
   "reset",
 ]);
-const TELEGRAM_STALE_UPDATE_GRACE_SECONDS = 10;
-const TELEGRAM_PROCESS_STARTED_AT_SECONDS = Math.floor(Date.now() / 1000);
 const TELEGRAM_LONG_TEXT_FILE_THRESHOLD = 3900;
 const workLoopTails = new Map<string, Promise<void>>();
 const workLoopGenerations = new Map<string, number>();
@@ -553,14 +554,6 @@ export function createBot(token: string, bridge: BridgeService, botManagement: B
     const updateKind = Object.keys(ctx.update).join(",");
     const text = ctx.message?.text ?? ctx.editedMessage?.text ?? ctx.channelPost?.text ?? "";
     const safeText = sanitizeLoggedTelegramText(text);
-    const messageDate = ctx.message?.date ?? ctx.editedMessage?.date ?? ctx.channelPost?.date;
-    if (messageDate && messageDate < TELEGRAM_PROCESS_STARTED_AT_SECONDS - TELEGRAM_STALE_UPDATE_GRACE_SECONDS) {
-      console.log(
-        `[tg-update-stale] bot=${getBotId()} kind=${updateKind} chat=${ctx.chat?.id ?? "?"} date=${messageDate} text=${JSON.stringify(safeText).slice(0, 240)}`,
-      );
-      return;
-    }
-
     console.log(
       `[tg-update] bot=${getBotId()} kind=${updateKind} chat=${ctx.chat?.id ?? "?"} text=${JSON.stringify(safeText).slice(0, 240)}`,
     );
@@ -1688,6 +1681,39 @@ ${bridge.formatStatus(mapping)}`);
 
     const botId = getBotId();
     const chatId = String(callbackChat.id);
+    const recoveryMatch = /^remoteagent:inbox:(retry|discard):(\d+)$/.exec(data);
+    if (recoveryMatch) {
+      await ensureOwnerControlAccess(ctx);
+      const changed = await telegramInbox(config.dataDir, String(botInfo.id)).decide(
+        Number(recoveryMatch[2]), chatId, recoveryMatch[1] === "retry");
+      await callTelegramApi(token, "answerCallbackQuery", { callback_query_id: ctx.callbackQuery.id,
+        text: changed ? "처리했습니다." : "이미 처리됐거나 대상이 다른 요청입니다." });
+      if (changed) await reply(ctx, recoveryMatch[1] === "retry" ? "보존된 원문을 다시 접수했습니다." : "보존된 요청을 취소했습니다.");
+      return;
+    }
+    const questionMatch = /^remoteagent:question:([a-f0-9]{32}):(\d)$/.exec(data);
+    if (questionMatch) {
+      await ensureOwnerControlAccess(ctx);
+      const current = await bridge.status(botId, chatId).catch(() => undefined);
+      const choice = Number(questionMatch[2]);
+      const question = current && telegramQuestions.take(questionMatch[1]!, botId, chatId, current.session.sessionId, choice);
+      await callTelegramApi(token, "answerCallbackQuery", {
+        callback_query_id: ctx.callbackQuery.id,
+        text: question ? "선택했습니다." : "만료됐거나 이미 답변한 질문입니다. 텍스트로 답해 주세요.",
+      });
+      if (!question) return;
+      if (choice === question.options.length) {
+        await reply(ctx, `직접 입력해 주세요.\n${question.question}`, {
+          reply_markup: JSON.stringify({ force_reply: true, selective: true, input_field_placeholder: "답변을 입력하세요" }),
+        });
+        return;
+      }
+      const answer = question.options[choice]!;
+      await reply(ctx, `선택: ${answer}`);
+      await messageBatcher.enqueue({ botToken: token, telegramChatId: callbackChat.id }, botId, chatId,
+        `질문: ${question.question}\n사용자 선택: ${answer}`);
+      return;
+    }
     const queueMatch = /^remoteagent:queue:(remove:(Q\d+)|del)$/i.exec(data);
     if (queueMatch) {
       const result = await removeQueuedInstruction(botId, chatId, queueMatch[2]);
@@ -1994,8 +2020,12 @@ ${bridge.formatStatus(mapping)}`);
       return;
     }
 
+    telegramQuestions.clear(botId, chatId);
     await bridge.logSystem(botId, chatId, `Telegram text received (${text.length} chars).`);
-    await messageBatcher.enqueue({ botToken: token, telegramChatId: ctx.chat.id }, botId, chatId, text);
+    const inbox = telegramInbox(config.dataDir, String(botInfo.id));
+    const deferred = inbox.defer(ctx.update.update_id);
+    await messageBatcher.enqueue({ botToken: token, telegramChatId: ctx.chat.id }, botId, chatId, text,
+      deferred ? () => inbox.transition(ctx.update.update_id, "done") : undefined);
   });
 
   bot.catch((error) => {
@@ -2031,11 +2061,13 @@ type PendingTelegramBatch = {
   botId: string;
   chatId: string;
   messages: string[];
+  settled: Array<() => Promise<void>>;
   timer: ReturnType<typeof setTimeout>;
 };
 
 type ManualTelegramBatch = {
   messages: string[];
+  settled: Array<() => Promise<void>>;
 };
 
 type TelegramReplyTarget = {
@@ -2057,16 +2089,18 @@ class TelegramMessageBatcher {
     private readonly onBatch: (target: TelegramReplyTarget, botId: string, chatId: string, text: string) => Promise<void>,
   ) {}
 
-  async enqueue(target: TelegramReplyTarget, botId: string, chatId: string, text: string): Promise<void> {
+  async enqueue(target: TelegramReplyTarget, botId: string, chatId: string, text: string, settled?: () => Promise<void>): Promise<void> {
     const key = this.key(botId, chatId);
     const manualBatch = this.manual.get(key);
     if (manualBatch) {
       manualBatch.messages.push(text);
+      if (settled) manualBatch.settled.push(settled);
       return;
     }
 
     if (this.delayMs === 0) {
       await this.run(target, botId, chatId, text);
+      if (settled) await settled();
       return;
     }
 
@@ -2074,9 +2108,10 @@ class TelegramMessageBatcher {
     if (existing) {
       existing.target = target;
       existing.messages.push(text);
+      if (settled) existing.settled.push(settled);
       clearTimeout(existing.timer);
       existing.timer = setTimeout(() => {
-        void this.flush(key);
+        void this.flush(key).catch(error => console.error("Telegram batch persistence failed", error));
       }, this.delayMs);
       return;
     }
@@ -2086,8 +2121,9 @@ class TelegramMessageBatcher {
       botId,
       chatId,
       messages: [text],
+      settled: settled ? [settled] : [],
       timer: setTimeout(() => {
-        void this.flush(key);
+        void this.flush(key).catch(error => console.error("Telegram batch persistence failed", error));
       }, this.delayMs),
     });
   }
@@ -2100,7 +2136,7 @@ class TelegramMessageBatcher {
       this.pending.delete(key);
     }
 
-    this.manual.set(key, { messages: pendingBatch?.messages ?? [] });
+    this.manual.set(key, { messages: pendingBatch?.messages ?? [], settled: pendingBatch?.settled ?? [] });
   }
 
   async sendManual(target: TelegramReplyTarget, botId: string, chatId: string): Promise<{ found: boolean; count: number }> {
@@ -2116,6 +2152,7 @@ class TelegramMessageBatcher {
     }
 
     await this.run(target, botId, chatId, batch.messages.join("\n"));
+    await Promise.all(batch.settled.map(done => done()));
     return { found: true, count: batch.messages.length };
   }
 
@@ -2127,6 +2164,7 @@ class TelegramMessageBatcher {
     }
 
     this.manual.delete(key);
+    for (const done of batch.settled) void done().catch(error => console.error("Inbox cancellation persistence failed", error));
     return { found: true, count: batch.messages.length };
   }
 
@@ -2139,6 +2177,7 @@ class TelegramMessageBatcher {
 
     clearTimeout(batch.timer);
     this.pending.delete(key);
+    for (const done of batch.settled) void done().catch(error => console.error("Inbox cancellation persistence failed", error));
     return { found: true, count: batch.messages.length };
   }
 
@@ -2157,6 +2196,7 @@ class TelegramMessageBatcher {
     clearTimeout(batch.timer);
 
     await this.run(batch.target, batch.botId, batch.chatId, batch.messages.join("\n"));
+    await Promise.all(batch.settled.map(done => done()));
   }
 
   private async run(target: TelegramReplyTarget, botId: string, chatId: string, text: string): Promise<void> {
@@ -2172,6 +2212,18 @@ class TelegramMessageBatcher {
   private key(botId: string, chatId: string): string {
     return `${botId}:${chatId}`;
   }
+}
+
+export async function notifyInboxRecovery(token: string, entry: InboxEntry): Promise<void> {
+  const message = entry.update && "message" in entry.update ? entry.update.message : undefined;
+  if (!message || message.chat.type !== "private" || String(message.from?.id) !== config.telegramOwnerId) return;
+  await sendTelegramMessage(token, message.chat.id,
+    `수신함 복구 알림 #${entry.id}\n${entry.reason ?? "이전 요청의 처리 상태를 확인해야 합니다."}\n원문은 서버에 보존했습니다. 중복 실행을 피하려고 자동 재실행하지 않았습니다.`, {
+      reply_markup: JSON.stringify({ inline_keyboard: [[
+        { text: "원문 다시 전달", callback_data: `remoteagent:inbox:retry:${entry.id}` },
+        { text: "실행하지 않기", callback_data: `remoteagent:inbox:discard:${entry.id}` },
+      ]] }),
+    });
 }
 
 function sanitizeLoggedTelegramText(text: string): string {
@@ -2200,6 +2252,7 @@ async function runWithPendingAnimation(
   let typingStopped = false;
   let typingTimer: ReturnType<typeof setTimeout> | undefined;
   let typingInFlight = false;
+  let questionDelivered = false;
   const pulseTyping = (): void => {
     if (typingStopped) {
       return;
@@ -2235,6 +2288,16 @@ async function runWithPendingAnimation(
 
   try {
     const helpers: PendingAnimationHelpers = {
+      reportQuestion: async (botId, sessionId, question) => {
+        const pending = telegramQuestions.create(botId, String(chatId), sessionId, question);
+        const buttons = [...question.options, "기타 (직접 입력)"].map((text, index) => [{
+          text, callback_data: `remoteagent:question:${pending.id}:${index}`,
+        }]);
+        await sendTelegramMessage(botToken, chatId, question.question, {
+          reply_markup: JSON.stringify({ inline_keyboard: buttons }),
+        });
+        questionDelivered = true;
+      },
       reportProgress: async (chunks, parseMode, messageOptions) => {
         if (getTelegramRateLimitDelayMs(botToken) > 0) {
           return;
@@ -2268,6 +2331,7 @@ async function runWithPendingAnimation(
     const chunks = flattenChunks(normalized.chunks, 3900);
 
     if (chunks.length === 0 && normalized.documents.length === 0) {
+      if (questionDelivered) return;
       await sendTelegramMessage(botToken, chatId, "Response was empty.");
       return;
     }
@@ -2481,6 +2545,14 @@ async function routeTelegramWorkLoop(
       await ensureStillBound(`${turnLabel} response`);
       const parsed = parseReportResponses(bridge.formatResponses(responses), transform);
       const report = parsed.chunks.join("\n");
+      const question = parseAgentQuestion(report);
+      if (question && parsed.kind === "blocked" && currentSession && !options.unboundSessionId && helpers.reportQuestion) {
+        await ensureStillBound(`${turnLabel} question delivery`);
+        await helpers.reportQuestion(botId, currentSession.session.sessionId, question);
+        await memoryService.recordProgress(currentSession.session, `사용자 선택 대기: ${question.question}`);
+        autoContinue.clear(botId, chatId, sessionId);
+        return [];
+      }
       const decision = await jev.review(message, report, reviewGuard.previous,
         { invocationReturned: true, providers: responses.map(r => ({ provider: r.provider, model: r.model })) });
       if (decision.available || decision.reason !== "disabled") {
@@ -2737,6 +2809,7 @@ function formatQueuedWorkLoops(activeKey: string, publicSessionId?: string): str
 }
 
 type PendingAnimationHelpers = {
+  reportQuestion?: (botId: string, sessionId: string, question: AgentQuestion) => Promise<void>;
   reportProgress: (
     chunks: string[],
     parseMode?: "HTML" | "MarkdownV2",

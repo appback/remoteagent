@@ -1154,6 +1154,48 @@ await send('/peer');
 await waitForTelegramCall(call => call.text.includes('최종 왕복 확인'));
 await send('/peer remove remote');
 
+// Explicit user decisions use buttons, while ordinary text stays unrestricted.
+await send('/option jev off');
+providerMode = 'literal-result';
+literalResponse = 'REPORT:blocked\nTELEGRAM_QUESTION: '+JSON.stringify({question:'시간 진행 방식 테스트',options:['턴제','실시간','혼합']});
+await send('/batch start'); await send('ask structured question'); await send('/batch send');
+const questionMenu=await waitForTelegramCall(call=>call.text==='시간 진행 방식 테스트');
+const mixedButton=findInlineButton(questionMenu,'혼합');
+const otherButton=findInlineButton(questionMenu,'기타 (직접 입력)');
+if(!mixedButton || !otherButton) throw Error('Question buttons missing');
+providerMode='success';
+await send('/batch start');
+await click(mixedButton.callback_data);
+await send('/batch send');
+if(!providerCalls.at(-1).message.includes('사용자 선택: 혼합')) throw Error('Choice not routed to provider');
+const answeredCount=providerCalls.length;
+await click(mixedButton.callback_data);
+if(providerCalls.length!==answeredCount) throw Error('Question double click started duplicate work');
+providerMode='literal-result';
+literalResponse='REPORT:blocked\nTELEGRAM_QUESTION: '+JSON.stringify({question:'기타 입력 테스트',options:['A','B']});
+await send('/batch start'); await send('ask other question'); await send('/batch send');
+const otherMenu=await waitForTelegramCall(call=>call.text==='기타 입력 테스트');
+const beforeOther=providerCalls.length;
+await click(findInlineButton(otherMenu,'기타 (직접 입력)').callback_data);
+const freeTextPrompt=await waitForTelegramCall(call=>call.text.includes('직접 입력해 주세요.'));
+if(!JSON.parse(freeTextPrompt.reply_markup).force_reply || providerCalls.length!==beforeOther) throw Error('Other must request text without invoking provider');
+providerMode='success';
+await send('/batch start'); await send('VR은 실시간, 싱글과 멀티는 실시간 기반 턴 방식'); await send('/batch send');
+if(!providerCalls.at(-1).message.includes('VR은 실시간')) throw Error('Free text answer was blocked');
+
+// Dot routing is opt-in, uses numeric bot identity, and never invokes a local provider.
+const {telegramInbox}=await import('../dist/services/telegram-inbox.js');
+const durableInbox=telegramInbox(dataDir,'999001');
+await send('/batch start');
+const offlineUpdate=update('offline durable receipt regression'); offlineUpdate.message.date=1;
+await durableInbox.accept([offlineUpdate]); await durableInbox.transition(offlineUpdate.update_id,'dispatching');
+await injectedBot.handleUpdates([offlineUpdate]);
+if(!durableInbox.consumeDeferral(offlineUpdate.update_id)) throw Error('Delayed input was not retained as in-flight');
+if((await durableInbox.snapshot()).entries[0].status!=='dispatching') throw Error('Manual batch was acknowledged before execution');
+await send('/batch send');
+if((await durableInbox.snapshot()).entries[0].status!=='done') throw Error('Completed batch receipt not settled');
+if(!providerCalls.at(-1).message.includes('offline durable receipt regression')) throw Error('Old offline message was discarded');
+
 // Dot routing is opt-in, uses numeric bot identity, and never invokes a local provider.
 const { DotBridgeService } = await import(path.join(root, 'dist/services/dot-bridge-service.js'));
 const dotEvents = [];
