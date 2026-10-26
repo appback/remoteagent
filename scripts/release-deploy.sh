@@ -56,9 +56,11 @@ NODE
   done
   local old_root
   old_root="$(npm root -g)/appback-remoteagent"
-  (cd "$backup" && npm pack "$old_root" --ignore-scripts --silent)
   local old_package
-  old_package="$(find "$backup" -maxdepth 1 -name '*.tgz' -print -quit)"
+  old_package="$backup/remoteagent-rollback.tgz"
+  # Pack the installed artifact directly: npm pack may run prepare even without src.
+  tar -czf "$old_package" --exclude=appback-remoteagent/node_modules \
+    --transform='s,^appback-remoteagent,package,' -C "$(dirname "$old_root")" appback-remoteagent
   systemctl --user stop remoteagent
   if ! npm install -g "appback-remoteagent@$VERSION"; then
     npm install -g "$old_package" --ignore-scripts
